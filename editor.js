@@ -58,8 +58,8 @@ class GLBAnimationEditor {
         this.showGrid = true;
         this.gridHelper = null;
         
-        // Bone view mode
-        this.showBoneView = false;
+        // Bone view mode - enabled by default for clickable bones
+        this.showBoneView = true;
         this.skeletonHelper = null;
         this.boneVisualizerGroup = null;
         this.boneLinesGroup = null;
@@ -1095,63 +1095,114 @@ class GLBAnimationEditor {
     }
     
     getBoneLength(bone) {
-        let length = 0.08; // Larger default
+        let length = 0.12; // Larger default for better visibility
         
         if (bone.children && bone.children.length > 0) {
             for (const child of bone.children) {
                 if (child.isBone) {
                     const dist = child.position.length();
                     if (dist > 0.01) {
-                        length = Math.min(dist * 0.5, 0.2);
+                        length = Math.min(dist * 0.6, 0.25);
                         break;
                     }
                 }
             }
         }
         
-        return Math.max(length, 0.05);
+        return Math.max(length, 0.08);
     }
     
     createBoneShape(length, boneName) {
         const group = new THREE.Group();
+        group.userData.boneName = boneName;
         
-        // Larger, more visible joint sphere
-        const jointGeo = new THREE.SphereGeometry(length * 0.6, 12, 12);
-        const jointMat = new THREE.MeshBasicMaterial({
-            color: 0x00d4ff,
+        // Main joint - Large octahedron (diamond shape)
+        const jointSize = length * 0.8;
+        const jointGeo = new THREE.OctahedronGeometry(jointSize, 0);
+        const jointMat = new THREE.MeshStandardMaterial({
+            color: 0x22c55e, // Green theme
+            roughness: 0.3,
+            metalness: 0.6,
             transparent: true,
-            opacity: 0.9,
-            depthTest: false
+            opacity: 0.85
         });
         const joint = new THREE.Mesh(jointGeo, jointMat);
-        joint.renderOrder = 999;
+        joint.userData.boneName = boneName;
+        joint.userData.isBoneHelper = true;
+        joint.renderOrder = 100;
         group.add(joint);
         
-        // Larger octahedron bone shape
-        const boneGeo = new THREE.OctahedronGeometry(length * 0.4, 0);
-        const boneMat = new THREE.MeshBasicMaterial({
-            color: 0x00aaff,
+        // Glow outline
+        const glowGeo = new THREE.OctahedronGeometry(jointSize * 1.15, 0);
+        const glowMat = new THREE.MeshBasicMaterial({
+            color: 0x4ade80,
             transparent: true,
-            opacity: 0.7,
-            depthTest: false
+            opacity: 0.3,
+            side: THREE.BackSide
         });
-        const boneMesh = new THREE.Mesh(boneGeo, boneMat);
-        boneMesh.renderOrder = 998;
+        const glow = new THREE.Mesh(glowGeo, glowMat);
+        glow.userData.boneName = boneName;
+        glow.renderOrder = 99;
+        group.add(glow);
         
-        // Wireframe overlay
-        const wireframeMat = new THREE.MeshBasicMaterial({
-            color: 0x00ffff,
-            transparent: true,
-            opacity: 1.0,
+        // Wireframe for selection visibility
+        const wireGeo = new THREE.OctahedronGeometry(jointSize * 1.02, 0);
+        const wireMat = new THREE.MeshBasicMaterial({
+            color: 0x86efac,
             wireframe: true,
-            depthTest: false
+            transparent: true,
+            opacity: 0.6
         });
-        const wireframe = new THREE.Mesh(boneGeo.clone(), wireframeMat);
-        wireframe.renderOrder = 1000;
+        const wireframe = new THREE.Mesh(wireGeo, wireMat);
+        wireframe.userData.boneName = boneName;
+        wireframe.renderOrder = 101;
         group.add(wireframe);
-        group.add(boneMesh);
+        
+        // Inner core sphere for visual interest
+        const coreGeo = new THREE.SphereGeometry(jointSize * 0.3, 8, 8);
+        const coreMat = new THREE.MeshBasicMaterial({
+            color: 0xffffff,
+            transparent: true,
+            opacity: 0.9
+        });
+        const core = new THREE.Mesh(coreGeo, coreMat);
+        core.userData.boneName = boneName;
+        core.renderOrder = 102;
+        group.add(core);
         
         return group;
+    }
+    
+    // Update bone helper appearance when selected/deselected
+    updateBoneHelperAppearance(boneName, isSelected) {
+        const helper = this.boneHelpers.find(h => h.userData.boneName === boneName);
+        if (!helper) return;
+        
+        helper.traverse(child => {
+            if (child.isMesh && child.material) {
+                if (isSelected) {
+                    // Highlight selected bone
+                    if (child.material.color) {
+                        child.userData.originalColor = child.material.color.getHex();
+                        child.material.color.setHex(0xfbbf24); // Yellow/gold for selection
+                    }
+                    if (child.material.emissive) {
+                        child.material.emissive.setHex(0xfbbf24);
+                        child.material.emissiveIntensity = 0.5;
+                    }
+                    child.material.opacity = Math.min((child.material.opacity || 0.5) + 0.3, 1);
+                } else {
+                    // Restore original appearance
+                    if (child.userData.originalColor !== undefined) {
+                        child.material.color.setHex(child.userData.originalColor);
+                    }
+                    if (child.material.emissive) {
+                        child.material.emissive.setHex(0x000000);
+                        child.material.emissiveIntensity = 0;
+                    }
+                }
+            }
+        });
     }
     
     createSkeletonHelper() {
@@ -1187,6 +1238,9 @@ class GLBAnimationEditor {
         
         this.boneLinesGroup.visible = this.showBoneView;
         this.scene.add(this.boneLinesGroup);
+        
+        // Update button state to match showBoneView
+        document.getElementById('btn-bone-view')?.classList.toggle('active', this.showBoneView);
     }
     
     updateBoneLines() {
@@ -1332,21 +1386,57 @@ class GLBAnimationEditor {
         const bone = this.bones.get(boneName);
         if (!bone) return;
         
+        // Track previous selection for visual update
+        const previousBone = this.selectedBone?.name;
         this.selectedBone = bone;
         
-        // Update visual selection
+        // Update visual selection with enhanced appearance
         this.boneHelpers.forEach(helper => {
-            const isSelected = helper.userData.boneName === boneName;
-            helper.traverse(child => {
-                if (child.material) {
-                    if (child.material.wireframe) {
-                        child.material.color.setHex(isSelected ? 0xf472b6 : 0x00ffff);
-                    } else {
-                        child.material.color.setHex(isSelected ? 0xf472b6 : 0x00aaff);
+            const helperBoneName = helper.userData.boneName;
+            const isSelected = helperBoneName === boneName;
+            const wasSelected = helperBoneName === previousBone;
+            
+            // Reset previous selection
+            if (wasSelected && !isSelected) {
+                helper.traverse(child => {
+                    if (child.material) {
+                        // Restore original colors
+                        if (child.geometry?.type === 'OctahedronGeometry') {
+                            if (child.material.wireframe) {
+                                child.material.color.setHex(0x86efac);
+                            } else if (child.material.side === THREE.BackSide) {
+                                child.material.color.setHex(0x4ade80);
+                            } else {
+                                child.material.color.setHex(0x22c55e);
+                            }
+                        } else if (child.geometry?.type === 'SphereGeometry') {
+                            child.material.color.setHex(0xffffff);
+                        }
                     }
-                }
-            });
-            helper.scale.setScalar(isSelected ? 1.3 : 1);
+                });
+                helper.scale.setScalar(1);
+            }
+            
+            // Highlight new selection
+            if (isSelected) {
+                helper.traverse(child => {
+                    if (child.material) {
+                        // Golden/yellow highlight for selected bone
+                        if (child.geometry?.type === 'OctahedronGeometry') {
+                            if (child.material.wireframe) {
+                                child.material.color.setHex(0xfcd34d);
+                            } else if (child.material.side === THREE.BackSide) {
+                                child.material.color.setHex(0xfbbf24);
+                            } else {
+                                child.material.color.setHex(0xf59e0b);
+                            }
+                        } else if (child.geometry?.type === 'SphereGeometry') {
+                            child.material.color.setHex(0xfef3c7);
+                        }
+                    }
+                });
+                helper.scale.setScalar(1.4);
+            }
         });
         
         // Update bone tree selection
@@ -1931,11 +2021,21 @@ class GLBAnimationEditor {
     toggleBoneView() {
         this.showBoneView = !this.showBoneView;
         
+        // Toggle bone lines
         if (this.boneLinesGroup) {
             this.boneLinesGroup.visible = this.showBoneView;
         }
         
+        // Toggle 3D bone helpers
+        if (this.boneVisualizerGroup) {
+            this.boneVisualizerGroup.visible = this.showBoneView;
+        }
+        
+        // Update button state
         document.getElementById('btn-bone-view')?.classList.toggle('active', this.showBoneView);
+        
+        // Show toast
+        this.showToast(this.showBoneView ? 'Bone view enabled' : 'Bone view disabled', 'info');
     }
     
     // ==================== HISTORY ====================
@@ -2719,8 +2819,7 @@ class GLBAnimationEditor {
     }
     
     onCanvasClick(e) {
-        if (this.currentTool !== 'select') return;
-        
+        // Allow bone selection in all modes for better UX
         const rect = this.renderer.domElement.getBoundingClientRect();
         const mouse = new THREE.Vector2(
             ((e.clientX - rect.left) / rect.width) * 2 - 1,
@@ -2730,6 +2829,7 @@ class GLBAnimationEditor {
         const raycaster = new THREE.Raycaster();
         raycaster.setFromCamera(mouse, this.camera);
         
+        // Collect all clickable meshes from bone helpers
         const meshesToTest = [];
         this.boneHelpers.forEach(helper => {
             helper.traverse(child => {
@@ -2739,15 +2839,54 @@ class GLBAnimationEditor {
             });
         });
         
+        // Also test the model mesh for click-through selection
+        if (this.model) {
+            this.model.traverse(child => {
+                if (child.isMesh && child.visible) {
+                    meshesToTest.push(child);
+                }
+            });
+        }
+        
         const intersects = raycaster.intersectObjects(meshesToTest, false);
         
         if (intersects.length > 0) {
+            // Find the bone name from the clicked object
             let obj = intersects[0].object;
+            let boneName = null;
+            
+            // First check if we clicked directly on a bone helper
             while (obj && !obj.userData.boneName) {
                 obj = obj.parent;
             }
+            
             if (obj && obj.userData.boneName) {
-                this.selectBone(obj.userData.boneName);
+                boneName = obj.userData.boneName;
+            }
+            
+            // If we clicked on a mesh that's bound to a skeleton, find the nearest bone
+            if (!boneName && this.skeleton) {
+                const clickPoint = intersects[0].point;
+                let closestBone = null;
+                let closestDist = Infinity;
+                
+                this.bones.forEach((bone, name) => {
+                    const boneWorldPos = new THREE.Vector3();
+                    bone.getWorldPosition(boneWorldPos);
+                    const dist = clickPoint.distanceTo(boneWorldPos);
+                    if (dist < closestDist) {
+                        closestDist = dist;
+                        closestBone = name;
+                    }
+                });
+                
+                if (closestBone && closestDist < 0.5) {
+                    boneName = closestBone;
+                }
+            }
+            
+            if (boneName) {
+                this.selectBone(boneName);
             }
         }
     }
