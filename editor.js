@@ -492,6 +492,11 @@ class GLBAnimationEditor {
         console.log('Editor initialized. Scene children:', this.scene.children.length);
         console.log('Camera position:', this.camera.position);
         
+        // Initialize pose capture if available
+        if (window.PoseCapture && !this.poseCapture) {
+            this.poseCapture = new window.PoseCapture(this);
+        }
+        
         this.showToast('Model loaded! Select bones to animate.', 'success');
     }
     

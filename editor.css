@@ -1945,3 +1945,288 @@ body {
     }
 }
 
+/* ==================== POSE CAPTURE MODAL ==================== */
+.modal-xlarge {
+    max-width: 900px;
+    width: 95%;
+}
+
+.pose-capture-body {
+    min-height: 450px;
+}
+
+.pose-step {
+    animation: fadeIn 0.3s ease;
+}
+
+@keyframes fadeIn {
+    from { opacity: 0; transform: translateY(10px); }
+    to { opacity: 1; transform: translateY(0); }
+}
+
+/* Upload Zone */
+.pose-upload-zone {
+    border: 2px dashed var(--border-default);
+    border-radius: 16px;
+    padding: 60px 40px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    background: var(--bg-dark);
+}
+
+.pose-upload-zone:hover,
+.pose-upload-zone.drag-over {
+    border-color: var(--accent-primary);
+    background: rgba(34, 197, 94, 0.05);
+}
+
+.pose-upload-zone .upload-icon {
+    color: var(--accent-primary);
+    margin-bottom: 20px;
+}
+
+.pose-upload-zone h3 {
+    font-size: 18px;
+    color: var(--text-primary);
+    margin-bottom: 8px;
+}
+
+.pose-upload-zone p {
+    color: var(--text-muted);
+    font-size: 14px;
+}
+
+.pose-upload-zone .upload-hint {
+    margin-top: 16px;
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Process Step */
+.pose-preview-container {
+    display: flex;
+    gap: 24px;
+    margin-bottom: 24px;
+}
+
+.pose-video-wrapper {
+    position: relative;
+    flex: 1;
+    background: var(--bg-darkest);
+    border-radius: 12px;
+    overflow: hidden;
+}
+
+.pose-video-wrapper video,
+.pose-video-wrapper canvas {
+    width: 100%;
+    height: auto;
+    display: block;
+}
+
+.pose-video-wrapper canvas {
+    position: absolute;
+    top: 0;
+    left: 0;
+}
+
+.pose-info {
+    width: 180px;
+    background: var(--bg-dark);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.pose-info .info-item {
+    display: flex;
+    justify-content: space-between;
+    padding: 10px 0;
+    border-bottom: 1px solid var(--border-subtle);
+}
+
+.pose-info .info-item:last-child {
+    border-bottom: none;
+}
+
+.pose-info .label {
+    color: var(--text-muted);
+    font-size: 12px;
+}
+
+.pose-info .value {
+    color: var(--text-primary);
+    font-size: 13px;
+    font-weight: 600;
+}
+
+/* Settings */
+.pose-settings {
+    display: grid;
+    grid-template-columns: repeat(3, 1fr);
+    gap: 16px;
+    background: var(--bg-dark);
+    padding: 20px;
+    border-radius: 12px;
+    margin-bottom: 20px;
+}
+
+.setting-group {
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+}
+
+.setting-group label {
+    font-size: 12px;
+    color: var(--text-muted);
+    font-weight: 500;
+}
+
+.setting-group select,
+.setting-group input[type="range"] {
+    width: 100%;
+}
+
+.setting-group select {
+    background: var(--bg-panel);
+    border: 1px solid var(--border-subtle);
+    border-radius: 6px;
+    padding: 8px 12px;
+    color: var(--text-primary);
+    font-size: 13px;
+}
+
+.setting-group input[type="range"] {
+    accent-color: var(--accent-primary);
+}
+
+/* Progress */
+.pose-progress {
+    margin-top: 20px;
+}
+
+.progress-bar {
+    height: 8px;
+    background: var(--bg-dark);
+    border-radius: 4px;
+    overflow: hidden;
+    margin-bottom: 12px;
+}
+
+.progress-fill {
+    height: 100%;
+    background: linear-gradient(90deg, var(--accent-primary), var(--accent-secondary));
+    border-radius: 4px;
+    transition: width 0.3s;
+    width: 0%;
+}
+
+.progress-text {
+    text-align: center;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+/* Preview Step */
+.pose-result-preview {
+    background: var(--bg-dark);
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+}
+
+.pose-result-preview canvas {
+    width: 100%;
+    max-width: 400px;
+    height: auto;
+    display: block;
+    margin: 0 auto 16px;
+    border-radius: 8px;
+    background: var(--bg-darkest);
+}
+
+.preview-controls {
+    display: flex;
+    align-items: center;
+    gap: 16px;
+    max-width: 400px;
+    margin: 0 auto;
+}
+
+.preview-btn {
+    background: var(--accent-primary);
+    color: var(--bg-darkest);
+    border: none;
+    padding: 8px 16px;
+    border-radius: 6px;
+    font-size: 13px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: all 0.2s;
+    white-space: nowrap;
+}
+
+.preview-btn:hover {
+    background: var(--accent-secondary);
+}
+
+.preview-controls input[type="range"] {
+    flex: 1;
+    accent-color: var(--accent-primary);
+}
+
+.preview-controls span {
+    font-size: 12px;
+    color: var(--text-muted);
+    white-space: nowrap;
+}
+
+/* Result Info */
+.pose-result-info {
+    background: var(--bg-dark);
+    border-radius: 12px;
+    padding: 20px;
+}
+
+.pose-result-info h4 {
+    font-size: 14px;
+    color: var(--text-primary);
+    margin-bottom: 16px;
+}
+
+.result-stats {
+    display: flex;
+    justify-content: space-around;
+}
+
+.result-stats .stat {
+    text-align: center;
+}
+
+.result-stats .stat-value {
+    display: block;
+    font-size: 28px;
+    font-weight: 700;
+    color: var(--accent-primary);
+    margin-bottom: 4px;
+}
+
+.result-stats .stat-label {
+    font-size: 12px;
+    color: var(--text-muted);
+}
+
+/* Button States */
+.btn-text,
+.btn-loading {
+    display: inline-flex;
+    align-items: center;
+    gap: 8px;
+}
+
+.btn-loading.hidden,
+.btn-text.hidden {
+    display: none;
+}
+
