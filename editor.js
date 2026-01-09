@@ -102,27 +102,51 @@ class GLBAnimationEditor {
     
     init() {
         console.log('GLB Animation Editor initializing...');
-        this.setupWelcomeScreen();
+        // Wait a bit for auth to potentially show welcome screen
+        setTimeout(() => this.setupWelcomeScreen(), 100);
     }
     
     // ==================== WELCOME SCREEN ====================
     
     setupWelcomeScreen() {
+        console.log('Setting up welcome screen...');
+        
         const dropZone = document.getElementById('drop-zone');
         const fileInput = document.getElementById('file-input');
         const btnLoadSample = document.getElementById('btn-load-sample');
         
+        console.log('Drop zone found:', !!dropZone);
+        console.log('File input found:', !!fileInput);
+        console.log('Sample button found:', !!btnLoadSample);
+        
         if (!dropZone || !fileInput) {
-            console.error('Welcome screen elements not found');
+            console.error('Welcome screen elements not found, retrying in 500ms...');
+            setTimeout(() => this.setupWelcomeScreen(), 500);
             return;
         }
         
-        // Click to browse
-        dropZone.addEventListener('click', () => fileInput.click());
+        // Prevent duplicate setup
+        if (dropZone.dataset.initialized === 'true') {
+            console.log('Welcome screen already initialized');
+            return;
+        }
+        dropZone.dataset.initialized = 'true';
+        
+        // Store reference for file input
+        this.fileInput = fileInput;
+        
+        // Click to browse - handle click on drop zone
+        dropZone.addEventListener('click', (e) => {
+            // Don't trigger if clicking on file input itself
+            if (e.target === fileInput) return;
+            console.log('Drop zone clicked, opening file dialog');
+            fileInput.click();
+        });
         
         // File input change
         fileInput.addEventListener('change', (e) => {
-            if (e.target.files.length > 0) {
+            console.log('File selected:', e.target.files);
+            if (e.target.files && e.target.files.length > 0) {
                 this.loadGLBFromFile(e.target.files[0]);
             }
         });
@@ -130,17 +154,22 @@ class GLBAnimationEditor {
         // Drag and drop
         dropZone.addEventListener('dragover', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             dropZone.classList.add('drag-over');
         });
         
-        dropZone.addEventListener('dragleave', () => {
+        dropZone.addEventListener('dragleave', (e) => {
+            e.preventDefault();
+            e.stopPropagation();
             dropZone.classList.remove('drag-over');
         });
         
         dropZone.addEventListener('drop', (e) => {
             e.preventDefault();
+            e.stopPropagation();
             dropZone.classList.remove('drag-over');
             
+            console.log('File dropped:', e.dataTransfer.files);
             const file = e.dataTransfer.files[0];
             if (file && (file.name.endsWith('.glb') || file.name.endsWith('.gltf'))) {
                 this.loadGLBFromFile(file);
@@ -150,9 +179,16 @@ class GLBAnimationEditor {
         });
         
         // Sample model button
-        btnLoadSample?.addEventListener('click', () => {
-            this.loadSampleModel();
-        });
+        if (btnLoadSample) {
+            btnLoadSample.addEventListener('click', (e) => {
+                e.preventDefault();
+                e.stopPropagation();
+                console.log('Sample model button clicked');
+                this.loadSampleModel();
+            });
+        }
+        
+        console.log('Welcome screen setup complete');
     }
     
     loadGLBFromFile(file) {
@@ -188,10 +224,16 @@ class GLBAnimationEditor {
     }
     
     loadSampleModel() {
+        console.log('loadSampleModel called');
         this.showToast('Loading sample model...', 'info');
         
-        // Create a simple humanoid armature as sample
-        this.createSampleArmature();
+        try {
+            // Create a simple humanoid armature as sample
+            this.createSampleArmature();
+        } catch (err) {
+            console.error('Error creating sample armature:', err);
+            this.showToast('Failed to create sample model: ' + err.message, 'error');
+        }
     }
     
     createSampleArmature() {
@@ -451,9 +493,27 @@ class GLBAnimationEditor {
     }
     
     enterEditor(gltf) {
+        console.log('enterEditor called with gltf:', gltf);
+        
         // Hide welcome screen, show editor
-        document.getElementById('welcome-screen').classList.remove('active');
-        document.getElementById('editor-screen').classList.add('active');
+        const welcomeScreen = document.getElementById('welcome-screen');
+        const editorScreen = document.getElementById('editor-screen');
+        
+        console.log('Welcome screen element:', welcomeScreen);
+        console.log('Editor screen element:', editorScreen);
+        
+        if (welcomeScreen) {
+            welcomeScreen.classList.remove('active');
+        }
+        if (editorScreen) {
+            editorScreen.classList.add('active');
+        }
+        
+        // Also hide landing page if visible
+        const landingPage = document.getElementById('landing-page');
+        if (landingPage) {
+            landingPage.classList.remove('active');
+        }
         
         this.initEditor(gltf);
     }
