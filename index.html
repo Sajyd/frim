@@ -1,0 +1,784 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frim - GLB Animation Editor</title>
+    <meta name="description" content="Create stunning skeletal animations for your 3D models. Import GLB files, animate bones with keyframes, and export production-ready animations.">
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🌿</text></svg>">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap" rel="stylesheet">
+    <link rel="stylesheet" href="landing.css">
+    <link rel="stylesheet" href="editor.css">
+</head>
+<body>
+    <!-- Landing Page -->
+    <div id="landing-page" class="landing active">
+        <!-- Animated Background -->
+        <div class="landing-bg">
+            <div class="bg-gradient"></div>
+            <div class="bg-grid"></div>
+            <div class="bg-glow glow-1"></div>
+            <div class="bg-glow glow-2"></div>
+            <div class="bg-glow glow-3"></div>
+        </div>
+        
+        <!-- Navigation -->
+        <nav class="nav">
+            <div class="nav-brand">
+                <div class="brand-logo">
+                    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+                        <circle cx="16" cy="10" r="3" fill="currentColor"/>
+                        <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                </div>
+                <span class="brand-name">frim</span>
+            </div>
+            <div class="nav-links">
+                <a href="#features">Features</a>
+                <a href="#how-it-works">How It Works</a>
+            </div>
+            <button class="btn-nav-login" id="btn-show-login">
+                Sign In
+            </button>
+        </nav>
+        
+        <!-- Hero Section -->
+        <section class="hero">
+            <div class="hero-content">
+                <div class="hero-badge">
+                    <span class="badge-dot"></span>
+                    <span>Web-Based Animation Tool</span>
+                </div>
+                <h1 class="hero-title">
+                    Animate your<br>
+                    <span class="title-gradient">3D models</span>
+                </h1>
+                <p class="hero-subtitle">
+                    The simplest way to create skeletal animations. 
+                    Import GLB files, pose bones, add keyframes, and export 
+                    production-ready animations — all in your browser.
+                </p>
+                <div class="hero-cta">
+                    <button class="btn-primary" id="btn-get-started">
+                        <span>Start Animating</span>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M5 12h14M12 5l7 7-7 7"/>
+                        </svg>
+                    </button>
+                    <button class="btn-secondary" id="btn-try-demo">
+                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5,3 19,12 5,21" fill="currentColor" opacity="0.3"/>
+                            <polygon points="5,3 19,12 5,21"/>
+                        </svg>
+                        <span>Try Demo</span>
+                    </button>
+                </div>
+                <div class="hero-features">
+                    <div class="feature-pill">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 6L9 17l-5-5"/>
+                        </svg>
+                        <span>No installation</span>
+                    </div>
+                    <div class="feature-pill">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 6L9 17l-5-5"/>
+                        </svg>
+                        <span>GLB import & export</span>
+                    </div>
+                    <div class="feature-pill">
+                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M20 6L9 17l-5-5"/>
+                        </svg>
+                        <span>Free to use</span>
+                    </div>
+                </div>
+            </div>
+            <div class="hero-visual">
+                <div class="visual-window">
+                    <div class="window-header">
+                        <div class="window-dots">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        <span class="window-title">frim editor</span>
+                    </div>
+                    <div class="window-content">
+                        <div class="skeleton-preview">
+                            <div class="skel-joint head"></div>
+                            <div class="skel-bone neck"></div>
+                            <div class="skel-joint shoulder-l"></div>
+                            <div class="skel-joint shoulder-r"></div>
+                            <div class="skel-bone spine"></div>
+                            <div class="skel-bone arm-l"></div>
+                            <div class="skel-bone arm-r"></div>
+                            <div class="skel-joint hip"></div>
+                            <div class="skel-bone leg-l"></div>
+                            <div class="skel-bone leg-r"></div>
+                            <div class="skel-joint hand-l"></div>
+                            <div class="skel-joint hand-r"></div>
+                            <div class="skel-joint foot-l"></div>
+                            <div class="skel-joint foot-r"></div>
+                        </div>
+                        <div class="timeline-preview">
+                            <div class="tl-track"></div>
+                            <div class="tl-keyframe k1"></div>
+                            <div class="tl-keyframe k2"></div>
+                            <div class="tl-keyframe k3"></div>
+                            <div class="tl-playhead"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Features Section -->
+        <section class="features-section" id="features">
+            <div class="section-header">
+                <h2>Everything you need</h2>
+                <p>Professional animation tools, right in your browser</p>
+            </div>
+            <div class="features-grid">
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                        </svg>
+                    </div>
+                    <h3>GLB/GLTF Import</h3>
+                    <p>Load any GLB or GLTF model with armature. Full support for industry-standard formats.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <circle cx="12" cy="8" r="4"/>
+                            <path d="M12 12v8M8 20h8"/>
+                            <path d="M8 14l-2 2M16 14l2 2"/>
+                        </svg>
+                    </div>
+                    <h3>Bone Controls</h3>
+                    <p>Select and transform bones with precision. Rotate, translate, and scale intuitively.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <rect x="3" y="3" width="18" height="18" rx="2"/>
+                            <circle cx="8" cy="12" r="2" fill="currentColor"/>
+                            <circle cx="16" cy="8" r="2" fill="currentColor"/>
+                            <circle cx="16" cy="16" r="2" fill="currentColor"/>
+                        </svg>
+                    </div>
+                    <h3>Keyframe Timeline</h3>
+                    <p>Visual timeline with keyframe editing. Create smooth animations with ease.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/>
+                            <polyline points="17 8 12 3 7 8"/>
+                            <line x1="12" y1="3" x2="12" y2="15"/>
+                        </svg>
+                    </div>
+                    <h3>GLB Export</h3>
+                    <p>Export your animations back to GLB. Multiple animations per file supported.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/>
+                            <polyline points="17 21 17 13 7 13 7 21"/>
+                            <polyline points="7 3 7 8 15 8"/>
+                        </svg>
+                    </div>
+                    <h3>Auto Save</h3>
+                    <p>Work saved automatically to local storage. Never lose your progress.</p>
+                </div>
+                <div class="feature-card">
+                    <div class="feature-icon">
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                            <polygon points="5 3 19 12 5 21 5 3"/>
+                        </svg>
+                    </div>
+                    <h3>Live Preview</h3>
+                    <p>Real-time playback of your animations. See changes instantly.</p>
+                </div>
+            </div>
+        </section>
+        
+        <!-- Footer -->
+        <footer class="footer">
+            <div class="footer-brand">
+                <div class="brand-logo small">
+                    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+                        <circle cx="16" cy="10" r="3" fill="currentColor"/>
+                        <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                </div>
+                <span>frim</span>
+            </div>
+            <p class="footer-text">© 2026 Frim. Free GLB animation editor.</p>
+        </footer>
+    </div>
+    
+    <!-- Login Modal -->
+    <div class="login-overlay" id="login-overlay">
+        <div class="login-modal">
+            <button class="login-close" id="btn-close-login">
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                    <path d="M18 6L6 18M6 6l12 12"/>
+                </svg>
+            </button>
+            <div class="login-header">
+                <div class="login-logo">
+                    <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                        <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+                        <circle cx="16" cy="10" r="3" fill="currentColor"/>
+                        <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" stroke-width="2"/>
+                        <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" stroke-width="2"/>
+                    </svg>
+                </div>
+                <h2>Welcome to Frim</h2>
+                <p>Sign in to access the editor</p>
+            </div>
+            <form class="login-form" id="login-form">
+                <div class="form-group">
+                    <label for="login-email">Email</label>
+                    <input type="email" id="login-email" placeholder="your@email.com" required>
+                </div>
+                <div class="form-group">
+                    <label for="login-password">Password</label>
+                    <div class="password-input">
+                        <input type="password" id="login-password" placeholder="••••••••" required>
+                        <button type="button" class="toggle-password" id="toggle-password">
+                            <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                                <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+                                <circle cx="12" cy="12" r="3"/>
+                            </svg>
+                        </button>
+                    </div>
+                </div>
+                <button type="submit" class="btn-login">
+                    Sign In
+                </button>
+                <div class="login-error hidden" id="login-error">
+                    Invalid email or password
+                </div>
+            </form>
+            <div class="login-footer">
+                <p>Demo credentials: <strong>demo@frim.app</strong> / <strong>demo123</strong></p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- App Screen (After Login) -->
+    <div id="welcome-screen" class="screen">
+        <div class="welcome-container">
+            <div class="welcome-header">
+                <div class="logo">
+                    <div class="logo-icon">
+                        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="16" cy="16" r="14" stroke="currentColor" stroke-width="2"/>
+                            <circle cx="16" cy="10" r="3" fill="currentColor"/>
+                            <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <span class="logo-text">frim</span>
+                </div>
+                <h1 class="editor-title">Animation Editor</h1>
+                <p class="editor-subtitle">Import • Animate • Export</p>
+            </div>
+            <div class="welcome-actions">
+                <div class="drop-zone" id="drop-zone">
+                    <div class="drop-zone-content">
+                        <span class="drop-icon">
+                            <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5">
+                                <path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/>
+                                <polyline points="3.27 6.96 12 12.01 20.73 6.96"/>
+                                <line x1="12" y1="22.08" x2="12" y2="12"/>
+                            </svg>
+                        </span>
+                        <h3>Drop GLB/GLTF File Here</h3>
+                        <p>or click to browse</p>
+                    </div>
+                    <input type="file" id="file-input" accept=".glb,.gltf" hidden>
+                </div>
+                <div class="action-divider">
+                    <span>or</span>
+                </div>
+                <button class="btn-sample" id="btn-load-sample">
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <circle cx="12" cy="8" r="4"/>
+                        <path d="M12 12v8M8 20h8"/>
+                        <path d="M8 14l-2 2M16 14l2 2"/>
+                    </svg>
+                    <span>Load Sample Model</span>
+                </button>
+            </div>
+            <div class="welcome-footer">
+                <p class="features-list">
+                    <span>✓ Import GLB/GLTF</span>
+                    <span>✓ Keyframe Animation</span>
+                    <span>✓ Export to GLB</span>
+                </p>
+                <button class="btn-logout" id="btn-logout">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                        <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>
+                    </svg>
+                    <span>Logout</span>
+                </button>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Editor Screen -->
+    <div id="editor-screen" class="screen">
+        <!-- 3D Canvas -->
+        <canvas id="editor-canvas"></canvas>
+        
+        <!-- Top Toolbar -->
+        <div class="toolbar-top">
+            <div class="toolbar-left">
+                <div class="toolbar-brand">
+                    <div class="brand-mini">
+                        <svg viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
+                            <circle cx="16" cy="16" r="12" stroke="currentColor" stroke-width="2"/>
+                            <circle cx="16" cy="11" r="2.5" fill="currentColor"/>
+                            <line x1="16" y1="13.5" x2="16" y2="19" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="15.5" x2="11" y2="14" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="15.5" x2="21" y2="14" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="19" x2="13" y2="24" stroke="currentColor" stroke-width="2"/>
+                            <line x1="16" y1="19" x2="19" y2="24" stroke="currentColor" stroke-width="2"/>
+                        </svg>
+                    </div>
+                    <span class="brand-text">frim</span>
+                </div>
+                <div class="toolbar-divider"></div>
+                <button class="toolbar-btn" id="btn-new" title="New/Load Model (Ctrl+N)">
+                    <span class="icon">📂</span>
+                    <span class="label">Load</span>
+                </button>
+                <button class="toolbar-btn" id="btn-load" title="Load Animation (Ctrl+O)">
+                    <span class="icon">📄</span>
+                    <span class="label">Anim</span>
+                </button>
+                <button class="toolbar-btn" id="btn-save" title="Save Animation (Ctrl+S)">
+                    <span class="icon">💾</span>
+                    <span class="label">Save</span>
+                </button>
+                <div class="toolbar-divider"></div>
+                <button class="toolbar-btn" id="btn-undo" title="Undo (Ctrl+Z)">
+                    <span class="icon">↩️</span>
+                </button>
+                <button class="toolbar-btn" id="btn-redo" title="Redo (Ctrl+Y)">
+                    <span class="icon">↪️</span>
+                </button>
+            </div>
+            <div class="toolbar-center">
+                <input type="text" id="animation-name" class="animation-name-input" placeholder="Untitled Animation" maxlength="40">
+            </div>
+            <div class="toolbar-right">
+                <button class="toolbar-btn" id="btn-play" title="Play Animation (Space)">
+                    <span class="icon">▶️</span>
+                    <span class="label">Play</span>
+                </button>
+                <button class="toolbar-btn" id="btn-stop" title="Stop Animation">
+                    <span class="icon">⏹️</span>
+                    <span class="label">Stop</span>
+                </button>
+                <div class="toolbar-divider"></div>
+                <button class="toolbar-btn btn-export-json" id="btn-export-json" title="Export as JSON">
+                    <span class="icon">📤</span>
+                    <span class="label">JSON</span>
+                </button>
+                <button class="toolbar-btn btn-export-glb" id="btn-export-glb" title="Export as GLB">
+                    <span class="icon">📦</span>
+                    <span class="label">GLB</span>
+                </button>
+                <button class="toolbar-btn active" id="btn-grid" title="Toggle Grid">
+                    <span class="icon">⊞</span>
+                </button>
+            </div>
+        </div>
+        
+        <!-- Transform Tools -->
+        <div class="transform-toolbar">
+            <button class="transform-btn" id="tool-select" title="Select Bone (V)">
+                <span class="icon">◇</span>
+            </button>
+            <button class="transform-btn active" id="tool-rotate" title="Rotate (R)">
+                <span class="icon">↻</span>
+            </button>
+            <button class="transform-btn" id="tool-translate" title="Translate (T)">
+                <span class="icon">✥</span>
+            </button>
+            <button class="transform-btn" id="tool-scale" title="Scale (S)">
+                <span class="icon">⤢</span>
+            </button>
+            <div class="toolbar-divider-vertical"></div>
+            <button class="transform-btn" id="btn-bone-view" title="Toggle Bone View (B)">
+                <span class="icon">🦴</span>
+            </button>
+        </div>
+        
+        <!-- Left Panel - Bone Hierarchy -->
+        <div class="panel-left">
+            <div class="panel-header">
+                <h3>SKELETON</h3>
+                <button class="panel-collapse" id="collapse-left">◀</button>
+            </div>
+            
+            <div class="panel-section">
+                <h4>Bone Hierarchy</h4>
+                <div class="bone-tree" id="bone-tree"></div>
+            </div>
+            
+            <div class="panel-section">
+                <h4>Quick Select</h4>
+                <div class="quick-bones" id="quick-bones"></div>
+            </div>
+            
+            <div class="panel-section model-info-section">
+                <h4>📦 Model Info</h4>
+                <div class="model-info" id="model-info">
+                    <div class="info-row">
+                        <span class="label">File:</span>
+                        <span class="value" id="model-filename">-</span>
+                    </div>
+                    <div class="info-row">
+                        <span class="label">Bones:</span>
+                        <span class="value" id="model-bone-count">-</span>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Animations Panel -->
+        <div class="animations-panel" id="animations-panel">
+            <div class="animations-panel-header">
+                <h4>🎬 ANIMATIONS</h4>
+                <button class="btn-add-animation" id="btn-add-animation" title="New Animation">+</button>
+            </div>
+            <div class="animations-list" id="animations-list"></div>
+        </div>
+        
+        <!-- Right Panel - Properties -->
+        <div class="panel-right">
+            <div class="panel-header">
+                <h3>PROPERTIES</h3>
+                <button class="panel-collapse" id="collapse-right">▶</button>
+            </div>
+            
+            <div class="properties-empty" id="properties-empty">
+                <p>Select a bone to edit</p>
+            </div>
+            
+            <div class="properties-content hidden" id="properties-content">
+                <div class="property-group">
+                    <h4>Selected Bone</h4>
+                    <div class="property-row">
+                        <label>Name</label>
+                        <span class="prop-value" id="bone-name">-</span>
+                    </div>
+                </div>
+                
+                <div class="property-group">
+                    <h4>Position</h4>
+                    <div class="property-row vector3">
+                        <div class="vector-inputs">
+                            <div class="vector-input">
+                                <span class="axis x">X</span>
+                                <input type="number" id="pos-x" step="0.01" value="0">
+                            </div>
+                            <div class="vector-input">
+                                <span class="axis y">Y</span>
+                                <input type="number" id="pos-y" step="0.01" value="0">
+                            </div>
+                            <div class="vector-input">
+                                <span class="axis z">Z</span>
+                                <input type="number" id="pos-z" step="0.01" value="0">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="property-group">
+                    <h4>Rotation</h4>
+                    <div class="property-row vector3">
+                        <div class="vector-inputs">
+                            <div class="vector-input">
+                                <span class="axis x">X</span>
+                                <input type="number" id="rot-x" step="0.01" value="0">
+                            </div>
+                            <div class="vector-input">
+                                <span class="axis y">Y</span>
+                                <input type="number" id="rot-y" step="0.01" value="0">
+                            </div>
+                            <div class="vector-input">
+                                <span class="axis z">Z</span>
+                                <input type="number" id="rot-z" step="0.01" value="0">
+                            </div>
+                        </div>
+                    </div>
+                    <div class="rotation-sliders">
+                        <div class="slider-row">
+                            <label>X</label>
+                            <input type="range" id="slider-x" min="-3.14" max="3.14" step="0.01" value="0">
+                        </div>
+                        <div class="slider-row">
+                            <label>Y</label>
+                            <input type="range" id="slider-y" min="-3.14" max="3.14" step="0.01" value="0">
+                        </div>
+                        <div class="slider-row">
+                            <label>Z</label>
+                            <input type="range" id="slider-z" min="-3.14" max="3.14" step="0.01" value="0">
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="property-group">
+                    <h4>Scale</h4>
+                    <div class="property-row vector3">
+                        <div class="vector-inputs">
+                            <div class="vector-input">
+                                <span class="axis x">X</span>
+                                <input type="number" id="scale-x" step="0.01" value="1" min="0.01">
+                            </div>
+                            <div class="vector-input">
+                                <span class="axis y">Y</span>
+                                <input type="number" id="scale-y" step="0.01" value="1" min="0.01">
+                            </div>
+                            <div class="vector-input">
+                                <span class="axis z">Z</span>
+                                <input type="number" id="scale-z" step="0.01" value="1" min="0.01">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="property-group">
+                    <h4>Keyframe</h4>
+                    <div class="keyframe-actions">
+                        <button class="btn-action btn-primary-action" id="btn-add-keyframe">
+                            <span>🔑</span> Add Key
+                        </button>
+                        <button class="btn-action" id="btn-copy-pose">
+                            <span>📋</span> Copy
+                        </button>
+                        <button class="btn-action" id="btn-paste-pose">
+                            <span>📄</span> Paste
+                        </button>
+                    </div>
+                </div>
+                
+                <div class="property-group">
+                    <h4>Actions</h4>
+                    <div class="action-buttons">
+                        <button class="btn-action" id="btn-reset-bone">
+                            <span>↺</span> Reset Bone
+                        </button>
+                        <button class="btn-action btn-danger" id="btn-reset-pose">
+                            <span>🗑</span> Reset All
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Bottom Panel - Timeline -->
+        <div class="panel-bottom">
+            <div class="timeline-container">
+                <div class="timeline-header">
+                    <div class="timeline-controls">
+                        <button class="timeline-btn" id="btn-prev-frame" title="Previous Frame">⏮</button>
+                        <button class="timeline-btn" id="btn-play-timeline" title="Play/Pause">▶</button>
+                        <button class="timeline-btn" id="btn-next-frame" title="Next Frame">⏭</button>
+                        <span class="frame-display">
+                            <input type="number" id="current-frame" value="0" min="0" max="100">
+                            <span>/</span>
+                            <input type="number" id="total-frames" value="30" min="1" max="300">
+                        </span>
+                    </div>
+                    <div class="timeline-settings">
+                        <label>Frames:</label>
+                        <input type="number" id="total-frames-setting" value="30" min="1" max="600" class="frames-input">
+                        <label>FPS:</label>
+                        <select id="animation-fps">
+                            <option value="12">12</option>
+                            <option value="24" selected>24</option>
+                            <option value="30">30</option>
+                            <option value="60">60</option>
+                        </select>
+                        <label>Speed:</label>
+                        <input type="range" id="animation-speed" min="0.5" max="3" step="0.1" value="1" class="speed-slider">
+                        <span id="speed-display" class="speed-display">1.0x</span>
+                        <label>Loop:</label>
+                        <input type="checkbox" id="animation-loop" checked>
+                    </div>
+                </div>
+                <div class="timeline-track-container">
+                    <div class="timeline-ruler" id="timeline-ruler"></div>
+                    <div class="timeline-tracks" id="timeline-tracks"></div>
+                    <div class="timeline-playhead" id="timeline-playhead"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Modals -->
+    <div class="modal-overlay hidden" id="save-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>Save Animation</h3>
+                <button class="modal-close" data-close="save-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>Animation Name</label>
+                    <input type="text" id="save-animation-name" placeholder="Enter animation name">
+                </div>
+                <div class="input-group">
+                    <label>Animation ID</label>
+                    <input type="text" id="save-animation-id" placeholder="unique_animation_id">
+                </div>
+                <div class="input-group">
+                    <label>Category</label>
+                    <select id="save-category">
+                        <option value="movement">Movement</option>
+                        <option value="combat">Combat</option>
+                        <option value="emote">Emote</option>
+                        <option value="other">Other</option>
+                    </select>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" data-close="save-modal">Cancel</button>
+                <button class="btn-primary" id="btn-confirm-save">Save</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay hidden" id="load-modal">
+        <div class="modal modal-large">
+            <div class="modal-header">
+                <h3>Load Animation</h3>
+                <button class="modal-close" data-close="load-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="animation-filter">
+                    <button class="filter-btn active" data-filter="all">All</button>
+                    <button class="filter-btn" data-filter="movement">Movement</button>
+                    <button class="filter-btn" data-filter="combat">Combat</button>
+                    <button class="filter-btn" data-filter="emote">Emote</button>
+                </div>
+                <div class="animation-grid" id="animation-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" data-close="load-modal">Cancel</button>
+                <input type="file" id="import-animation" accept=".json" hidden>
+                <button class="btn-secondary" id="btn-import-animation">📥 Import</button>
+                <button class="btn-primary" id="btn-load-selected" disabled>Load</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay hidden" id="export-glb-modal">
+        <div class="modal modal-large">
+            <div class="modal-header">
+                <h3>📦 Export GLB</h3>
+                <button class="modal-close" data-close="export-glb-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>File Name</label>
+                    <input type="text" id="export-glb-filename" placeholder="model_animated">
+                </div>
+                <div class="input-group">
+                    <label>Select Animations</label>
+                    <div class="export-animations-list" id="export-animations-list"></div>
+                    <div class="export-animations-actions">
+                        <button class="btn-small" id="btn-select-all-anims">Select All</button>
+                        <button class="btn-small" id="btn-deselect-all-anims">Deselect All</button>
+                    </div>
+                </div>
+                <div class="export-options">
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="export-include-model" checked>
+                        <span>Include model mesh</span>
+                    </label>
+                    <label class="checkbox-label">
+                        <input type="checkbox" id="export-binary" checked>
+                        <span>Binary GLB format</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" data-close="export-glb-modal">Cancel</button>
+                <button class="btn-primary" id="btn-confirm-export-glb">Export</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay hidden" id="export-json-modal">
+        <div class="modal">
+            <div class="modal-header">
+                <h3>📤 Export JSON</h3>
+                <button class="modal-close" data-close="export-json-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label>File Name</label>
+                    <input type="text" id="export-json-filename" placeholder="animation_name">
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" data-close="export-json-modal">Cancel</button>
+                <button class="btn-primary" id="btn-confirm-export-json">Export</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="context-menu hidden" id="context-menu">
+        <button class="context-item" data-action="add-keyframe">🔑 Add Keyframe</button>
+        <button class="context-item" data-action="delete-keyframe">🗑 Delete Keyframe</button>
+        <div class="context-divider"></div>
+        <button class="context-item" data-action="copy">📋 Copy</button>
+        <button class="context-item" data-action="paste">📄 Paste</button>
+        <div class="context-divider"></div>
+        <button class="context-item" data-action="reset">↺ Reset</button>
+    </div>
+    
+    <div class="toast-container" id="toast-container"></div>
+    
+    <!-- Scripts -->
+    <script type="importmap">
+    {
+        "imports": {
+            "three": "https://unpkg.com/three@0.159.0/build/three.module.js",
+            "three/addons/": "https://unpkg.com/three@0.159.0/examples/jsm/"
+        }
+    }
+    </script>
+    <script src="auth.js"></script>
+    <script type="module" src="editor.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+{
+  "name": "frim",
+  "version": "1.0.0",
+  "description": "Frim - A simple web-based GLB animation editor. Import GLB models, create skeletal animations, and export production-ready files.",
+  "main": "editor.js",
+  "scripts": {
+    "start": "npx serve . -l 3000",
+    "dev": "npx serve . -l 3000",
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "three.js",
+    "glb",
+    "gltf",
+    "animation",
+    "editor",
+    "webgl",
+    "skeletal-animation",
+    "bone-animation",
+    "3d"
+  ],
+  "author": "",
+  "license": "MIT",
+  "dependencies": {
+    "serve": "^14.2.1"
+  },
+  "repository": {
+    "type": "git",
+    "url": ""
+  },
+  "homepage": "",
+  "engines": {
+    "node": ">=16.0.0"
+  }
+}
