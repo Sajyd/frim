@@ -1,0 +1,113 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+@import url('https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --frim-primary: #22c55e;
+  --frim-secondary: #4ade80;
+  --frim-dark: #09090b;
+  --frim-panel: #151821;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  font-family: 'Inter', system-ui, sans-serif;
+  background: var(--frim-dark);
+  color: #f4f4f5;
+}
+
+/* Custom scrollbar */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  background: #18181b;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #3f3f46;
+  border-radius: 4px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #52525b;
+}
+
+/* Animated background glow */
+.glow-effect {
+  position: absolute;
+  border-radius: 50%;
+  filter: blur(100px);
+  opacity: 0.4;
+  animation: float 20s ease-in-out infinite;
+}
+
+@keyframes float {
+  0%, 100% { transform: translate(0, 0) scale(1); }
+  25% { transform: translate(30px, -30px) scale(1.05); }
+  50% { transform: translate(-20px, 20px) scale(0.95); }
+  75% { transform: translate(20px, 30px) scale(1.02); }
+}
+
+@keyframes pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.8); }
+}
+
+/* Button styles */
+.btn-primary {
+  @apply bg-frim-500 text-dark-950 px-6 py-3 rounded-lg font-semibold transition-all hover:bg-frim-400 hover:-translate-y-0.5;
+}
+
+.btn-secondary {
+  @apply bg-transparent border border-dark-700 text-dark-200 px-6 py-3 rounded-lg font-medium transition-all hover:bg-dark-800 hover:border-dark-600;
+}
+
+/* Card hover effect */
+.card-hover {
+  @apply transition-all duration-300 hover:border-frim-500 hover:-translate-y-1;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+}
+
+.card-hover:hover {
+  box-shadow: 0 12px 30px rgba(0, 0, 0, 0.3), 0 0 20px rgba(34, 197, 94, 0.1);
+}
+
+/* Gradient text */
+.gradient-text {
+  background: linear-gradient(135deg, #4ade80 0%, #86efac 50%, #22c55e 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+  background-clip: text;
+}
+
+/* Loading spinner */
+.spinner {
+  @apply w-5 h-5 border-2 border-dark-400 border-t-frim-500 rounded-full animate-spin;
+}
+
+/* Input focus ring */
+input:focus, select:focus, textarea:focus {
+  @apply outline-none ring-2 ring-frim-500 ring-opacity-50;
+}
+
+/* Glass effect */
+.glass {
+  background: rgba(21, 24, 33, 0.8);
+  backdrop-filter: blur(20px);
+  border: 1px solid rgba(34, 197, 94, 0.1);
+}
+

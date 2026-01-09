@@ -1,12 +1,16 @@
 {
   "name": "frim",
-  "version": "1.0.0",
-  "description": "Frim - A simple web-based GLB animation editor. Import GLB models, create skeletal animations, and export production-ready files.",
-  "main": "editor.js",
+  "version": "2.0.0",
+  "description": "Frim - A web-based GLB animation editor with cloud saves",
   "scripts": {
-    "start": "npx serve . -l 3000",
-    "dev": "npx serve . -l 3000",
-    "test": "echo \"Error: no test specified\" && exit 1"
+    "dev": "next dev",
+    "build": "next build",
+    "start": "next start",
+    "lint": "next lint",
+    "postinstall": "prisma generate",
+    "db:push": "prisma db push",
+    "db:studio": "prisma studio",
+    "db:migrate": "prisma migrate dev"
   },
   "keywords": [
     "three.js",
@@ -16,20 +20,32 @@
     "editor",
     "webgl",
     "skeletal-animation",
-    "bone-animation",
-    "3d"
+    "nextjs"
   ],
   "author": "",
   "license": "MIT",
   "dependencies": {
-    "serve": "^14.2.1"
+    "@auth/prisma-adapter": "^2.0.0",
+    "@prisma/client": "^5.10.0",
+    "bcryptjs": "^2.4.3",
+    "next": "14.1.0",
+    "next-auth": "^4.24.5",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "three": "^0.159.0"
   },
-  "repository": {
-    "type": "git",
-    "url": ""
+  "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
+    "@types/node": "^20.11.0",
+    "@types/react": "^18.2.0",
+    "@types/react-dom": "^18.2.0",
+    "autoprefixer": "^10.4.17",
+    "postcss": "^8.4.33",
+    "prisma": "^5.10.0",
+    "tailwindcss": "^3.4.1",
+    "typescript": "^5.3.0"
   },
-  "homepage": "",
   "engines": {
-    "node": ">=16.0.0"
+    "node": ">=18.0.0"
   }
 }
