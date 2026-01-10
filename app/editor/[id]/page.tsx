@@ -4,7 +4,6 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
-import Script from 'next/script'
 
 interface Project {
   id: string
@@ -26,6 +25,7 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [lastSaved, setLastSaved] = useState<Date | null>(null)
+  const [editorReady, setEditorReady] = useState(false)
   const editorRef = useRef<any>(null)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
 
@@ -63,7 +63,6 @@ export default function EditorPage() {
 
     setSaving(true)
     try {
-      // Get data from the editor
       const editorData = editorRef.current.getProjectData?.() || {}
       
       const res = await fetch(`/api/projects/${projectId}`, {
@@ -138,21 +137,35 @@ export default function EditorPage() {
     }, 3000)
   }
 
-  // Initialize editor when project is loaded
+  // Load editor script dynamically
   useEffect(() => {
-    if (project && !loading && typeof window !== 'undefined') {
-      // Wait for editor script to load
+    if (project && !loading && typeof window !== 'undefined' && !editorReady) {
+      // Load editor module with cache busting
+      const script = document.createElement('script')
+      script.type = 'module'
+      script.src = `/js/editor-module.js?v=${Date.now()}`
+      script.onload = () => {
+        setEditorReady(true)
+      }
+      script.onerror = (e) => {
+        console.error('Failed to load editor:', e)
+      }
+      document.body.appendChild(script)
+    }
+  }, [project, loading, editorReady])
+
+  // Initialize editor when script is loaded
+  useEffect(() => {
+    if (editorReady && project) {
       const initEditor = () => {
         if ((window as any).GLBAnimationEditor) {
           const editor = new (window as any).GLBAnimationEditor()
           editorRef.current = editor
 
-          // Load project data into editor
           if (project.modelData || project.animations?.length > 0) {
             editor.loadProjectData?.(project)
           }
 
-          // Expose save function to editor
           (window as any).saveProjectToCloud = saveProject
         } else {
           setTimeout(initEditor, 100)
@@ -161,7 +174,7 @@ export default function EditorPage() {
 
       initEditor()
     }
-  }, [project, loading])
+  }, [editorReady, project, saveProject])
 
   if (status === 'loading' || loading) {
     return (
@@ -238,27 +251,15 @@ export default function EditorPage() {
         </div>
       </div>
 
-      {/* Editor Container - offset for our top bar */}
+      {/* Editor Container */}
       <div id="editor-container" className="pt-[52px]">
-        {/* This is where the editor will mount */}
-        <div id="welcome-screen" className="screen active" style={{ display: 'none' }}>
-          {/* Welcome screen content from editor */}
-        </div>
-        <div id="editor-screen" className="screen">
+        <div id="welcome-screen" className="screen" style={{ display: 'none' }} />
+        <div id="editor-screen" className="screen active">
           <canvas id="editor-canvas"></canvas>
-          {/* Rest of editor UI will be injected by editor.js */}
         </div>
       </div>
 
       <div id="toast-container" className="fixed bottom-[180px] right-5 flex flex-col-reverse gap-3 z-[1001]" />
-
-      {/* Load the editor script */}
-      <Script
-        src="/js/editor-module.js"
-        type="module"
-        strategy="afterInteractive"
-      />
     </>
   )
 }
-
