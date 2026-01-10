@@ -52,6 +52,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
   const gridHelperRef = useRef<THREE.GridHelper | null>(null)
   const boneLinesGroupRef = useRef<THREE.Group | null>(null)
   const boneHelpersRef = useRef<THREE.Group[]>([])
+  const boneVisualizerGroupRef = useRef<THREE.Group | null>(null)
   const modelRef = useRef<THREE.Group | null>(null)
   const originalGLTFRef = useRef<any>(null)
 
@@ -206,6 +207,12 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     scene.add(boneLinesGroup)
     boneLinesGroupRef.current = boneLinesGroup
 
+    // Bone visualizer group (for octahedron helpers)
+    const boneVisualizerGroup = new THREE.Group()
+    boneVisualizerGroup.renderOrder = 1000
+    scene.add(boneVisualizerGroup)
+    boneVisualizerGroupRef.current = boneVisualizerGroup
+
     // Handle resize
     const handleResize = () => {
       camera.aspect = window.innerWidth / (window.innerHeight - 52)
@@ -263,9 +270,14 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
         }
       }
 
-      // Update bone lines
-      if (showBoneView && boneLinesGroupRef.current) {
+      // Update bone lines and helpers
+      if (showBoneView) {
+        if (boneLinesGroupRef.current) {
         updateBoneLines()
+        }
+        if (boneVisualizerGroupRef.current) {
+          updateBoneHelperPositions()
+        }
       }
 
       controlsRef.current?.update()
@@ -311,187 +323,94 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     })
   }, [showBoneView])
 
-  const createSampleArmature = (scene: THREE.Scene) => {
-    const group = new THREE.Group()
-    const boneMap = new Map<string, THREE.Bone>()
-    const originalTransforms = new Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>()
+  // Load sample model from assets
+  const loadSampleModel = useCallback(() => {
+    if (!sceneRef.current) return
+    
+    showToast('Loading sample model...', 'info')
+    
+    const loader = new GLTFLoader()
+    
+    // Load from assets folder - place your GLB file at /public/assets/sample-model.glb
+    loader.load(
+      '/assets/sample-model.glb',
+      (gltf) => {
+        originalGLTFRef.current = gltf
+        setLoadedFilename('sample-model.glb')
 
-    // Materials
-    const bodyMaterial = new THREE.MeshStandardMaterial({ color: 0x6366f1, roughness: 0.4, metalness: 0.1 })
-    const accentMaterial = new THREE.MeshStandardMaterial({ 
-      color: 0x22c55e, roughness: 0.3, metalness: 0.2, emissive: 0x22c55e, emissiveIntensity: 0.2
-    })
+        // Clear existing model and helpers
+        if (modelRef.current && sceneRef.current) {
+          sceneRef.current.remove(modelRef.current)
+        }
+        if (boneVisualizerGroupRef.current) {
+          boneVisualizerGroupRef.current.clear()
+        }
+        boneHelpersRef.current = []
 
-    // Create bones
-    const createBone = (name: string, position: THREE.Vector3, parent?: THREE.Bone) => {
-      const bone = new THREE.Bone()
-      bone.name = name
-      bone.position.copy(position)
-      if (parent) parent.add(bone)
-      boneMap.set(name, bone)
-      originalTransforms.set(name, {
-        position: position.clone(),
-        rotation: bone.rotation.clone(),
-        scale: bone.scale.clone()
-      })
-      return bone
-    }
+        // Add new model
+        const model = gltf.scene
+        model.position.set(0, 0, 0)
 
-    // Build skeleton
-    const hips = new THREE.Bone()
-    hips.name = 'Hips'
-    hips.position.y = 1
-    boneMap.set('Hips', hips)
-    originalTransforms.set('Hips', { position: new THREE.Vector3(0, 1, 0), rotation: hips.rotation.clone(), scale: hips.scale.clone() })
+        // Normalize scale
+        const box = new THREE.Box3().setFromObject(model)
+        const size = box.getSize(new THREE.Vector3())
+        const maxDim = Math.max(size.x, size.y, size.z)
+        if (maxDim > 3) {
+          model.scale.setScalar(2 / maxDim)
+        }
 
-    const spine = createBone('Spine', new THREE.Vector3(0, 0.2, 0), hips)
-    const spine1 = createBone('Spine1', new THREE.Vector3(0, 0.15, 0), spine)
-    const spine2 = createBone('Spine2', new THREE.Vector3(0, 0.15, 0), spine1)
-    const neck = createBone('Neck', new THREE.Vector3(0, 0.12, 0), spine2)
-    const head = createBone('Head', new THREE.Vector3(0, 0.15, 0), neck)
+        // Center
+        box.setFromObject(model)
+        const center = box.getCenter(new THREE.Vector3())
+        model.position.sub(new THREE.Vector3(center.x, box.min.y, center.z))
 
-    // Left arm
-    const leftShoulder = new THREE.Bone()
-    leftShoulder.name = 'LeftShoulder'
-    leftShoulder.position.set(-0.18, 0.08, 0)
-    spine2.add(leftShoulder)
-    boneMap.set('LeftShoulder', leftShoulder)
-    originalTransforms.set('LeftShoulder', { position: leftShoulder.position.clone(), rotation: leftShoulder.rotation.clone(), scale: leftShoulder.scale.clone() })
+        // Setup shadows
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true
+            child.receiveShadow = true
+          }
+        })
 
-    const leftArm = createBone('LeftArm', new THREE.Vector3(-0.15, 0, 0), leftShoulder)
-    const leftForeArm = createBone('LeftForeArm', new THREE.Vector3(-0.22, 0, 0), leftArm)
-    const leftHand = createBone('LeftHand', new THREE.Vector3(-0.18, 0, 0), leftForeArm)
+        sceneRef.current?.add(model)
+        modelRef.current = model
 
-    // Right arm
-    const rightShoulder = new THREE.Bone()
-    rightShoulder.name = 'RightShoulder'
-    rightShoulder.position.set(0.18, 0.08, 0)
-    spine2.add(rightShoulder)
-    boneMap.set('RightShoulder', rightShoulder)
-    originalTransforms.set('RightShoulder', { position: rightShoulder.position.clone(), rotation: rightShoulder.rotation.clone(), scale: rightShoulder.scale.clone() })
+        // Find bones
+        const boneMap = new Map<string, THREE.Bone>()
+        const originalTransforms = new Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>()
 
-    const rightArm = createBone('RightArm', new THREE.Vector3(0.15, 0, 0), rightShoulder)
-    const rightForeArm = createBone('RightForeArm', new THREE.Vector3(0.22, 0, 0), rightArm)
-    const rightHand = createBone('RightHand', new THREE.Vector3(0.18, 0, 0), rightForeArm)
+        model.traverse((child) => {
+          if ((child as THREE.SkinnedMesh).isSkinnedMesh && (child as THREE.SkinnedMesh).skeleton) {
+            ;(child as THREE.SkinnedMesh).skeleton.bones.forEach((bone) => {
+              boneMap.set(bone.name, bone)
+              originalTransforms.set(bone.name, {
+                position: bone.position.clone(),
+                rotation: bone.rotation.clone(),
+                scale: bone.scale.clone()
+              })
+            })
+          }
+          if ((child as THREE.Bone).isBone) {
+            boneMap.set(child.name, child as THREE.Bone)
+            if (!originalTransforms.has(child.name)) {
+              originalTransforms.set(child.name, {
+                position: (child as THREE.Bone).position.clone(),
+                rotation: (child as THREE.Bone).rotation.clone(),
+                scale: (child as THREE.Bone).scale.clone()
+              })
+            }
+          }
+        })
 
-    // Left leg
-    const leftUpLeg = new THREE.Bone()
-    leftUpLeg.name = 'LeftUpLeg'
-    leftUpLeg.position.set(-0.1, -0.05, 0)
-    hips.add(leftUpLeg)
-    boneMap.set('LeftUpLeg', leftUpLeg)
-    originalTransforms.set('LeftUpLeg', { position: leftUpLeg.position.clone(), rotation: leftUpLeg.rotation.clone(), scale: leftUpLeg.scale.clone() })
-
-    const leftLeg = createBone('LeftLeg', new THREE.Vector3(0, -0.4, 0), leftUpLeg)
-    const leftFoot = createBone('LeftFoot', new THREE.Vector3(0, -0.38, 0), leftLeg)
-
-    // Right leg
-    const rightUpLeg = new THREE.Bone()
-    rightUpLeg.name = 'RightUpLeg'
-    rightUpLeg.position.set(0.1, -0.05, 0)
-    hips.add(rightUpLeg)
-    boneMap.set('RightUpLeg', rightUpLeg)
-    originalTransforms.set('RightUpLeg', { position: rightUpLeg.position.clone(), rotation: rightUpLeg.rotation.clone(), scale: rightUpLeg.scale.clone() })
-
-    const rightLeg = createBone('RightLeg', new THREE.Vector3(0, -0.4, 0), rightUpLeg)
-    const rightFoot = createBone('RightFoot', new THREE.Vector3(0, -0.38, 0), rightLeg)
-
-    // Create body meshes
-    const bodyGroup = new THREE.Group()
-
-    // Pelvis
-    const pelvis = new THREE.Mesh(new THREE.BoxGeometry(0.25, 0.12, 0.15), bodyMaterial)
-    pelvis.position.y = 1
-    pelvis.castShadow = true
-    bodyGroup.add(pelvis)
-
-    // Torso
-    const torso = new THREE.Mesh(new THREE.BoxGeometry(0.28, 0.45, 0.18), bodyMaterial)
-    torso.position.set(0, 1.32, 0)
-    torso.castShadow = true
-    bodyGroup.add(torso)
-
-    // Head
-    const headMesh = new THREE.Mesh(new THREE.SphereGeometry(0.12, 16, 16), accentMaterial)
-    headMesh.position.set(0, 1.72, 0)
-    headMesh.castShadow = true
-    bodyGroup.add(headMesh)
-
-    // Neck
-    const neckMesh = new THREE.Mesh(new THREE.CylinderGeometry(0.04, 0.05, 0.1, 8), bodyMaterial)
-    neckMesh.position.set(0, 1.58, 0)
-    bodyGroup.add(neckMesh)
-
-    // Arms
-    const leftUpperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.2, 4, 8), bodyMaterial)
-    leftUpperArm.position.set(-0.28, 1.38, 0)
-    leftUpperArm.rotation.z = 0.3
-    leftUpperArm.castShadow = true
-    bodyGroup.add(leftUpperArm)
-
-    const leftLowerArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.18, 4, 8), bodyMaterial)
-    leftLowerArm.position.set(-0.42, 1.15, 0)
-    leftLowerArm.rotation.z = 0.2
-    leftLowerArm.castShadow = true
-    bodyGroup.add(leftLowerArm)
-
-    const leftHandMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.03), accentMaterial)
-    leftHandMesh.position.set(-0.48, 0.95, 0)
-    bodyGroup.add(leftHandMesh)
-
-    const rightUpperArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.04, 0.2, 4, 8), bodyMaterial)
-    rightUpperArm.position.set(0.28, 1.38, 0)
-    rightUpperArm.rotation.z = -0.3
-    rightUpperArm.castShadow = true
-    bodyGroup.add(rightUpperArm)
-
-    const rightLowerArm = new THREE.Mesh(new THREE.CapsuleGeometry(0.035, 0.18, 4, 8), bodyMaterial)
-    rightLowerArm.position.set(0.42, 1.15, 0)
-    rightLowerArm.rotation.z = -0.2
-    rightLowerArm.castShadow = true
-    bodyGroup.add(rightLowerArm)
-
-    const rightHandMesh = new THREE.Mesh(new THREE.BoxGeometry(0.05, 0.08, 0.03), accentMaterial)
-    rightHandMesh.position.set(0.48, 0.95, 0)
-    bodyGroup.add(rightHandMesh)
-
-    // Legs
-    const leftThigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.32, 4, 8), bodyMaterial)
-    leftThigh.position.set(-0.1, 0.72, 0)
-    leftThigh.castShadow = true
-    bodyGroup.add(leftThigh)
-
-    const leftShin = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8), bodyMaterial)
-    leftShin.position.set(-0.1, 0.32, 0)
-    leftShin.castShadow = true
-    bodyGroup.add(leftShin)
-
-    const leftFootMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.15), accentMaterial)
-    leftFootMesh.position.set(-0.1, 0.025, 0.03)
-    bodyGroup.add(leftFootMesh)
-
-    const rightThigh = new THREE.Mesh(new THREE.CapsuleGeometry(0.055, 0.32, 4, 8), bodyMaterial)
-    rightThigh.position.set(0.1, 0.72, 0)
-    rightThigh.castShadow = true
-    bodyGroup.add(rightThigh)
-
-    const rightShin = new THREE.Mesh(new THREE.CapsuleGeometry(0.045, 0.3, 4, 8), bodyMaterial)
-    rightShin.position.set(0.1, 0.32, 0)
-    rightShin.castShadow = true
-    bodyGroup.add(rightShin)
-
-    const rightFootMesh = new THREE.Mesh(new THREE.BoxGeometry(0.08, 0.05, 0.15), accentMaterial)
-    rightFootMesh.position.set(0.1, 0.025, 0.03)
-    bodyGroup.add(rightFootMesh)
-
-    group.add(bodyGroup)
-    group.add(hips)
-
-    // Create bone helpers
+        // Create bone helpers in visualizer group
     const helpers: THREE.Group[] = []
     boneMap.forEach((bone, name) => {
       const helper = createBoneHelper(name)
-      bone.add(helper)
+          helper.userData.boneName = name
+          helper.userData.bone = bone
+          if (boneVisualizerGroupRef.current) {
+            boneVisualizerGroupRef.current.add(helper)
+          }
       helpers.push(helper)
     })
     boneHelpersRef.current = helpers
@@ -499,15 +418,72 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     // Create bone lines
     createBoneLines(boneMap)
 
-    scene.add(group)
-    modelRef.current = group
-
     setBones(boneMap)
     originalTransformsRef.current = originalTransforms
     setModelLoaded(true)
-    setShowWelcome(false)
-    setLoadedFilename('sample_armature.glb')
-  }
+        setShowWelcome(false)
+        setSelectedBone(null)
+
+        // Process GLB animations if present
+        const glbAnimations = gltf.animations || []
+        if (glbAnimations.length > 0) {
+          const newAnimations = new Map<string, Animation>()
+          
+          glbAnimations.forEach((clip, index) => {
+            const animId = `anim_${animationCounterRef.current++}`
+            const { keyframes, totalFrames } = convertGLBClipToKeyframes(
+              clip, boneMap, originalTransforms, 24, 2
+            )
+            
+            newAnimations.set(animId, {
+              name: clip.name || `Animation ${index + 1}`,
+              fps: 24,
+              totalFrames,
+              speed: 1,
+              loop: true,
+              keyframes
+            })
+          })
+          
+          // Also add a default empty animation
+          const defaultAnimId = `anim_${animationCounterRef.current++}`
+          newAnimations.set(defaultAnimId, {
+            name: 'New Animation',
+            fps: 24,
+            totalFrames: 30,
+            speed: 1,
+            loop: true,
+            keyframes: new Map()
+          })
+          
+          setAnimations(newAnimations)
+          const firstAnimId = Array.from(newAnimations.keys())[0]
+          setCurrentAnimationId(firstAnimId)
+          setCurrentFrame(0)
+          
+          showToast(`Sample model loaded! ${boneMap.size} bones, ${glbAnimations.length} animation(s).`, 'success')
+        } else {
+          const defaultAnimId = `anim_${animationCounterRef.current++}`
+          setAnimations(new Map([[defaultAnimId, {
+            name: 'Animation 1',
+            fps: 24,
+            totalFrames: 30,
+            speed: 1,
+            loop: true,
+            keyframes: new Map()
+          }]]))
+          setCurrentAnimationId(defaultAnimId)
+          
+          showToast(`Sample model loaded! Found ${boneMap.size} bones.`, 'success')
+        }
+      },
+      undefined,
+      (error) => {
+        console.error('Failed to load sample model:', error)
+        showToast('Sample model not found. Please add a GLB file to /public/assets/sample-model.glb', 'error')
+      }
+    )
+  }, [showToast])
 
   const createBoneHelper = (boneName: string) => {
     const group = new THREE.Group()
@@ -624,6 +600,24 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
         positions[4] = childPos.y
         positions[5] = childPos.z
         line.geometry.attributes.position.needsUpdate = true
+      }
+    })
+  }
+
+  // Update bone helper positions to match bone world positions
+  const updateBoneHelperPositions = () => {
+    boneHelpersRef.current.forEach(helper => {
+      const boneName = helper.userData.boneName
+      const bone = bones.get(boneName)
+      if (bone) {
+        const worldPos = new THREE.Vector3()
+        bone.getWorldPosition(worldPos)
+        helper.position.copy(worldPos)
+        
+        // Optional: match bone rotation
+        const worldQuat = new THREE.Quaternion()
+        bone.getWorldQuaternion(worldQuat)
+        helper.quaternion.copy(worldQuat)
       }
     })
   }
@@ -1080,11 +1074,20 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
             }
           })
 
-          // Create bone helpers (octahedron/diamond shapes)
+          // Create bone helpers (octahedron/diamond shapes) - add to visualizer group for visibility
+          // Clear existing helpers
+          if (boneVisualizerGroupRef.current) {
+            boneVisualizerGroupRef.current.clear()
+          }
           const helpers: THREE.Group[] = []
           boneMap.forEach((bone, name) => {
             const helper = createBoneHelper(name)
-            bone.add(helper)
+            helper.userData.boneName = name
+            helper.userData.bone = bone
+            // Add to visualizer group instead of bone (better visibility)
+            if (boneVisualizerGroupRef.current) {
+              boneVisualizerGroupRef.current.add(helper)
+            }
             helpers.push(helper)
           })
           boneHelpersRef.current = helpers
@@ -1151,8 +1154,8 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
               keyframes: new Map()
             }]]))
             setCurrentAnimationId(defaultAnimId)
-            
-            showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
+
+          showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
           }
         }, (error) => {
           console.error('GLB load error:', error)
@@ -1534,11 +1537,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
             
             <div className="space-y-3">
               <button
-                onClick={() => {
-                  if (sceneRef.current) {
-                    createSampleArmature(sceneRef.current)
-                  }
-                }}
+                onClick={loadSampleModel}
                 className="w-full py-3 px-4 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
               >
                 🤖 Load Sample Model
@@ -1895,7 +1894,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
                       className="text-xs font-medium text-[#f4f4f5] bg-transparent border-b border-[#22c55e] outline-none w-24"
                     />
                   ) : (
-                    <span className="text-xs font-medium text-[#f4f4f5]">{anim.name}</span>
+                  <span className="text-xs font-medium text-[#f4f4f5]">{anim.name}</span>
                   )}
                   <div className="flex gap-1">
                     <button
