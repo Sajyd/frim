@@ -62,6 +62,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
   const [currentFrame, setCurrentFrame] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
   const [modelLoaded, setModelLoaded] = useState(false)
+  const [showWelcome, setShowWelcome] = useState(true)
   const [showGrid, setShowGrid] = useState(true)
   const [showBoneView, setShowBoneView] = useState(true)
   const [loadedFilename, setLoadedFilename] = useState('')
@@ -226,8 +227,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     setAnimations(new Map([[animId, defaultAnim]]))
     setCurrentAnimationId(animId)
 
-    // Load sample model
-    createSampleArmature(scene)
+    // Don't auto-load - show welcome screen instead
 
     return () => {
       cancelAnimationFrame(animationIdRef.current)
@@ -505,6 +505,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     setBones(boneMap)
     originalTransformsRef.current = originalTransforms
     setModelLoaded(true)
+    setShowWelcome(false)
     setLoadedFilename('sample_armature.glb')
   }
 
@@ -958,6 +959,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
           setBones(boneMap)
           originalTransformsRef.current = originalTransforms
           setModelLoaded(true)
+          setShowWelcome(false)
           setSelectedBone(null)
 
           showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
@@ -1010,6 +1012,193 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     showToast('Animation exported as JSON', 'success')
   }, [currentAnimation, showToast])
 
+  // Export GLB with animation
+  const exportGLB = useCallback(() => {
+    if (!currentAnimation || !modelRef.current) {
+      showToast('No model or animation to export', 'warning')
+      return
+    }
+
+    showToast('Generating GLB...', 'info')
+
+    try {
+      // Create animation clip from keyframes
+      const tracks: THREE.KeyframeTrack[] = []
+      const duration = totalFrames / fps
+
+      // Collect all bones with keyframes
+      const bonesWithKeyframes = new Set<string>()
+      currentAnimation.keyframes.forEach((frameData) => {
+        frameData.forEach((_, boneName) => bonesWithKeyframes.add(boneName))
+      })
+
+      bonesWithKeyframes.forEach(boneName => {
+        const times: number[] = []
+        const positions: number[] = []
+        const quaternions: number[] = []
+        const scales: number[] = []
+
+        const sortedFrames = Array.from(currentAnimation.keyframes.keys()).sort((a, b) => a - b)
+
+        sortedFrames.forEach(frame => {
+          const boneData = currentAnimation.keyframes.get(frame)?.get(boneName)
+          if (boneData) {
+            times.push(frame / fps)
+            positions.push(boneData.position.x, boneData.position.y, boneData.position.z)
+            quaternions.push(boneData.rotation.x, boneData.rotation.y, boneData.rotation.z, boneData.rotation.w)
+            scales.push(boneData.scale.x, boneData.scale.y, boneData.scale.z)
+          }
+        })
+
+        if (times.length > 0) {
+          tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, times, positions))
+          tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, times, quaternions))
+          tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.scale`, times, scales))
+        }
+      })
+
+      const clip = new THREE.AnimationClip(currentAnimation.name, duration, tracks)
+
+      // Clone model for export
+      const exportScene = modelRef.current.clone(true)
+      exportScene.animations = [clip]
+
+      // Export using GLTFExporter
+      const exporter = new GLTFExporter()
+      exporter.parse(
+        exportScene,
+        (result) => {
+          const blob = new Blob([result as ArrayBuffer], { type: 'application/octet-stream' })
+          const url = URL.createObjectURL(blob)
+          const a = document.createElement('a')
+          a.href = url
+          a.download = `${currentAnimation.name.toLowerCase().replace(/\s+/g, '_')}.glb`
+          a.click()
+          URL.revokeObjectURL(url)
+          showToast('GLB exported successfully', 'success')
+        },
+        (error) => {
+          console.error('GLB export error:', error)
+          showToast('Failed to export GLB', 'error')
+        },
+        { binary: true, animations: [clip] }
+      )
+    } catch (err) {
+      console.error('Export error:', err)
+      showToast('Failed to export GLB', 'error')
+    }
+  }, [currentAnimation, totalFrames, fps, showToast])
+
+  // Import JSON animation
+  const importJSON = useCallback((file: File) => {
+    const reader = new FileReader()
+    reader.onload = (e) => {
+      try {
+        const data = JSON.parse(e.target?.result as string)
+        
+        // Create new animation from JSON
+        const newId = `anim_${animationCounterRef.current++}`
+        const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
+        
+        Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
+          const frame = parseInt(frameStr)
+          const boneMap = new Map<string, BoneKeyframe>()
+          
+          Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
+            boneMap.set(boneName, {
+              position: new THREE.Vector3(...boneData.position),
+              rotation: new THREE.Quaternion(...boneData.rotation),
+              scale: new THREE.Vector3(...boneData.scale)
+            })
+          })
+          
+          newKeyframes.set(frame, boneMap)
+        })
+        
+        const newAnim: Animation = {
+          name: data.name || 'Imported Animation',
+          fps: data.fps || 24,
+          totalFrames: data.totalFrames || 30,
+          speed: data.speed || 1,
+          loop: data.loop !== false,
+          keyframes: newKeyframes
+        }
+        
+        setAnimations(prev => new Map(prev).set(newId, newAnim))
+        setCurrentAnimationId(newId)
+        setCurrentFrame(0)
+        
+        showToast(`Imported "${newAnim.name}"`, 'success')
+      } catch (err) {
+        console.error('JSON import error:', err)
+        showToast('Failed to import animation', 'error')
+      }
+    }
+    reader.readAsText(file)
+  }, [showToast])
+
+  // Undo function
+  const undo = useCallback(() => {
+    if (historyIndex > 0) {
+      const newIndex = historyIndex - 1
+      setHistoryIndex(newIndex)
+      const state = JSON.parse(history[newIndex])
+      
+      Object.entries(state).forEach(([boneName, transforms]: [string, any]) => {
+        const bone = bones.get(boneName)
+        if (bone) {
+          bone.position.fromArray(transforms.position)
+          bone.rotation.fromArray(transforms.rotation)
+          bone.scale.fromArray(transforms.scale)
+        }
+      })
+      
+      showToast('Undo', 'info')
+    }
+  }, [historyIndex, history, bones, showToast])
+
+  // Redo function
+  const redo = useCallback(() => {
+    if (historyIndex < history.length - 1) {
+      const newIndex = historyIndex + 1
+      setHistoryIndex(newIndex)
+      const state = JSON.parse(history[newIndex])
+      
+      Object.entries(state).forEach(([boneName, transforms]: [string, any]) => {
+        const bone = bones.get(boneName)
+        if (bone) {
+          bone.position.fromArray(transforms.position)
+          bone.rotation.fromArray(transforms.rotation)
+          bone.scale.fromArray(transforms.scale)
+        }
+      })
+      
+      showToast('Redo', 'info')
+    }
+  }, [historyIndex, history, bones, showToast])
+
+  // Save to history
+  const saveToHistory = useCallback(() => {
+    const state: Record<string, any> = {}
+    bones.forEach((bone, name) => {
+      state[name] = {
+        position: bone.position.toArray(),
+        rotation: bone.rotation.toArray(),
+        scale: bone.scale.toArray()
+      }
+    })
+    
+    const stateStr = JSON.stringify(state)
+    
+    setHistory(prev => {
+      const newHistory = prev.slice(0, historyIndex + 1)
+      newHistory.push(stateStr)
+      if (newHistory.length > maxHistory) newHistory.shift()
+      return newHistory
+    })
+    setHistoryIndex(prev => Math.min(prev + 1, maxHistory - 1))
+  }, [bones, historyIndex])
+
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -1028,18 +1217,49 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
           break
         case 'KeyB': setShowBoneView(v => !v); break
         case 'KeyK': addKeyframe(); break
+        case 'KeyZ':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            if (e.shiftKey) {
+              redo()
+            } else {
+              undo()
+            }
+          }
+          break
+        case 'KeyY':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            redo()
+          }
+          break
+        case 'KeyC':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            copyPose()
+          }
+          break
+        case 'KeyX':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            copyPose()
+            resetBone()
+          }
+          break
         case 'Delete':
         case 'Backspace':
           deleteKeyframe()
           break
         case 'ArrowLeft': goToFrame(currentFrame - 1); break
         case 'ArrowRight': goToFrame(currentFrame + 1); break
+        case 'Home': goToFrame(0); break
+        case 'End': goToFrame(totalFrames); break
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe])
+  }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, undo, redo, copyPose, resetBone, totalFrames])
 
   // Canvas click for bone selection
   useEffect(() => {
@@ -1111,13 +1331,59 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
 
-      {/* Hidden file input */}
+      {/* Welcome Screen */}
+      {showWelcome && (
+        <div className="absolute inset-0 bg-[#0f1117]/95 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="max-w-md w-full mx-4 bg-[#151821] border border-[#252b3d] rounded-2xl p-8 text-center">
+            <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-[#22c55e] to-[#16a34a] rounded-2xl flex items-center justify-center text-4xl shadow-lg shadow-[#22c55e]/20">
+              🎬
+            </div>
+            <h2 className="text-2xl font-bold text-white mb-2">Welcome to Frim</h2>
+            <p className="text-[#a1a1aa] mb-8">GLB Animation Editor - Create and edit skeletal animations</p>
+            
+            <div className="space-y-3">
+              <button
+                onClick={() => {
+                  if (sceneRef.current) {
+                    createSampleArmature(sceneRef.current)
+                  }
+                }}
+                className="w-full py-3 px-4 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
+              >
+                🤖 Load Sample Model
+              </button>
+              
+              <button
+                onClick={() => fileInputRef.current?.click()}
+                className="w-full py-3 px-4 bg-[#1c2130] text-white border border-[#252b3d] rounded-xl font-semibold hover:bg-[#252b3d] transition-colors flex items-center justify-center gap-2"
+              >
+                📂 Import GLB/GLTF File
+              </button>
+            </div>
+            
+            <div className="mt-8 pt-6 border-t border-[#252b3d]">
+              <p className="text-xs text-[#71717a]">
+                Drop a .glb or .gltf file anywhere to import
+              </p>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Hidden file inputs */}
       <input
         ref={fileInputRef}
         type="file"
         accept=".glb,.gltf"
         className="hidden"
         onChange={(e) => e.target.files?.[0] && loadGLBFile(e.target.files[0])}
+      />
+      <input
+        type="file"
+        id="json-import-input"
+        accept=".json"
+        className="hidden"
+        onChange={(e) => e.target.files?.[0] && importJSON(e.target.files[0])}
       />
 
       {/* Top Toolbar */}
@@ -1126,16 +1392,49 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
         <button
           onClick={() => fileInputRef.current?.click()}
           className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
-          title="Load Model"
+          title="Load Model (GLB/GLTF)"
         >
           📂
+        </button>
+        <button
+          onClick={() => document.getElementById('json-import-input')?.click()}
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
+          title="Import Animation (JSON)"
+        >
+          📥
         </button>
         <button
           onClick={exportJSON}
           className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
           title="Export JSON"
         >
+          📄
+        </button>
+        <button
+          onClick={exportGLB}
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
+          title="Export GLB with Animation"
+        >
           💾
+        </button>
+        <div className="w-px h-8 my-1 bg-[#252b3d]" />
+        
+        {/* Undo/Redo */}
+        <button
+          onClick={undo}
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors disabled:opacity-30"
+          title="Undo (Ctrl+Z)"
+          disabled={historyIndex <= 0}
+        >
+          ↩
+        </button>
+        <button
+          onClick={redo}
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors disabled:opacity-30"
+          title="Redo (Ctrl+Y)"
+          disabled={historyIndex >= history.length - 1}
+        >
+          ↪
         </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
@@ -1184,6 +1483,44 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
           <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">SKELETON</h3>
           <span className="text-xs text-[#71717a]">{bones.size} bones</span>
         </div>
+        
+        {/* Quick Bone Select */}
+        <div className="p-2 border-b border-[#252b3d] bg-[#0f1117]">
+          <div className="grid grid-cols-5 gap-1">
+            {[
+              { emoji: '🧠', bones: ['Head', 'Neck'], label: 'Head' },
+              { emoji: '💪', bones: ['LeftArm', 'LeftForeArm', 'LeftHand', 'LeftShoulder'], label: 'L Arm' },
+              { emoji: '🦵', bones: ['Spine', 'Spine1', 'Spine2', 'Hips'], label: 'Spine' },
+              { emoji: '💪', bones: ['RightArm', 'RightForeArm', 'RightHand', 'RightShoulder'], label: 'R Arm' },
+              { emoji: '🦶', bones: ['LeftUpLeg', 'LeftLeg', 'LeftFoot'], label: 'L Leg' },
+              { emoji: '🖐', bones: ['LeftHand'], label: 'L Hand' },
+              { emoji: '🦴', bones: ['Hips'], label: 'Hips' },
+              { emoji: '🖐', bones: ['RightHand'], label: 'R Hand' },
+              { emoji: '🦶', bones: ['RightUpLeg', 'RightLeg', 'RightFoot'], label: 'R Leg' },
+            ].map((item, idx) => {
+              // Find first matching bone
+              const matchingBone = item.bones.find(b => bones.has(b))
+              return (
+                <button
+                  key={idx}
+                  onClick={() => matchingBone && handleBoneSelect(matchingBone)}
+                  className={`p-1.5 rounded text-xs transition-colors ${
+                    matchingBone && item.bones.includes(selectedBone?.name || '')
+                      ? 'bg-[#22c55e]/30 text-[#22c55e]'
+                      : matchingBone
+                      ? 'hover:bg-[#1c2130] text-[#a1a1aa]'
+                      : 'opacity-30 cursor-not-allowed text-[#71717a]'
+                  }`}
+                  title={item.label}
+                  disabled={!matchingBone}
+                >
+                  {item.emoji}
+                </button>
+              )
+            })}
+          </div>
+        </div>
+        
         <div className="flex-1 overflow-y-auto p-2">
           <div className="space-y-0.5 font-mono text-xs">
             {Array.from(bones.keys()).map(name => (
@@ -1213,11 +1550,88 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
           <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">PROPERTIES</h3>
         </div>
         {selectedBone ? (
-          <div className="p-3 space-y-3 border-b border-[#252b3d]">
+          <div className="p-3 space-y-3 border-b border-[#252b3d] max-h-[300px] overflow-y-auto">
             <div className="flex items-center justify-between">
               <span className="text-xs text-[#71717a]">Selected:</span>
               <span className="font-mono text-sm text-[#22c55e]">{selectedBone.name}</span>
             </div>
+            
+            {/* Transform values */}
+            <div className="space-y-2">
+              {/* Rotation */}
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] text-[#71717a] w-12">Rotation</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {['x', 'y', 'z'].map((axis) => (
+                    <div key={`rot-${axis}`} className="relative">
+                      <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[9px] text-[#71717a] uppercase">{axis}</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={(selectedBone.rotation[axis as 'x' | 'y' | 'z'] * (180 / Math.PI)).toFixed(1)}
+                        onChange={(e) => {
+                          const val = parseFloat(e.target.value) * (Math.PI / 180)
+                          selectedBone.rotation[axis as 'x' | 'y' | 'z'] = val
+                          saveToHistory()
+                        }}
+                        className="w-full bg-[#0f1117] border border-[#252b3d] rounded px-1 pl-4 py-1 text-[10px] text-[#f4f4f5] text-right"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Position */}
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] text-[#71717a] w-12">Position</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {['x', 'y', 'z'].map((axis) => (
+                    <div key={`pos-${axis}`} className="relative">
+                      <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[9px] text-[#71717a] uppercase">{axis}</span>
+                      <input
+                        type="number"
+                        step="0.01"
+                        value={selectedBone.position[axis as 'x' | 'y' | 'z'].toFixed(3)}
+                        onChange={(e) => {
+                          selectedBone.position[axis as 'x' | 'y' | 'z'] = parseFloat(e.target.value)
+                          saveToHistory()
+                        }}
+                        className="w-full bg-[#0f1117] border border-[#252b3d] rounded px-1 pl-4 py-1 text-[10px] text-[#f4f4f5] text-right"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+              
+              {/* Scale */}
+              <div>
+                <div className="flex items-center gap-2 mb-1">
+                  <span className="text-[10px] text-[#71717a] w-12">Scale</span>
+                </div>
+                <div className="grid grid-cols-3 gap-1">
+                  {['x', 'y', 'z'].map((axis) => (
+                    <div key={`scale-${axis}`} className="relative">
+                      <span className="absolute left-1.5 top-1/2 -translate-y-1/2 text-[9px] text-[#71717a] uppercase">{axis}</span>
+                      <input
+                        type="number"
+                        step="0.1"
+                        value={selectedBone.scale[axis as 'x' | 'y' | 'z'].toFixed(2)}
+                        onChange={(e) => {
+                          selectedBone.scale[axis as 'x' | 'y' | 'z'] = parseFloat(e.target.value)
+                          saveToHistory()
+                        }}
+                        className="w-full bg-[#0f1117] border border-[#252b3d] rounded px-1 pl-4 py-1 text-[10px] text-[#f4f4f5] text-right"
+                      />
+                    </div>
+                  ))}
+                </div>
+              </div>
+            </div>
+            
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={addKeyframe}
@@ -1272,17 +1686,38 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
                 }`}
               >
                 <div className="flex items-center justify-between">
-                  <span className="text-xs font-medium text-[#f4f4f5]">{anim.name}</span>
+                  {currentAnimationId === id ? (
+                    <input
+                      type="text"
+                      value={anim.name}
+                      onClick={(e) => e.stopPropagation()}
+                      onChange={(e) => {
+                        setAnimations(prev => {
+                          const newAnimations = new Map(prev)
+                          const current = newAnimations.get(id)
+                          if (current) {
+                            newAnimations.set(id, { ...current, name: e.target.value })
+                          }
+                          return newAnimations
+                        })
+                      }}
+                      className="text-xs font-medium text-[#f4f4f5] bg-transparent border-b border-[#22c55e] outline-none w-24"
+                    />
+                  ) : (
+                    <span className="text-xs font-medium text-[#f4f4f5]">{anim.name}</span>
+                  )}
                   <div className="flex gap-1">
                     <button
                       onClick={(e) => { e.stopPropagation(); duplicateAnimation(id) }}
                       className="w-5 h-5 rounded text-[10px] text-[#71717a] hover:bg-[#252b3d]"
+                      title="Duplicate"
                     >
                       📋
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteAnimation(id) }}
                       className="w-5 h-5 rounded text-[10px] text-[#71717a] hover:bg-[#252b3d]"
+                      title="Delete"
                     >
                       🗑
                     </button>
