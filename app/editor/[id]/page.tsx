@@ -4,6 +4,20 @@ import { useEffect, useState, useRef, useCallback } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
+import dynamic from 'next/dynamic'
+
+// Dynamically import the editor with no SSR
+const ThreeEditor = dynamic(() => import('@/components/Editor/ThreeEditor'), {
+  ssr: false,
+  loading: () => (
+    <div className="w-full h-[calc(100vh-52px)] bg-[#0f1117] flex items-center justify-center">
+      <div className="text-center">
+        <div className="w-12 h-12 border-4 border-[#22c55e]/20 border-t-[#22c55e] rounded-full animate-spin mx-auto mb-4" />
+        <p className="text-[#71717a]">Loading editor...</p>
+      </div>
+    </div>
+  )
+})
 
 interface Project {
   id: string
@@ -20,13 +34,11 @@ export default function EditorPage() {
   const router = useRouter()
   const params = useParams()
   const projectId = params.id as string
-  
+
   const [project, setProject] = useState<Project | null>(null)
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [lastSaved, setLastSaved] = useState<Date | null>(null)
-  const [editorReady, setEditorReady] = useState(false)
-  const editorRef = useRef<any>(null)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
@@ -59,21 +71,17 @@ export default function EditorPage() {
   }
 
   const saveProject = useCallback(async () => {
-    if (!editorRef.current || !project) return
+    if (!project) return
 
     setSaving(true)
     try {
-      const editorData = editorRef.current.getProjectData?.() || {}
-      
+      // For now, just save the project name - we'll add animation data later
       const res = await fetch(`/api/projects/${projectId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: project.name,
-          animations: editorData.animations || [],
-          modelData: editorData.modelData,
-          modelName: editorData.modelName,
-          thumbnail: editorData.thumbnail,
+          animations: [],
         }),
       })
 
@@ -124,89 +132,50 @@ export default function EditorPage() {
     if (!container) return
 
     const toast = document.createElement('div')
-    toast.className = `toast ${type}`
+    toast.className = `fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2 animate-slide-up ${
+      type === 'success' ? 'bg-green-500/90' : type === 'error' ? 'bg-red-500/90' : 'bg-blue-500/90'
+    } text-white`
     toast.innerHTML = `
-      <span class="toast-icon">${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
-      <span class="toast-message">${message}</span>
+      <span>${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
+      <span>${message}</span>
     `
     container.appendChild(toast)
 
     setTimeout(() => {
-      toast.classList.add('removing')
+      toast.style.opacity = '0'
+      toast.style.transform = 'translateY(10px)'
       setTimeout(() => toast.remove(), 300)
     }, 3000)
   }
 
-  // Load editor script dynamically
-  useEffect(() => {
-    if (project && !loading && typeof window !== 'undefined' && !editorReady) {
-      // Load editor module with cache busting
-      const script = document.createElement('script')
-      script.type = 'module'
-      script.src = `/js/editor-module.js?v=${Date.now()}`
-      script.onload = () => {
-        setEditorReady(true)
-      }
-      script.onerror = (e) => {
-        console.error('Failed to load editor:', e)
-      }
-      document.body.appendChild(script)
-    }
-  }, [project, loading, editorReady])
-
-  // Initialize editor when script is loaded
-  useEffect(() => {
-    if (editorReady && project) {
-      const initEditor = () => {
-        if ((window as any).GLBAnimationEditor) {
-          const editor = new (window as any).GLBAnimationEditor()
-          editorRef.current = editor
-
-          if (project.modelData || project.animations?.length > 0) {
-            editor.loadProjectData?.(project)
-          }
-
-          (window as any).saveProjectToCloud = saveProject
-        } else {
-          setTimeout(initEditor, 100)
-        }
-      }
-
-      initEditor()
-    }
-  }, [editorReady, project, saveProject])
-
   if (status === 'loading' || loading) {
     return (
-      <div className="min-h-screen bg-dark-950 flex items-center justify-center">
+      <div className="min-h-screen bg-[#0f1117] flex items-center justify-center">
         <div className="text-center">
-          <div className="spinner w-8 h-8 mx-auto mb-4" />
-          <p className="text-dark-500">Loading editor...</p>
+          <div className="w-12 h-12 border-4 border-[#22c55e]/20 border-t-[#22c55e] rounded-full animate-spin mx-auto mb-4" />
+          <p className="text-[#71717a]">Loading project...</p>
         </div>
       </div>
     )
   }
 
   return (
-    <>
-      {/* Editor Styles */}
-      <link rel="stylesheet" href="/css/editor.css" />
-      
-      {/* Top Bar Override for Project Info */}
+    <div className="min-h-screen bg-[#0f1117] text-[#f4f4f5]">
+      {/* Top Bar */}
       <div className="fixed top-0 left-0 right-0 h-[52px] bg-[#151821] border-b border-[#252b3d] z-[1000] flex items-center justify-between px-4">
         <div className="flex items-center gap-4">
-          <Link 
-            href="/dashboard" 
-            className="flex items-center gap-2 text-dark-400 hover:text-dark-200 transition-colors"
+          <Link
+            href="/dashboard"
+            className="flex items-center gap-2 text-[#a1a1aa] hover:text-[#f4f4f5] transition-colors"
           >
             <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
             </svg>
             <span className="text-sm">Dashboard</span>
           </Link>
-          <div className="w-px h-6 bg-dark-700" />
+          <div className="w-px h-6 bg-[#252b3d]" />
           <div className="flex items-center gap-2">
-            <svg className="w-6 h-6 text-frim-400" viewBox="0 0 32 32" fill="none">
+            <svg className="w-6 h-6 text-[#22c55e]" viewBox="0 0 32 32" fill="none">
               <circle cx="16" cy="16" r="12" stroke="currentColor" strokeWidth="2"/>
               <circle cx="16" cy="11" r="2.5" fill="currentColor"/>
               <line x1="16" y1="13.5" x2="16" y2="19" stroke="currentColor" strokeWidth="2"/>
@@ -215,7 +184,7 @@ export default function EditorPage() {
               <line x1="16" y1="19" x2="13" y2="24" stroke="currentColor" strokeWidth="2"/>
               <line x1="16" y1="19" x2="19" y2="24" stroke="currentColor" strokeWidth="2"/>
             </svg>
-            <span className="font-display text-sm font-semibold">frim</span>
+            <span className="font-semibold text-sm">frim</span>
           </div>
         </div>
 
@@ -225,18 +194,18 @@ export default function EditorPage() {
 
         <div className="flex items-center gap-3">
           {lastSaved && (
-            <span className="text-xs text-dark-500">
+            <span className="text-xs text-[#71717a]">
               Saved {lastSaved.toLocaleTimeString()}
             </span>
           )}
           <button
             onClick={saveProject}
             disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 bg-frim-500 text-dark-950 rounded-lg text-sm font-semibold hover:bg-frim-400 transition-colors disabled:opacity-50"
+            className="flex items-center gap-2 px-4 py-2 bg-[#22c55e] text-[#09090b] rounded-lg text-sm font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50"
           >
             {saving ? (
               <>
-                <span className="w-4 h-4 border-2 border-dark-950/30 border-t-dark-950 rounded-full animate-spin" />
+                <span className="w-4 h-4 border-2 border-[#09090b]/30 border-t-[#09090b] rounded-full animate-spin" />
                 Saving...
               </>
             ) : (
@@ -244,22 +213,39 @@ export default function EditorPage() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
                 </svg>
-                Save to Cloud
+                Save
               </>
             )}
           </button>
         </div>
       </div>
 
-      {/* Editor Container */}
-      <div id="editor-container" className="pt-[52px]">
-        <div id="welcome-screen" className="screen" style={{ display: 'none' }} />
-        <div id="editor-screen" className="screen active">
-          <canvas id="editor-canvas"></canvas>
-        </div>
+      {/* Editor */}
+      <div className="pt-[52px]">
+        <ThreeEditor 
+          projectName={project?.name || 'Untitled'} 
+          onSave={saveProject}
+          saving={saving}
+        />
       </div>
 
-      <div id="toast-container" className="fixed bottom-[180px] right-5 flex flex-col-reverse gap-3 z-[1001]" />
-    </>
+      <div id="toast-container" className="fixed bottom-4 right-4 flex flex-col-reverse gap-3 z-[1001]" />
+
+      <style jsx global>{`
+        @keyframes slide-up {
+          from {
+            opacity: 0;
+            transform: translateY(10px);
+          }
+          to {
+            opacity: 1;
+            transform: translateY(0);
+          }
+        }
+        .animate-slide-up {
+          animation: slide-up 0.3s ease-out;
+        }
+      `}</style>
+    </div>
   )
 }
