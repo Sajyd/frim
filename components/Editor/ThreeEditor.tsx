@@ -512,51 +512,66 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
   const createBoneHelper = (boneName: string) => {
     const group = new THREE.Group()
     group.userData.boneName = boneName
+    group.userData.isBoneHelper = true
 
-    const jointSize = 0.06
+    // Larger size for better visibility and clickability
+    const jointSize = 0.08
+    
+    // Main octahedron (diamond shape) - the main clickable element
     const jointGeo = new THREE.OctahedronGeometry(jointSize, 0)
     const jointMat = new THREE.MeshStandardMaterial({
       color: 0x22c55e,
       roughness: 0.3,
       metalness: 0.6,
       transparent: true,
-      opacity: 0.85
+      opacity: 0.85,
+      depthTest: false
     })
     const joint = new THREE.Mesh(jointGeo, jointMat)
     joint.userData.boneName = boneName
+    joint.userData.isBoneHelper = true
     joint.renderOrder = 100
     group.add(joint)
 
-    const glowGeo = new THREE.OctahedronGeometry(jointSize * 1.15, 0)
+    // Glow effect
+    const glowGeo = new THREE.OctahedronGeometry(jointSize * 1.2, 0)
     const glowMat = new THREE.MeshBasicMaterial({
       color: 0x4ade80,
       transparent: true,
-      opacity: 0.3,
-      side: THREE.BackSide
+      opacity: 0.25,
+      side: THREE.BackSide,
+      depthTest: false
     })
     const glow = new THREE.Mesh(glowGeo, glowMat)
     glow.userData.boneName = boneName
+    glow.renderOrder = 99
     group.add(glow)
 
-    const wireGeo = new THREE.OctahedronGeometry(jointSize * 1.02, 0)
+    // Wireframe outline for visibility
+    const wireGeo = new THREE.OctahedronGeometry(jointSize * 1.05, 0)
     const wireMat = new THREE.MeshBasicMaterial({
       color: 0x86efac,
       wireframe: true,
       transparent: true,
-      opacity: 0.6
+      opacity: 0.7,
+      depthTest: false
     })
     const wireframe = new THREE.Mesh(wireGeo, wireMat)
     wireframe.userData.boneName = boneName
+    wireframe.renderOrder = 101
     group.add(wireframe)
 
-    const coreGeo = new THREE.SphereGeometry(jointSize * 0.3, 8, 8)
+    // Inner core sphere
+    const coreGeo = new THREE.SphereGeometry(jointSize * 0.35, 8, 8)
     const coreMat = new THREE.MeshBasicMaterial({
       color: 0xffffff,
       transparent: true,
-      opacity: 0.9
+      opacity: 0.9,
+      depthTest: false
     })
     const core = new THREE.Mesh(coreGeo, coreMat)
     core.userData.boneName = boneName
+    core.renderOrder = 102
     group.add(core)
 
     return group
@@ -871,6 +886,123 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
   }, [animations, showToast])
 
   // File loading
+  // Helper function to sample quaternion from animation track
+  const sampleQuaternionTrack = (track: THREE.KeyframeTrack, time: number) => {
+    const times = track.times
+    const values = track.values
+    
+    if (time <= times[0]) {
+      return new THREE.Quaternion(values[0], values[1], values[2], values[3])
+    }
+    if (time >= times[times.length - 1]) {
+      const i = (times.length - 1) * 4
+      return new THREE.Quaternion(values[i], values[i + 1], values[i + 2], values[i + 3])
+    }
+    
+    let i1 = 0
+    for (let i = 0; i < times.length - 1; i++) {
+      if (time >= times[i] && time < times[i + 1]) {
+        i1 = i
+        break
+      }
+    }
+    const i2 = i1 + 1
+    const alpha = (time - times[i1]) / (times[i2] - times[i1])
+    
+    const q1 = new THREE.Quaternion(values[i1 * 4], values[i1 * 4 + 1], values[i1 * 4 + 2], values[i1 * 4 + 3])
+    const q2 = new THREE.Quaternion(values[i2 * 4], values[i2 * 4 + 1], values[i2 * 4 + 2], values[i2 * 4 + 3])
+    
+    return q1.slerp(q2, alpha)
+  }
+
+  // Helper function to sample vector from animation track
+  const sampleVectorTrack = (track: THREE.KeyframeTrack, time: number) => {
+    const times = track.times
+    const values = track.values
+    
+    if (time <= times[0]) {
+      return new THREE.Vector3(values[0], values[1], values[2])
+    }
+    if (time >= times[times.length - 1]) {
+      const i = (times.length - 1) * 3
+      return new THREE.Vector3(values[i], values[i + 1], values[i + 2])
+    }
+    
+    let i1 = 0
+    for (let i = 0; i < times.length - 1; i++) {
+      if (time >= times[i] && time < times[i + 1]) {
+        i1 = i
+        break
+      }
+    }
+    const i2 = i1 + 1
+    const alpha = (time - times[i1]) / (times[i2] - times[i1])
+    
+    const v1 = new THREE.Vector3(values[i1 * 3], values[i1 * 3 + 1], values[i1 * 3 + 2])
+    const v2 = new THREE.Vector3(values[i2 * 3], values[i2 * 3 + 1], values[i2 * 3 + 2])
+    
+    return v1.lerp(v2, alpha)
+  }
+
+  // Convert GLB animation clip to keyframes
+  const convertGLBClipToKeyframes = (
+    clip: THREE.AnimationClip, 
+    boneMap: Map<string, THREE.Bone>,
+    originalTransforms: Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>,
+    targetFPS: number = 24,
+    sampleRate: number = 2
+  ) => {
+    const duration = clip.duration
+    const totalFrames = Math.ceil(duration * targetFPS)
+    
+    const keyframes = new Map<number, Map<string, BoneKeyframe>>()
+    
+    // Sample at every sampleRate frames
+    for (let frame = 0; frame <= totalFrames; frame += sampleRate) {
+      const time = frame / targetFPS
+      const frameKeyframes = new Map<string, BoneKeyframe>()
+      
+      clip.tracks.forEach(track => {
+        // Parse track name to get bone name (format: "boneName.property")
+        const parts = track.name.split('.')
+        const boneName = parts[0]
+        const property = parts[parts.length - 1]
+        
+        // Skip non-bone tracks
+        if (!boneMap.has(boneName)) return
+        
+        if (!frameKeyframes.has(boneName)) {
+          const original = originalTransforms.get(boneName)
+          frameKeyframes.set(boneName, {
+            position: original?.position.clone() || new THREE.Vector3(),
+            rotation: new THREE.Quaternion(),
+            scale: original?.scale.clone() || new THREE.Vector3(1, 1, 1)
+          })
+        }
+        
+        const boneData = frameKeyframes.get(boneName)!
+        
+        // Sample the track
+        if (property === 'quaternion') {
+          const quat = sampleQuaternionTrack(track, time)
+          boneData.rotation = quat
+        } else if (property === 'position') {
+          const pos = sampleVectorTrack(track, time)
+          boneData.position = pos
+        } else if (property === 'scale') {
+          const scale = sampleVectorTrack(track, time)
+          boneData.scale = scale
+        }
+      })
+      
+      if (frameKeyframes.size > 0) {
+        keyframes.set(frame, frameKeyframes)
+      }
+    }
+    
+    return { keyframes, totalFrames }
+  }
+
   const loadGLBFile = useCallback((file: File) => {
     showToast('Loading model...', 'info')
 
@@ -884,10 +1016,14 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
           originalGLTFRef.current = gltf
           setLoadedFilename(file.name)
 
-          // Clear existing model
+          // Clear existing model and helpers
           if (modelRef.current && sceneRef.current) {
             sceneRef.current.remove(modelRef.current)
           }
+          boneHelpersRef.current.forEach(helper => {
+            if (helper.parent) helper.parent.remove(helper)
+          })
+          boneHelpersRef.current = []
 
           // Add new model
           const model = gltf.scene
@@ -944,7 +1080,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
             }
           })
 
-          // Create bone helpers
+          // Create bone helpers (octahedron/diamond shapes)
           const helpers: THREE.Group[] = []
           boneMap.forEach((bone, name) => {
             const helper = createBoneHelper(name)
@@ -962,7 +1098,62 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
           setShowWelcome(false)
           setSelectedBone(null)
 
-          showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
+          // Process GLB animations if present
+          const glbAnimations = gltf.animations || []
+          if (glbAnimations.length > 0) {
+            showToast(`Found ${glbAnimations.length} animation(s), converting...`, 'info')
+            
+            const newAnimations = new Map<string, Animation>()
+            
+            glbAnimations.forEach((clip, index) => {
+              const animId = `anim_${animationCounterRef.current++}`
+              const { keyframes, totalFrames } = convertGLBClipToKeyframes(
+                clip, boneMap, originalTransforms, 24, 2
+              )
+              
+              newAnimations.set(animId, {
+                name: clip.name || `Animation ${index + 1}`,
+                fps: 24,
+                totalFrames,
+                speed: 1,
+                loop: true,
+                keyframes
+              })
+            })
+            
+            // Also keep a default empty animation
+            const defaultAnimId = `anim_${animationCounterRef.current++}`
+            newAnimations.set(defaultAnimId, {
+              name: 'New Animation',
+              fps: 24,
+              totalFrames: 30,
+              speed: 1,
+              loop: true,
+              keyframes: new Map()
+            })
+            
+            setAnimations(newAnimations)
+            // Select first imported animation
+            const firstAnimId = Array.from(newAnimations.keys())[0]
+            setCurrentAnimationId(firstAnimId)
+            setCurrentFrame(0)
+            
+            showToast(`Model loaded! ${boneMap.size} bones, ${glbAnimations.length} animation(s) converted.`, 'success')
+          } else {
+            // Create default animation if no animations in GLB
+            const defaultAnimId = `anim_${animationCounterRef.current++}`
+            setAnimations(new Map([[defaultAnimId, {
+              name: 'Animation 1',
+              fps: 24,
+              totalFrames: 30,
+              speed: 1,
+              loop: true,
+              keyframes: new Map()
+            }]]))
+            setCurrentAnimationId(defaultAnimId)
+            
+            showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
+          }
         }, (error) => {
           console.error('GLB load error:', error)
           showToast('Failed to load model', 'error')
