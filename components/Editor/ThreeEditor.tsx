@@ -155,6 +155,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [showResetBonesModal, setShowResetBonesModal] = useState(false)
   const [selectedResetBones, setSelectedResetBones] = useState<Set<string>>(new Set())
   const [resetAddKeyframe, setResetAddKeyframe] = useState(true)
+  
+  // Keyframe dragging
+  const [draggingKeyframe, setDraggingKeyframe] = useState<{boneName: string, fromFrame: number} | null>(null)
   const [exportIncludeModel, setExportIncludeModel] = useState(true)
   const [exportingGLB, setExportingGLB] = useState(false)
 
@@ -988,6 +991,40 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       return newAnimations
     })
   }, [selectedBone, currentAnimationId, currentFrame, showToast])
+
+  const moveKeyframe = useCallback((boneName: string, fromFrame: number, toFrame: number) => {
+    if (!currentAnimationId || fromFrame === toFrame) return
+
+    setAnimations(prev => {
+      const newAnimations = new Map(prev)
+      const anim = newAnimations.get(currentAnimationId)
+      if (!anim) return prev
+
+      const newKeyframes = new Map(anim.keyframes)
+      const frameData = newKeyframes.get(fromFrame)
+      if (!frameData || !frameData.has(boneName)) return prev
+
+      // Get the keyframe data
+      const boneData = frameData.get(boneName)!
+
+      // Remove from old frame
+      frameData.delete(boneName)
+      if (frameData.size === 0) {
+        newKeyframes.delete(fromFrame)
+      }
+
+      // Add to new frame
+      if (!newKeyframes.has(toFrame)) {
+        newKeyframes.set(toFrame, new Map())
+      }
+      newKeyframes.get(toFrame)!.set(boneName, boneData)
+
+      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
+      return newAnimations
+    })
+
+    showToast(`Keyframe moved from frame ${fromFrame} to ${toFrame}`, 'info')
+  }, [currentAnimationId, showToast])
 
   const resetBone = useCallback(() => {
     if (!selectedBone) return
@@ -3134,18 +3171,56 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
               Array.from(frameData.keys()).map((boneName, idx) => (
                 <div
                   key={`${frame}-${boneName}`}
-                  className={`absolute w-3 h-3 rounded-sm rotate-45 -translate-x-1/2 cursor-pointer hover:scale-125 transition-transform ${
+                  className={`absolute w-3 h-3 rounded-sm rotate-45 -translate-x-1/2 cursor-grab hover:scale-125 transition-transform ${
                     selectedBone?.name === boneName ? 'bg-[#fbbf24] border-2 border-[#151821]' : 'bg-[#22c55e] border-2 border-[#151821]'
-                  }`}
+                  } ${draggingKeyframe?.boneName === boneName && draggingKeyframe?.fromFrame === frame ? 'scale-150 opacity-80 cursor-grabbing' : ''}`}
                   style={{ 
                     left: `${frame * 20}px`, 
                     top: `${20 + idx * 16}px`
                   }}
-                  title={`${boneName} @ frame ${frame}`}
+                  title={`${boneName} @ frame ${frame} (drag to move)`}
                   onClick={(e) => {
                     e.stopPropagation()
-                    goToFrame(frame)
-                    handleBoneSelect(boneName)
+                    if (!draggingKeyframe) {
+                      goToFrame(frame)
+                      handleBoneSelect(boneName)
+                    }
+                  }}
+                  onMouseDown={(e) => {
+                    if (e.button !== 0) return
+                    e.stopPropagation()
+                    e.preventDefault()
+                    
+                    const startX = e.clientX
+                    const startFrame = frame
+                    let currentNewFrame = startFrame
+                    let hasMoved = false
+                    
+                    setDraggingKeyframe({ boneName, fromFrame: frame })
+                    
+                    const handleMouseMove = (moveEvent: MouseEvent) => {
+                      const deltaX = moveEvent.clientX - startX
+                      const deltaFrames = Math.round(deltaX / 20)
+                      currentNewFrame = Math.max(0, Math.min(totalFrames, startFrame + deltaFrames))
+                      
+                      if (currentNewFrame !== startFrame) {
+                        hasMoved = true
+                      }
+                    }
+                    
+                    const handleMouseUp = () => {
+                      document.removeEventListener('mousemove', handleMouseMove)
+                      document.removeEventListener('mouseup', handleMouseUp)
+                      
+                      setDraggingKeyframe(null)
+                      
+                      if (hasMoved && currentNewFrame !== startFrame) {
+                        moveKeyframe(boneName, startFrame, currentNewFrame)
+                      }
+                    }
+                    
+                    document.addEventListener('mousemove', handleMouseMove)
+                    document.addEventListener('mouseup', handleMouseUp)
                   }}
                 />
               ))
