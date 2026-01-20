@@ -48,7 +48,7 @@ import {
 
 interface EditorProps {
   projectName: string
-  onSave: (data: ProjectData) => void
+  onChange: (data: ProjectData) => void
   saving: boolean
   initialData?: {
     animations?: any[]
@@ -84,7 +84,7 @@ interface HistoryState {
   boneStates: { [key: string]: { position: number[]; rotation: number[]; scale: number[] } }
 }
 
-export default function ThreeEditor({ projectName, onSave, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
+export default function ThreeEditor({ projectName, onChange, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -125,6 +125,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
   const [historyIndex, setHistoryIndex] = useState(-1)
   const maxHistory = 50
   const saveToHistoryRef = useRef<(() => void) | null>(null)
+  const notifyChangeRef = useRef<(() => void) | null>(null)
 
   // Clipboard
   const clipboardRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null)
@@ -196,10 +197,10 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     }
   }, [serializeAnimations, loadedFilename])
 
-  // Expose save function
-  const handleSave = useCallback(() => {
-    onSave(getProjectData())
-  }, [onSave, getProjectData])
+  // Notify parent of changes
+  const notifyChange = useCallback(() => {
+    onChange(getProjectData())
+  }, [onChange, getProjectData])
 
   // Toast notification
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
@@ -275,9 +276,14 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     transformControls.setSpace('local')
     transformControls.addEventListener('dragging-changed', (event) => {
       controls.enabled = !event.value
-      // Save to history when dragging ends
-      if (!event.value && saveToHistoryRef.current) {
-        saveToHistoryRef.current()
+      // Save to history and notify parent when dragging ends
+      if (!event.value) {
+        if (saveToHistoryRef.current) {
+          saveToHistoryRef.current()
+        }
+        if (notifyChangeRef.current) {
+          notifyChangeRef.current()
+        }
       }
     })
     scene.add(transformControls)
@@ -1638,10 +1644,30 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     setHistoryIndex(prev => Math.min(prev + 1, maxHistory - 1))
   }, [bones, historyIndex])
 
-  // Keep ref updated with latest saveToHistory
+  // Keep refs updated with latest functions
   useEffect(() => {
     saveToHistoryRef.current = saveToHistory
   }, [saveToHistory])
+
+  useEffect(() => {
+    notifyChangeRef.current = notifyChange
+  }, [notifyChange])
+
+  // Notify parent when animations change
+  const animationsInitializedRef = useRef(false)
+  useEffect(() => {
+    // Skip initial render and first animation setup
+    if (!animationsInitializedRef.current) {
+      if (animations.size > 0) {
+        animationsInitializedRef.current = true
+      }
+      return
+    }
+    // Notify parent of changes
+    if (notifyChangeRef.current) {
+      notifyChangeRef.current()
+    }
+  }, [animations])
 
   // Save initial state to history when model loads
   useEffect(() => {

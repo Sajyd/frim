@@ -149,12 +149,11 @@ export default function EditorPage() {
     }
   }, [project, projectId])
 
-  // Handle data change from editor
-  const handleEditorSave = useCallback((data: ProjectData) => {
+  // Handle data change from editor (just mark as changed, don't auto-save)
+  const handleEditorChange = useCallback((data: ProjectData) => {
     pendingDataRef.current = data
     setHasUnsavedChanges(true)
-    saveProject(data)
-  }, [saveProject])
+  }, [])
 
   // Auto-save every 2 minutes if there are unsaved changes
   useEffect(() => {
@@ -315,7 +314,7 @@ export default function EditorPage() {
       <div className="pt-[52px]">
         <ThreeEditor 
           projectName={project?.name || 'Untitled'} 
-          onSave={handleEditorSave}
+          onChange={handleEditorChange}
           saving={saving}
           initialData={project ? {
             animations: project.animations,
