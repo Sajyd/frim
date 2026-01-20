@@ -2053,9 +2053,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // MediaPipe Pose Landmark indices
+  // MediaPipe Pose Landmark indices (body only, ignoring face and hands)
   const POSE_LANDMARKS = {
-    NOSE: 0,
     LEFT_SHOULDER: 11,
     RIGHT_SHOULDER: 12,
     LEFT_ELBOW: 13,
@@ -2070,23 +2069,27 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     RIGHT_ANKLE: 28
   }
 
-  // Calculate rotation quaternion from two 3D points (bone direction)
+  // Convert MediaPipe world landmark to Three.js coordinate system
+  // MediaPipe: X-right, Y-down, Z-toward camera (from subject's view)
+  // Three.js: X-right, Y-up, Z-toward viewer
+  const convertLandmark = useCallback((lm: { x: number, y: number, z: number }) => {
+    return new THREE.Vector3(
+      lm.x,       // X stays the same
+      -lm.y,      // Y is inverted (MediaPipe Y-down -> Three.js Y-up)
+      -lm.z       // Z is inverted (depth direction)
+    )
+  }, [])
+
+  // Calculate rotation to orient a bone from one point to another
+  // restDir is the direction the bone points in T-pose
   const calculateBoneRotation = useCallback((
-    from: { x: number, y: number, z: number },
-    to: { x: number, y: number, z: number },
-    up: THREE.Vector3 = new THREE.Vector3(0, 1, 0)
+    from: THREE.Vector3,
+    to: THREE.Vector3,
+    restDir: THREE.Vector3
   ): THREE.Quaternion => {
-    const direction = new THREE.Vector3(
-      to.x - from.x,
-      -(to.y - from.y), // Flip Y (MediaPipe Y is down, Three.js Y is up)
-      -(to.z - from.z)  // Flip Z for coordinate system alignment
-    ).normalize()
-    
+    const currentDir = new THREE.Vector3().subVectors(to, from).normalize()
     const quaternion = new THREE.Quaternion()
-    const matrix = new THREE.Matrix4()
-    matrix.lookAt(new THREE.Vector3(), direction, up)
-    quaternion.setFromRotationMatrix(matrix)
-    
+    quaternion.setFromUnitVectors(restDir.clone().normalize(), currentDir)
     return quaternion
   }, [])
 
@@ -2096,26 +2099,21 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   ): Map<string, BoneKeyframe> => {
     const frameData = new Map<string, BoneKeyframe>()
     
-    // Helper to get landmark with fallback
-    const getLandmark = (idx: number) => landmarks[idx] || { x: 0.5, y: 0.5, z: 0, visibility: 0 }
+    // Helper to get converted landmark
+    const getLandmark = (idx: number): THREE.Vector3 => {
+      const lm = landmarks[idx]
+      if (!lm) return new THREE.Vector3(0, 0, 0)
+      return convertLandmark(lm)
+    }
     
     // Helper to get midpoint between two landmarks
-    const getMidpoint = (idx1: number, idx2: number) => {
+    const getMidpoint = (idx1: number, idx2: number): THREE.Vector3 => {
       const a = getLandmark(idx1)
       const b = getLandmark(idx2)
-      return {
-        x: (a.x + b.x) / 2,
-        y: (a.y + b.y) / 2,
-        z: ((a.z || 0) + (b.z || 0)) / 2
-      }
+      return new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5)
     }
 
-    // Bone mapping: calculate rotations from landmarks for each bone
-    // Using the project's bone names: Hips, Spine, Spine1, Spine2, Neck, Head,
-    // LeftShoulder, LeftArm, LeftForeArm, LeftHand,
-    // RightShoulder, RightArm, RightForeArm, RightHand,
-    // LeftUpLeg, LeftLeg, LeftFoot, RightUpLeg, RightLeg, RightFoot
-
+    // Get key landmarks (converted to Three.js coordinates)
     const leftShoulder = getLandmark(POSE_LANDMARKS.LEFT_SHOULDER)
     const rightShoulder = getLandmark(POSE_LANDMARKS.RIGHT_SHOULDER)
     const leftElbow = getLandmark(POSE_LANDMARKS.LEFT_ELBOW)
@@ -2128,142 +2126,132 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     const rightKnee = getLandmark(POSE_LANDMARKS.RIGHT_KNEE)
     const leftAnkle = getLandmark(POSE_LANDMARKS.LEFT_ANKLE)
     const rightAnkle = getLandmark(POSE_LANDMARKS.RIGHT_ANKLE)
-    const nose = getLandmark(POSE_LANDMARKS.NOSE)
 
     const midShoulder = getMidpoint(POSE_LANDMARKS.LEFT_SHOULDER, POSE_LANDMARKS.RIGHT_SHOULDER)
     const midHip = getMidpoint(POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.RIGHT_HIP)
 
+    // Rest pose directions (T-pose)
+    const REST_UP = new THREE.Vector3(0, 1, 0)           // Spine, neck point up
+    const REST_DOWN = new THREE.Vector3(0, -1, 0)       // Legs point down
+    const REST_LEFT = new THREE.Vector3(-1, 0, 0)       // Left arm points left
+    const REST_RIGHT = new THREE.Vector3(1, 0, 0)       // Right arm points right
+
     // Try to set keyframes for each bone if it exists in the model
     const setBoneKeyframe = (boneName: string, rotation: THREE.Quaternion) => {
-          const bone = bones.get(boneName)
-          if (bone) {
-            const original = originalTransformsRef.current.get(boneName)
-            if (original) {
-              frameData.set(boneName, {
-                position: original.position.clone(),
+      const bone = bones.get(boneName)
+      if (bone) {
+        const original = originalTransformsRef.current.get(boneName)
+        if (original) {
+          frameData.set(boneName, {
+            position: original.position.clone(),
             rotation: rotation,
-                scale: original.scale.clone()
-              })
-            }
-          }
+            scale: original.scale.clone()
+          })
+        }
+      }
     }
 
-    // Hips - rotation based on hip line orientation
-    const hipsRotation = new THREE.Quaternion()
-    const hipDirection = new THREE.Vector3(rightHip.x - leftHip.x, 0, (rightHip.z || 0) - (leftHip.z || 0)).normalize()
-    const hipAngle = Math.atan2(hipDirection.x, hipDirection.z)
-    hipsRotation.setFromEuler(new THREE.Euler(0, hipAngle, 0))
+    // === HIPS ===
+    // Calculate hip rotation from the hip-to-hip vector and forward direction
+    const hipVector = new THREE.Vector3().subVectors(rightHip, leftHip).normalize()
+    const spineDir = new THREE.Vector3().subVectors(midShoulder, midHip).normalize()
+    const hipForward = new THREE.Vector3().crossVectors(hipVector, spineDir).normalize()
+    
+    // Calculate hip twist (rotation around Y)
+    const hipYaw = Math.atan2(hipForward.x, hipForward.z)
+    // Calculate hip tilt (forward/backward lean)
+    const hipPitch = Math.asin(Math.max(-1, Math.min(1, -spineDir.z))) * 0.5
+    // Calculate hip roll (side lean)
+    const hipRoll = Math.atan2(hipVector.y, hipVector.x) 
+    
+    const hipsRotation = new THREE.Quaternion().setFromEuler(
+      new THREE.Euler(hipPitch, hipYaw, hipRoll * 0.3, 'YXZ')
+    )
     setBoneKeyframe('Hips', hipsRotation)
 
-    // Spine bones - from hips to shoulders
-    const spineDirection = new THREE.Vector3(
-      midShoulder.x - midHip.x,
-      -(midShoulder.y - midHip.y),
-      (midShoulder.z || 0) - (midHip.z || 0)
-    ).normalize()
+    // === SPINE CHAIN ===
+    // Spine direction from hips to shoulders
+    const spineRotation = calculateBoneRotation(midHip, midShoulder, REST_UP)
     
-    const spineAngleX = Math.asin(-spineDirection.y) - Math.PI / 2
-    const spineAngleZ = Math.atan2(spineDirection.x, 1) * 0.5
+    // Distribute spine rotation across spine bones (30%, 30%, 40%)
+    const spineQuat = new THREE.Quaternion().slerpQuaternions(
+      new THREE.Quaternion(), spineRotation, 0.3
+    )
+    const spine1Quat = new THREE.Quaternion().slerpQuaternions(
+      new THREE.Quaternion(), spineRotation, 0.3
+    )
+    const spine2Quat = new THREE.Quaternion().slerpQuaternions(
+      new THREE.Quaternion(), spineRotation, 0.4
+    )
     
-    const spineRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(spineAngleX * 0.3, 0, spineAngleZ))
-    const spine1Rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(spineAngleX * 0.3, 0, spineAngleZ * 0.5))
-    const spine2Rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(spineAngleX * 0.4, 0, spineAngleZ * 0.3))
-    
-    setBoneKeyframe('Spine', spineRotation)
-    setBoneKeyframe('Spine1', spine1Rotation)
-    setBoneKeyframe('Spine2', spine2Rotation)
+    setBoneKeyframe('Spine', spineQuat)
+    setBoneKeyframe('Spine1', spine1Quat)
+    setBoneKeyframe('Spine2', spine2Quat)
 
-    // Neck and Head - from shoulders to nose
-    const neckDirection = new THREE.Vector3(
-      nose.x - midShoulder.x,
-      -(nose.y - midShoulder.y),
-      (nose.z || 0) - (midShoulder.z || 0)
-    ).normalize()
-    const neckAngleX = Math.asin(-neckDirection.y) - Math.PI / 2
-    const neckAngleZ = Math.atan2(neckDirection.x, 1) * 0.3
-    
-    const neckRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(neckAngleX * 0.5, 0, neckAngleZ))
-    const headRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(neckAngleX * 0.5, 0, neckAngleZ * 0.5))
-    
-    setBoneKeyframe('Neck', neckRotation)
-    setBoneKeyframe('Head', headRotation)
+    // === NECK & HEAD ===
+    // Simple upward direction for neck (skip face landmarks)
+    setBoneKeyframe('Neck', new THREE.Quaternion())
+    setBoneKeyframe('Head', new THREE.Quaternion())
 
-    // Left Arm chain
-    const leftArmRot = calculateBoneRotation(leftShoulder, leftElbow)
-    const leftForeArmRot = calculateBoneRotation(leftElbow, leftWrist)
+    // === LEFT ARM CHAIN ===
+    // Upper arm: from shoulder to elbow
+    const leftArmDir = new THREE.Vector3().subVectors(leftElbow, leftShoulder).normalize()
+    const leftArmRotation = new THREE.Quaternion().setFromUnitVectors(REST_LEFT, leftArmDir)
     
-    // Adjust for T-pose default (arms pointing outward)
-    const leftArmAdjust = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2))
-    leftArmRot.multiply(leftArmAdjust)
-    leftForeArmRot.multiply(leftArmAdjust)
+    // Forearm: from elbow to wrist (relative to upper arm)
+    const leftForearmDir = new THREE.Vector3().subVectors(leftWrist, leftElbow).normalize()
+    // Calculate forearm rotation relative to the arm
+    const leftForearmLocal = leftForearmDir.clone().applyQuaternion(leftArmRotation.clone().invert())
+    const leftForearmRotation = new THREE.Quaternion().setFromUnitVectors(REST_LEFT, leftForearmLocal)
     
     setBoneKeyframe('LeftShoulder', new THREE.Quaternion())
-    setBoneKeyframe('LeftArm', leftArmRot)
-    setBoneKeyframe('LeftForeArm', leftForeArmRot)
-    setBoneKeyframe('LeftHand', new THREE.Quaternion())
+    setBoneKeyframe('LeftArm', leftArmRotation)
+    setBoneKeyframe('LeftForeArm', leftForearmRotation)
 
-    // Right Arm chain
-    const rightArmRot = calculateBoneRotation(rightShoulder, rightElbow)
-    const rightForeArmRot = calculateBoneRotation(rightElbow, rightWrist)
+    // === RIGHT ARM CHAIN ===
+    // Upper arm: from shoulder to elbow
+    const rightArmDir = new THREE.Vector3().subVectors(rightElbow, rightShoulder).normalize()
+    const rightArmRotation = new THREE.Quaternion().setFromUnitVectors(REST_RIGHT, rightArmDir)
     
-    // Adjust for T-pose default
-    const rightArmAdjust = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -Math.PI / 2))
-    rightArmRot.multiply(rightArmAdjust)
-    rightForeArmRot.multiply(rightArmAdjust)
+    // Forearm: from elbow to wrist (relative to upper arm)
+    const rightForearmDir = new THREE.Vector3().subVectors(rightWrist, rightElbow).normalize()
+    const rightForearmLocal = rightForearmDir.clone().applyQuaternion(rightArmRotation.clone().invert())
+    const rightForearmRotation = new THREE.Quaternion().setFromUnitVectors(REST_RIGHT, rightForearmLocal)
     
     setBoneKeyframe('RightShoulder', new THREE.Quaternion())
-    setBoneKeyframe('RightArm', rightArmRot)
-    setBoneKeyframe('RightForeArm', rightForeArmRot)
-    setBoneKeyframe('RightHand', new THREE.Quaternion())
+    setBoneKeyframe('RightArm', rightArmRotation)
+    setBoneKeyframe('RightForeArm', rightForearmRotation)
 
-    // Left Leg chain
-    const leftUpLegDirection = new THREE.Vector3(
-      leftKnee.x - leftHip.x,
-      -(leftKnee.y - leftHip.y),
-      (leftKnee.z || 0) - (leftHip.z || 0)
-    ).normalize()
-    const leftLegDirection = new THREE.Vector3(
-      leftAnkle.x - leftKnee.x,
-      -(leftAnkle.y - leftKnee.y),
-      (leftAnkle.z || 0) - (leftKnee.z || 0)
-    ).normalize()
+    // === LEFT LEG CHAIN ===
+    // Thigh: from hip to knee
+    const leftThighDir = new THREE.Vector3().subVectors(leftKnee, leftHip).normalize()
+    const leftUpLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, leftThighDir)
     
-    const leftUpLegAngleX = Math.asin(leftUpLegDirection.y) 
-    const leftUpLegAngleZ = Math.atan2(leftUpLegDirection.x, -leftUpLegDirection.y) * 0.3
-    const leftLegAngleX = Math.asin(leftLegDirection.y) - leftUpLegAngleX
+    // Shin: from knee to ankle (relative to thigh)
+    const leftShinDir = new THREE.Vector3().subVectors(leftAnkle, leftKnee).normalize()
+    const leftShinLocal = leftShinDir.clone().applyQuaternion(leftUpLegRotation.clone().invert())
+    const leftLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, leftShinLocal)
     
-    const leftUpLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(leftUpLegAngleX, 0, leftUpLegAngleZ))
-    const leftLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(leftLegAngleX, 0, 0))
-    
-    setBoneKeyframe('LeftUpLeg', leftUpLegRot)
-    setBoneKeyframe('LeftLeg', leftLegRot)
+    setBoneKeyframe('LeftUpLeg', leftUpLegRotation)
+    setBoneKeyframe('LeftLeg', leftLegRotation)
     setBoneKeyframe('LeftFoot', new THREE.Quaternion())
 
-    // Right Leg chain  
-    const rightUpLegDirection = new THREE.Vector3(
-      rightKnee.x - rightHip.x,
-      -(rightKnee.y - rightHip.y),
-      (rightKnee.z || 0) - (rightHip.z || 0)
-    ).normalize()
-    const rightLegDirection = new THREE.Vector3(
-      rightAnkle.x - rightKnee.x,
-      -(rightAnkle.y - rightKnee.y),
-      (rightAnkle.z || 0) - (rightKnee.z || 0)
-    ).normalize()
+    // === RIGHT LEG CHAIN ===
+    // Thigh: from hip to knee
+    const rightThighDir = new THREE.Vector3().subVectors(rightKnee, rightHip).normalize()
+    const rightUpLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, rightThighDir)
     
-    const rightUpLegAngleX = Math.asin(rightUpLegDirection.y)
-    const rightUpLegAngleZ = Math.atan2(rightUpLegDirection.x, -rightUpLegDirection.y) * 0.3
-    const rightLegAngleX = Math.asin(rightLegDirection.y) - rightUpLegAngleX
+    // Shin: from knee to ankle (relative to thigh)
+    const rightShinDir = new THREE.Vector3().subVectors(rightAnkle, rightKnee).normalize()
+    const rightShinLocal = rightShinDir.clone().applyQuaternion(rightUpLegRotation.clone().invert())
+    const rightLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, rightShinLocal)
     
-    const rightUpLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(rightUpLegAngleX, 0, rightUpLegAngleZ))
-    const rightLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(rightLegAngleX, 0, 0))
-    
-    setBoneKeyframe('RightUpLeg', rightUpLegRot)
-    setBoneKeyframe('RightLeg', rightLegRot)
+    setBoneKeyframe('RightUpLeg', rightUpLegRotation)
+    setBoneKeyframe('RightLeg', rightLegRotation)
     setBoneKeyframe('RightFoot', new THREE.Quaternion())
 
     return frameData
-  }, [bones, calculateBoneRotation])
+  }, [bones, convertLandmark, calculateBoneRotation])
 
   // Handle video analysis with real MediaPipe pose detection
   const handleVideoAnalysis = useCallback(async () => {
