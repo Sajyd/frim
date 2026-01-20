@@ -2069,14 +2069,21 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     RIGHT_ANKLE: 28
   }
 
-  // Convert MediaPipe world landmark to Three.js coordinate system
-  // MediaPipe: X-right, Y-down, Z-toward camera (from subject's view)
-  // Three.js: X-right, Y-up, Z-toward viewer
-  const convertLandmark = useCallback((lm: { x: number, y: number, z: number }) => {
+  // Convert MediaPipe WORLD landmark to Three.js coordinate system
+  // MediaPipe World Coordinates (hip-centered, in meters):
+  //   X: Positive toward person's left (from camera view: screen right)
+  //   Y: Positive downward
+  //   Z: Positive toward camera
+  // Three.js (Y-up, right-handed):
+  //   X: Positive right
+  //   Y: Positive up
+  //   Z: Positive toward viewer
+  // Model faces -Z (toward camera), so person's left = -X in Three.js
+  const convertWorldLandmark = useCallback((lm: { x: number, y: number, z: number }) => {
     return new THREE.Vector3(
-      lm.x,       // X stays the same
-      -lm.y,      // Y is inverted (MediaPipe Y-down -> Three.js Y-up)
-      -lm.z       // Z is inverted (depth direction)
+      -lm.x,      // Flip X: person's left → model's left (mirror for camera view)
+      -lm.y,      // Flip Y: down → up
+      -lm.z       // Flip Z: toward camera → toward viewer (model faces camera)
     )
   }, [])
 
@@ -2095,15 +2102,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Convert pose landmarks to bone rotations matching the project's skeleton
   const landmarksToBoneKeyframes = useCallback((
-    landmarks: Array<{ x: number, y: number, z: number, visibility?: number }>
+    worldLandmarks: Array<{ x: number, y: number, z: number, visibility?: number }>
   ): Map<string, BoneKeyframe> => {
     const frameData = new Map<string, BoneKeyframe>()
     
-    // Helper to get converted landmark
+    // Helper to get converted world landmark
     const getLandmark = (idx: number): THREE.Vector3 => {
-      const lm = landmarks[idx]
+      const lm = worldLandmarks[idx]
       if (!lm) return new THREE.Vector3(0, 0, 0)
-      return convertLandmark(lm)
+      return convertWorldLandmark(lm)
     }
     
     // Helper to get midpoint between two landmarks
@@ -2138,17 +2145,17 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
     // Try to set keyframes for each bone if it exists in the model
     const setBoneKeyframe = (boneName: string, rotation: THREE.Quaternion) => {
-      const bone = bones.get(boneName)
-      if (bone) {
-        const original = originalTransformsRef.current.get(boneName)
-        if (original) {
-          frameData.set(boneName, {
-            position: original.position.clone(),
+          const bone = bones.get(boneName)
+          if (bone) {
+            const original = originalTransformsRef.current.get(boneName)
+            if (original) {
+              frameData.set(boneName, {
+                position: original.position.clone(),
             rotation: rotation,
-            scale: original.scale.clone()
-          })
-        }
-      }
+                scale: original.scale.clone()
+              })
+            }
+          }
     }
 
     // === HIPS ===
@@ -2251,7 +2258,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setBoneKeyframe('RightFoot', new THREE.Quaternion())
 
     return frameData
-  }, [bones, convertLandmark, calculateBoneRotation])
+  }, [bones, convertWorldLandmark, calculateBoneRotation])
 
   // Handle video analysis with real MediaPipe pose detection
   const handleVideoAnalysis = useCallback(async () => {
@@ -2274,14 +2281,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       
       const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
         baseOptions: {
-          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
           delegate: 'GPU'
         },
         runningMode: 'VIDEO',
         numPoses: 1, // Detect first humanoid only
         minPoseDetectionConfidence: 0.5,
         minPosePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5
+        minTrackingConfidence: 0.5,
+        outputSegmentationMasks: false
       })
 
       setVideoProgress(15)
@@ -2332,14 +2340,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           const results = poseLandmarker.detectForVideo(canvas, timestamp)
           lastTimestamp = timestamp
 
-          // Use world landmarks for 3D (if available) or normalized landmarks
-          if (results.landmarks && results.landmarks.length > 0) {
-            // Use first detected person's landmarks
-            const landmarks = results.worldLandmarks?.[0] || results.landmarks[0]
+          // Must use WORLD landmarks for proper 3D coordinates
+          // World landmarks are in meters, centered at hip, with real depth
+          if (results.worldLandmarks && results.worldLandmarks.length > 0) {
+            // Use first detected person's world landmarks
+            const worldLandmarks = results.worldLandmarks[0]
             
-            // Convert landmarks to bone keyframes
+            // Convert world landmarks to bone keyframes
             const outputFrame = Math.floor(processedFrames)
-            const boneKeyframes = landmarksToBoneKeyframes(landmarks)
+            const boneKeyframes = landmarksToBoneKeyframes(worldLandmarks)
             
             if (boneKeyframes.size > 0) {
               keyframesMap.set(outputFrame, boneKeyframes)
