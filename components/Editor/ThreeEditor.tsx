@@ -458,6 +458,37 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     })
   }, [currentAnimation, bones])
 
+  // Reset only bones that don't have keyframes to T-pose
+  const resetBonesWithoutKeyframes = useCallback((anim: Animation | null | undefined) => {
+    if (!anim) return
+    
+    // Get all bones that have keyframes in this animation
+    const bonesWithKeyframes = new Set<string>()
+    anim.keyframes.forEach((frameData) => {
+      frameData.forEach((_, boneName) => {
+        bonesWithKeyframes.add(boneName)
+      })
+    })
+    
+    console.log('Bones with keyframes:', bonesWithKeyframes.size)
+    
+    // Reset only bones that don't have keyframes to T-pose
+    let resetCount = 0
+    originalTransformsRef.current.forEach((transforms, boneName) => {
+      if (!bonesWithKeyframes.has(boneName)) {
+        const bone = bones.get(boneName)
+        if (bone) {
+          bone.position.copy(transforms.position)
+          bone.rotation.copy(transforms.rotation)
+          bone.scale.copy(transforms.scale)
+          resetCount++
+        }
+      }
+    })
+    
+    console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`)
+  }, [bones])
+
   // Apply pose when animation changes or is loaded
   useEffect(() => {
     if (currentAnimation && !isPlaying) {
@@ -980,37 +1011,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     })
     showToast('All bones reset', 'info')
   }, [bones, showToast])
-
-  // Reset only bones that don't have keyframes to T-pose
-  const resetBonesWithoutKeyframes = useCallback((anim: Animation | null | undefined) => {
-    if (!anim) return
-    
-    // Get all bones that have keyframes in this animation
-    const bonesWithKeyframes = new Set<string>()
-    anim.keyframes.forEach((frameData) => {
-      frameData.forEach((_, boneName) => {
-        bonesWithKeyframes.add(boneName)
-      })
-    })
-    
-    console.log('Bones with keyframes:', bonesWithKeyframes.size)
-    
-    // Reset only bones that don't have keyframes to T-pose
-    let resetCount = 0
-    originalTransformsRef.current.forEach((transforms, boneName) => {
-      if (!bonesWithKeyframes.has(boneName)) {
-        const bone = bones.get(boneName)
-        if (bone) {
-          bone.position.copy(transforms.position)
-          bone.rotation.copy(transforms.rotation)
-          bone.scale.copy(transforms.scale)
-          resetCount++
-        }
-      }
-    })
-    
-    console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`)
-  }, [bones])
 
   const copyPose = useCallback(() => {
     if (!selectedBone) return
