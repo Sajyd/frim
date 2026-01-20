@@ -136,6 +136,110 @@ export default function Home() {
         </div>
       </section>
 
+      {/* AI Video Motion Capture Section */}
+      <section className="relative py-24 px-6">
+        <div className="max-w-6xl mx-auto">
+          <div className="relative bg-gradient-to-br from-dark-900 via-dark-900 to-frim-950/30 border border-frim-500/20 rounded-3xl p-8 md:p-12 overflow-hidden">
+            {/* Background decoration */}
+            <div className="absolute top-0 right-0 w-96 h-96 bg-frim-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+            <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+            
+            <div className="relative grid lg:grid-cols-2 gap-12 items-center">
+              <div>
+                <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/30 px-3 py-1.5 rounded-full text-xs font-semibold text-frim-400 mb-6">
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  PRO FEATURE
+                </div>
+                
+                <h2 className="font-display text-3xl md:text-4xl font-bold mb-4">
+                  AI Video<br />
+                  <span className="gradient-text">Motion Capture</span>
+                </h2>
+                
+                <p className="text-dark-400 mb-6 leading-relaxed">
+                  Upload any video and let AI extract human movements automatically. 
+                  Our pose estimation technology maps body motion to your model's bones — 
+                  no expensive mocap suits required.
+                </p>
+                
+                <ul className="space-y-3 mb-8">
+                  {[
+                    'Upload MP4, MOV, or WebM videos',
+                    'AI detects body pose frame by frame',
+                    'Auto-generates keyframes for bones',
+                    'Works with any rigged humanoid model'
+                  ].map((item, i) => (
+                    <li key={i} className="flex items-center gap-3 text-sm text-dark-300">
+                      <div className="w-5 h-5 rounded-full bg-frim-500/20 flex items-center justify-center shrink-0">
+                        <svg className="w-3 h-3 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      {item}
+                    </li>
+                  ))}
+                </ul>
+                
+                <Link href="/pricing" className="inline-flex items-center gap-2 bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-6 py-3 rounded-xl font-semibold hover:shadow-lg hover:shadow-frim-500/25 transition-all">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  Unlock with Pro
+                </Link>
+              </div>
+              
+              {/* Visual */}
+              <div className="relative">
+                <div className="bg-dark-950 rounded-2xl border border-dark-800 overflow-hidden shadow-2xl">
+                  <div className="flex items-center gap-2 px-4 py-3 bg-dark-900 border-b border-dark-800">
+                    <div className="flex gap-1.5">
+                      <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
+                      <span className="w-2.5 h-2.5 rounded-full bg-frim-500/80" />
+                    </div>
+                    <span className="text-xs text-dark-500 font-mono">video-analysis.mp4</span>
+                  </div>
+                  <div className="p-6">
+                    <div className="flex gap-6 items-center">
+                      {/* Video frame */}
+                      <div className="flex-1 aspect-video bg-dark-800 rounded-lg relative overflow-hidden">
+                        <div className="absolute inset-0 flex items-center justify-center">
+                          <VideoAnalysisPreview />
+                        </div>
+                        <div className="absolute bottom-2 left-2 right-2 h-1 bg-dark-700 rounded">
+                          <div className="h-full w-2/3 bg-frim-500 rounded video-progress-animate" />
+                        </div>
+                      </div>
+                      {/* Arrow */}
+                      <div className="shrink-0">
+                        <svg className="w-8 h-8 text-frim-500 pulse-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
+                        </svg>
+                      </div>
+                      {/* Skeleton output */}
+                      <div className="w-20 h-28 shrink-0">
+                        <MiniSkeletonPreview />
+                      </div>
+                    </div>
+                    
+                    {/* Progress indicators */}
+                    <div className="mt-4 flex items-center gap-3">
+                      <div className="flex-1 h-1.5 bg-dark-800 rounded-full overflow-hidden">
+                        <div className="h-full bg-gradient-to-r from-frim-500 to-frim-400 analysis-bar-animate" />
+                      </div>
+                      <span className="text-xs text-frim-400 font-mono tabular-nums analysis-percent">87%</span>
+                    </div>
+                    <p className="text-xs text-dark-500 mt-2">Extracting pose data from video frames...</p>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </div>
+      </section>
+
       {/* Features Section */}
       <section className="relative py-24 px-6">
         <div className="max-w-6xl mx-auto">
@@ -146,11 +250,16 @@ export default function Home() {
           
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
             {features.map((feature, i) => (
-              <div key={i} className="bg-dark-900 border border-dark-800 rounded-2xl p-8 card-hover">
-                <div className="w-12 h-12 bg-frim-500/10 rounded-xl flex items-center justify-center text-frim-400 mb-5">
+              <div key={i} className={`bg-dark-900 border rounded-2xl p-8 card-hover ${feature.highlight ? 'border-frim-500/30 bg-gradient-to-br from-dark-900 to-frim-950/20' : 'border-dark-800'}`}>
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center mb-5 ${feature.highlight ? 'bg-frim-500/20 text-frim-400' : 'bg-frim-500/10 text-frim-400'}`}>
                   {feature.icon}
                 </div>
-                <h3 className="font-display text-lg font-semibold mb-3">{feature.title}</h3>
+                <div className="flex items-center gap-2 mb-3">
+                  <h3 className="font-display text-lg font-semibold">{feature.title}</h3>
+                  {feature.highlight && (
+                    <span className="text-[10px] font-bold bg-frim-500 text-dark-950 px-1.5 py-0.5 rounded">PRO</span>
+                  )}
+                </div>
                 <p className="text-dark-500 text-sm leading-relaxed">{feature.description}</p>
               </div>
             ))}
@@ -176,6 +285,28 @@ export default function Home() {
         @keyframes playhead {
           0%, 100% { left: 15%; }
           50% { left: 80%; }
+        }
+        .video-progress-animate {
+          animation: video-progress 4s ease-in-out infinite;
+        }
+        @keyframes video-progress {
+          0% { width: 0%; }
+          100% { width: 100%; }
+        }
+        .analysis-bar-animate {
+          animation: analysis-bar 3s ease-in-out infinite;
+        }
+        @keyframes analysis-bar {
+          0% { width: 20%; }
+          50% { width: 90%; }
+          100% { width: 20%; }
+        }
+        .pulse-arrow {
+          animation: pulse-arrow 1.5s ease-in-out infinite;
+        }
+        @keyframes pulse-arrow {
+          0%, 100% { opacity: 0.5; transform: translateX(0); }
+          50% { opacity: 1; transform: translateX(4px); }
         }
       `}</style>
     </div>
@@ -250,36 +381,145 @@ function SkeletonPreview() {
   )
 }
 
+function VideoAnalysisPreview() {
+  return (
+    <svg viewBox="0 0 160 90" className="w-full h-full">
+      <style>{`
+        .person-fill { fill: #3f3f46; }
+        .pose-line { stroke: #22c55e; stroke-width: 2; stroke-linecap: round; opacity: 0.8; }
+        .pose-dot { fill: #4ade80; }
+        .scan-line { 
+          stroke: #22c55e; 
+          stroke-width: 1; 
+          opacity: 0.6;
+          animation: scan 2s ease-in-out infinite;
+        }
+        @keyframes scan {
+          0%, 100% { transform: translateY(-30px); opacity: 0; }
+          50% { transform: translateY(30px); opacity: 0.8; }
+        }
+        .pose-pulse {
+          animation: pose-pulse 1.5s ease-in-out infinite;
+        }
+        @keyframes pose-pulse {
+          0%, 100% { opacity: 0.6; }
+          50% { opacity: 1; }
+        }
+      `}</style>
+      {/* Background person silhouette */}
+      <ellipse className="person-fill" cx="80" cy="25" rx="12" ry="14" />
+      <rect className="person-fill" x="65" y="38" width="30" height="35" rx="4" />
+      <rect className="person-fill" x="50" y="40" width="14" height="6" rx="2" />
+      <rect className="person-fill" x="96" y="40" width="14" height="6" rx="2" />
+      <rect className="person-fill" x="68" y="72" width="10" height="18" rx="2" />
+      <rect className="person-fill" x="82" y="72" width="10" height="18" rx="2" />
+      
+      {/* Pose detection overlay */}
+      <g className="pose-pulse">
+        {/* Head */}
+        <circle className="pose-dot" cx="80" cy="22" r="3" />
+        {/* Shoulders */}
+        <line className="pose-line" x1="60" y1="42" x2="100" y2="42" />
+        <circle className="pose-dot" cx="60" cy="42" r="2.5" />
+        <circle className="pose-dot" cx="100" cy="42" r="2.5" />
+        <circle className="pose-dot" cx="80" cy="42" r="2" />
+        {/* Spine */}
+        <line className="pose-line" x1="80" y1="42" x2="80" y2="70" />
+        {/* Hips */}
+        <line className="pose-line" x1="70" y1="70" x2="90" y2="70" />
+        <circle className="pose-dot" cx="70" cy="70" r="2.5" />
+        <circle className="pose-dot" cx="90" cy="70" r="2.5" />
+        {/* Arms */}
+        <line className="pose-line" x1="60" y1="42" x2="48" y2="46" />
+        <circle className="pose-dot" cx="48" cy="46" r="2" />
+        <line className="pose-line" x1="100" y1="42" x2="112" y2="46" />
+        <circle className="pose-dot" cx="112" cy="46" r="2" />
+        {/* Legs */}
+        <line className="pose-line" x1="70" y1="70" x2="72" y2="88" />
+        <circle className="pose-dot" cx="72" cy="88" r="2" />
+        <line className="pose-line" x1="90" y1="70" x2="88" y2="88" />
+        <circle className="pose-dot" cx="88" cy="88" r="2" />
+      </g>
+      
+      {/* Scanning line */}
+      <line className="scan-line" x1="30" y1="45" x2="130" y2="45" />
+    </svg>
+  )
+}
+
+function MiniSkeletonPreview() {
+  return (
+    <svg viewBox="0 0 60 100" className="w-full h-full">
+      <style>{`
+        .mini-joint { fill: #4ade80; }
+        .mini-bone { stroke: #22c55e; stroke-width: 3; stroke-linecap: round; }
+        .mini-head { fill: #4ade80; }
+        .mini-arm-l { animation: mini-wave-l 1.5s ease-in-out infinite; transform-origin: 15px 30px; }
+        .mini-arm-r { animation: mini-wave-r 1.5s ease-in-out infinite; transform-origin: 45px 30px; }
+        @keyframes mini-wave-l { 0%, 100% { transform: rotate(-20deg); } 50% { transform: rotate(10deg); } }
+        @keyframes mini-wave-r { 0%, 100% { transform: rotate(20deg); } 50% { transform: rotate(-10deg); } }
+      `}</style>
+      <circle className="mini-head" cx="30" cy="12" r="8" />
+      <line className="mini-bone" x1="30" y1="20" x2="30" y2="28" />
+      <line className="mini-bone" x1="30" y1="28" x2="30" y2="55" />
+      <g className="mini-arm-l">
+        <line className="mini-bone" x1="15" y1="35" x2="30" y2="30" />
+        <line className="mini-bone" x1="5" y1="45" x2="15" y2="35" />
+        <circle className="mini-joint" cx="15" cy="35" r="3" />
+      </g>
+      <g className="mini-arm-r">
+        <line className="mini-bone" x1="45" y1="35" x2="30" y2="30" />
+        <line className="mini-bone" x1="55" y1="45" x2="45" y2="35" />
+        <circle className="mini-joint" cx="45" cy="35" r="3" />
+      </g>
+      <line className="mini-bone" x1="25" y1="55" x2="22" y2="78" />
+      <line className="mini-bone" x1="22" y1="78" x2="20" y2="95" />
+      <line className="mini-bone" x1="35" y1="55" x2="38" y2="78" />
+      <line className="mini-bone" x1="38" y1="78" x2="40" y2="95" />
+      <circle className="mini-joint" cx="25" cy="55" r="3" />
+      <circle className="mini-joint" cx="35" cy="55" r="3" />
+      <circle className="mini-joint" cx="22" cy="78" r="2.5" />
+      <circle className="mini-joint" cx="38" cy="78" r="2.5" />
+    </svg>
+  )
+}
+
 const features = [
   {
     title: 'GLB/GLTF Import',
     description: 'Load any GLB or GLTF model with armature. Full support for industry-standard formats.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 16V8a2 2 0 00-1-1.73l-7-4a2 2 0 00-2 0l-7 4A2 2 0 003 8v8a2 2 0 001 1.73l7 4a2 2 0 002 0l7-4A2 2 0 0021 16z" /></svg>,
+    highlight: false,
+  },
+  {
+    title: 'AI Video Motion Capture',
+    description: 'Upload a video and let AI extract body movements. Auto-generate animations from any footage.',
+    icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>,
+    highlight: true,
   },
   {
     title: 'Bone Controls',
     description: 'Select and transform bones with precision. Rotate, translate, and scale intuitively.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><circle cx="12" cy="8" r="4"/><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 12v8M8 20h8M8 14l-2 2M16 14l2 2"/></svg>,
+    highlight: false,
   },
   {
     title: 'Keyframe Timeline',
     description: 'Visual timeline with keyframe editing. Create smooth animations with ease.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><rect x="3" y="3" width="18" height="18" rx="2" strokeWidth={2}/><circle cx="8" cy="12" r="2" fill="currentColor"/><circle cx="16" cy="8" r="2" fill="currentColor"/><circle cx="16" cy="16" r="2" fill="currentColor"/></svg>,
+    highlight: false,
   },
   {
     title: 'Cloud Saves',
     description: 'Save projects to the cloud. Access your animations from anywhere, anytime.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12"/></svg>,
+    highlight: false,
   },
   {
     title: 'GLB Export',
     description: 'Export your animations back to GLB. Multiple animations per file supported.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-8l-4-4m0 0L8 8m4-4v12"/></svg>,
-  },
-  {
-    title: 'Live Preview',
-    description: 'Real-time playback of your animations. See changes instantly.',
-    icon: <svg className="w-6 h-6" fill="currentColor" viewBox="0 0 24 24"><polygon points="5 3 19 12 5 21 5 3"/></svg>,
+    highlight: false,
   },
 ]
 
