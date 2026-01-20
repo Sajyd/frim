@@ -662,7 +662,11 @@ class GLBAnimationEditor {
     }
     
     switchToAnimation(animId) {
-        if (!this.animations.has(animId)) return;
+        console.log('switchToAnimation called with:', animId);
+        if (!this.animations.has(animId)) {
+            console.log('Animation not found:', animId);
+            return;
+        }
         
         // Stop playback
         this.isPlaying = false;
@@ -672,12 +676,17 @@ class GLBAnimationEditor {
         this.currentAnimationId = animId;
         this.currentFrame = 0;
         
+        console.log('Bones size:', this.bones.size);
+        
         // Reset bones without keyframes to T-pose, then apply animation
         if (this.bones.size > 0) {
+            console.log('Calling resetBonesWithoutKeyframes...');
             this.resetBonesWithoutKeyframes();
             
             // Apply first frame of new animation
             this.applyPoseAtFrame(0);
+        } else {
+            console.log('No bones found, skipping reset');
         }
         
         // Update UI (with null checks)
@@ -711,6 +720,10 @@ class GLBAnimationEditor {
     }
     
     resetBonesWithoutKeyframes() {
+        console.log('resetBonesWithoutKeyframes called');
+        console.log('currentAnimation:', this.currentAnimation);
+        console.log('originalBoneTransforms size:', this.originalBoneTransforms.size);
+        
         // Get all bones that have keyframes in current animation
         const bonesWithKeyframes = new Set();
         if (this.currentAnimation && this.currentAnimation.keyframes) {
@@ -720,6 +733,8 @@ class GLBAnimationEditor {
                 });
             });
         }
+        
+        console.log('Bones with keyframes:', bonesWithKeyframes.size, Array.from(bonesWithKeyframes));
         
         // Reset only bones that don't have keyframes to T-pose
         let resetCount = 0;
@@ -735,9 +750,7 @@ class GLBAnimationEditor {
             }
         });
         
-        if (resetCount > 0) {
-            console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`);
-        }
+        console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`);
     }
     
     deleteAnimation(animId) {
