@@ -455,10 +455,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Apply pose when animation changes or is loaded
   useEffect(() => {
-    if (currentAnimation && currentAnimation.keyframes.size > 0 && !isPlaying) {
-      applyPoseAtFrame(currentFrame)
+    if (currentAnimation && !isPlaying) {
+      // Auto-reset bones without keyframes to T-pose when animation changes
+      resetBonesWithoutKeyframes(currentAnimation)
+      // Then apply the animation pose
+      if (currentAnimation.keyframes.size > 0) {
+        applyPoseAtFrame(currentFrame)
+      }
     }
-  }, [currentAnimationId, currentAnimation, applyPoseAtFrame, currentFrame, isPlaying])
+  }, [currentAnimationId, currentAnimation, applyPoseAtFrame, currentFrame, isPlaying, resetBonesWithoutKeyframes])
 
   // Navigate to a specific frame
   const goToFrame = useCallback((frame: number) => {
@@ -970,6 +975,37 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     })
     showToast('All bones reset', 'info')
   }, [bones, showToast])
+
+  // Reset only bones that don't have keyframes to T-pose
+  const resetBonesWithoutKeyframes = useCallback((anim: Animation | null | undefined) => {
+    if (!anim) return
+    
+    // Get all bones that have keyframes in this animation
+    const bonesWithKeyframes = new Set<string>()
+    anim.keyframes.forEach((frameData) => {
+      frameData.forEach((_, boneName) => {
+        bonesWithKeyframes.add(boneName)
+      })
+    })
+    
+    console.log('Bones with keyframes:', bonesWithKeyframes.size)
+    
+    // Reset only bones that don't have keyframes to T-pose
+    let resetCount = 0
+    originalTransformsRef.current.forEach((transforms, boneName) => {
+      if (!bonesWithKeyframes.has(boneName)) {
+        const bone = bones.get(boneName)
+        if (bone) {
+          bone.position.copy(transforms.position)
+          bone.rotation.copy(transforms.rotation)
+          bone.scale.copy(transforms.scale)
+          resetCount++
+        }
+      }
+    })
+    
+    console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`)
+  }, [bones])
 
   const copyPose = useCallback(() => {
     if (!selectedBone) return
@@ -2822,7 +2858,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 onClick={() => {
                   setCurrentAnimationId(id)
                   setCurrentFrame(0)
-                  resetAllBones()
+                  // Reset only bones without keyframes to T-pose
+                  resetBonesWithoutKeyframes(anim)
                   applyPoseAtFrame(0)
                 }}
                 className={`p-2 rounded-lg cursor-pointer transition-colors ${
