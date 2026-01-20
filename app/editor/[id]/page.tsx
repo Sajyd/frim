@@ -164,6 +164,11 @@ export default function EditorPage() {
   const handleEditorChange = useCallback((data: ProjectData) => {
     console.log('handleEditorChange received data:', {
       animationsCount: data.animations?.length,
+      animationsSummary: data.animations?.map((a: any) => ({
+        name: a.name,
+        keyframeCount: a.keyframes ? Object.keys(a.keyframes).length : 0,
+        keyframeFrames: a.keyframes ? Object.keys(a.keyframes) : []
+      })),
       hasModelData: !!data.modelData,
       modelName: data.modelName,
       hasThumbnail: !!data.thumbnail
@@ -255,7 +260,12 @@ export default function EditorPage() {
     hasModelData: !!project?.modelData,
     modelDataLength: project?.modelData?.length,
     modelName: project?.modelName,
-    animationsCount: project?.animations?.length
+    animationsCount: Array.isArray(project?.animations) ? project.animations.length : 0,
+    animationsType: typeof project?.animations,
+    animationsSummary: Array.isArray(project?.animations) ? project.animations.map((a: any) => ({
+      name: a.name,
+      keyframeCount: a.keyframes ? Object.keys(a.keyframes).length : 0
+    })) : []
   })
 
   return (

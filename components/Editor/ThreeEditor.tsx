@@ -181,6 +181,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           }
         })
       })
+      console.log(`Animation "${anim.name}" has ${anim.keyframes.size} keyframe(s), frames:`, Array.from(anim.keyframes.keys()))
       serialized.push({
         id,
         name: anim.name,
@@ -1379,8 +1380,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   }, [showToast])
 
   // Load model from base64 data (for restoring saved projects)
-  const loadModelFromBase64 = useCallback((base64: string, filename: string) => {
-    console.log('loadModelFromBase64 called with filename:', filename, 'base64 length:', base64.length)
+  // skipAnimationProcessing: true when restoring a project (animations come from saved data)
+  const loadModelFromBase64 = useCallback((base64: string, filename: string, skipAnimationProcessing: boolean = false) => {
+    console.log('loadModelFromBase64 called with filename:', filename, 'base64 length:', base64.length, 'skipAnimationProcessing:', skipAnimationProcessing)
     try {
       // Convert base64 to ArrayBuffer
       const binaryString = atob(base64)
@@ -1520,11 +1522,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
       // Load animations after a small delay to ensure model is loaded
       if (initialData.animations && initialData.animations.length > 0) {
+        console.log('Restoring animations from saved data, count:', initialData.animations.length)
         setTimeout(() => {
           const newAnimations = new Map<string, Animation>()
           initialData.animations!.forEach((animData: any, index: number) => {
             const animId = `anim_${animationCounterRef.current++}`
             const keyframes = new Map<number, Map<string, BoneKeyframe>>()
+            
+            const keyframeFrames = animData.keyframes ? Object.keys(animData.keyframes) : []
+            console.log(`Restoring animation "${animData.name}" with keyframes at frames:`, keyframeFrames)
             
             if (animData.keyframes) {
               Object.entries(animData.keyframes).forEach(([frameStr, bonesData]: [string, any]) => {
@@ -1551,6 +1557,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             })
           })
 
+          console.log('Setting animations state with', newAnimations.size, 'animations')
           if (newAnimations.size > 0) {
             setAnimations(newAnimations)
             const firstAnimId = newAnimations.keys().next().value
