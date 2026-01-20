@@ -5,40 +5,43 @@ export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   typescript: true,
 })
 
+// ALL FEATURES ARE FREE FOR NOW
 export const PLANS = {
   free: {
     name: 'Free',
-    description: 'Perfect for getting started',
+    description: 'All features included - completely free!',
     price: 0,
     priceId: null,
     features: [
-      'Up to 3 projects',
-      'Up to 2 animations per project',
+      'Unlimited projects',
+      'Unlimited animations per project',
       'GLB/GLTF import & export',
-      'Basic animation tools',
+      'Advanced animation tools',
+      'AI Video Motion Capture (Coming Soon)',
+      'Cloud saves',
       'JSON & GLB export',
       'Community support',
     ],
     limits: {
-      projects: 3,
-      animationsPerProject: 2,
-      videoAnalysis: false,
+      projects: Infinity,
+      animationsPerProject: Infinity,
+      videoAnalysis: true, // Will be enabled when feature is ready
     },
   },
   pro: {
     name: 'Pro',
-    description: 'For professional animators',
-    price: 12,
+    description: 'Same as Free - all features unlocked!',
+    price: 0,
     priceId: process.env.STRIPE_PRO_PRICE_ID,
     features: [
       'Unlimited projects',
       'Unlimited animations per project',
       'GLB/GLTF import & export',
       'Advanced animation tools',
-      'AI Video Motion Capture',
-      'Extract animations from videos',
-      'Priority cloud saves',
-      'Priority support',
+      'AI Video Motion Capture (Coming Soon)',
+      'Cloud saves',
+      'JSON & GLB export',
+      'Community support',
     ],
     limits: {
       projects: Infinity,

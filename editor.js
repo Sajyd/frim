@@ -51,6 +51,17 @@ class GLBAnimationEditor {
         this.savedAnimations = [];
         this.selectedAnimationToLoad = null;
         
+        // Selected keyframes for multi-selection (Set of "frame:boneName" strings)
+        this.selectedKeyframes = new Set();
+        
+        // Box selection state
+        this.boxSelection = {
+            active: false,
+            startX: 0,
+            startY: 0,
+            element: null
+        };
+        
         // Current transform tool
         this.currentTool = 'rotate';
         
@@ -1626,7 +1637,8 @@ class GLBAnimationEditor {
                 switch (action) {
                     case 'add-keyframe': this.addKeyframe(); break;
                     case 'add-keyframe-reset': this.addKeyframeReset(); break;
-                    case 'delete-keyframe': this.deleteKeyframe(); break;
+                    case 'duplicate-keyframe': this.duplicateKeyframes(); break;
+                    case 'delete-keyframe': this.deleteSelectedKeyframes(); break;
                     case 'copy': this.copyPose(); break;
                     case 'paste': this.pastePose(); break;
                     case 'reset': this.resetBone(); break;
@@ -1676,6 +1688,7 @@ class GLBAnimationEditor {
         // Keyframe actions
         document.getElementById('btn-add-keyframe')?.addEventListener('click', () => this.addKeyframe());
         document.getElementById('btn-add-keyframe-reset')?.addEventListener('click', () => this.addKeyframeReset());
+        document.getElementById('btn-duplicate-keyframe')?.addEventListener('click', () => this.duplicateKeyframes());
         document.getElementById('btn-copy-pose')?.addEventListener('click', () => this.copyPose());
         document.getElementById('btn-paste-pose')?.addEventListener('click', () => this.pastePose());
         document.getElementById('btn-mirror-pose')?.addEventListener('click', () => this.mirrorPose());
@@ -1783,13 +1796,119 @@ class GLBAnimationEditor {
             }
         });
         
-        // Timeline click
+        // Timeline click and box selection
         const tracks = document.getElementById('timeline-tracks');
+        
+        // Create box selection element
+        const boxSelectEl = document.createElement('div');
+        boxSelectEl.className = 'keyframe-box-selection';
+        boxSelectEl.style.display = 'none';
+        tracks?.appendChild(boxSelectEl);
+        this.boxSelection.element = boxSelectEl;
+        
+        // Timeline click - go to frame or clear selection
         tracks?.addEventListener('click', (e) => {
+            // If we just finished a box selection, don't process click
+            if (this.boxSelection.justFinished) {
+                this.boxSelection.justFinished = false;
+                return;
+            }
+            
+            // If clicked on empty area (not a keyframe marker)
+            if (e.target === tracks || e.target.classList.contains('timeline-ruler')) {
+                const rect = tracks.getBoundingClientRect();
+                const x = e.clientX - rect.left;
+                const frame = Math.round(x / 20);
+                
+                // Clear selection if not holding shift
+                if (!e.shiftKey) {
+                    this.clearKeyframeSelection();
+                }
+                
+                this.goToFrame(Math.max(0, Math.min(frame, this.totalFrames)));
+            }
+        });
+        
+        // Box selection - mousedown to start
+        tracks?.addEventListener('mousedown', (e) => {
+            // Only start box selection on left click directly on tracks (not on markers)
+            if (e.button !== 0) return;
+            if (e.target.classList.contains('keyframe-marker')) return;
+            
             const rect = tracks.getBoundingClientRect();
-            const x = e.clientX - rect.left;
-            const frame = Math.round(x / 20);
-            this.goToFrame(Math.max(0, Math.min(frame, this.totalFrames)));
+            this.boxSelection.active = true;
+            this.boxSelection.startX = e.clientX - rect.left;
+            this.boxSelection.startY = e.clientY - rect.top;
+            
+            boxSelectEl.style.display = 'block';
+            boxSelectEl.style.left = `${this.boxSelection.startX}px`;
+            boxSelectEl.style.top = `${this.boxSelection.startY}px`;
+            boxSelectEl.style.width = '0px';
+            boxSelectEl.style.height = '0px';
+            
+            e.preventDefault();
+        });
+        
+        // Box selection - mousemove to resize
+        document.addEventListener('mousemove', (e) => {
+            if (!this.boxSelection.active || !tracks) return;
+            
+            const rect = tracks.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+            
+            const left = Math.min(this.boxSelection.startX, currentX);
+            const top = Math.min(this.boxSelection.startY, currentY);
+            const width = Math.abs(currentX - this.boxSelection.startX);
+            const height = Math.abs(currentY - this.boxSelection.startY);
+            
+            boxSelectEl.style.left = `${left}px`;
+            boxSelectEl.style.top = `${top}px`;
+            boxSelectEl.style.width = `${width}px`;
+            boxSelectEl.style.height = `${height}px`;
+        });
+        
+        // Box selection - mouseup to select keyframes
+        document.addEventListener('mouseup', (e) => {
+            if (!this.boxSelection.active || !tracks) return;
+            
+            const rect = tracks.getBoundingClientRect();
+            const currentX = e.clientX - rect.left;
+            const currentY = e.clientY - rect.top;
+            
+            const left = Math.min(this.boxSelection.startX, currentX);
+            const right = Math.max(this.boxSelection.startX, currentX);
+            const top = Math.min(this.boxSelection.startY, currentY);
+            const bottom = Math.max(this.boxSelection.startY, currentY);
+            
+            // Only process if box has meaningful size
+            if (right - left > 5 || bottom - top > 5) {
+                // Select keyframes within box
+                if (!e.shiftKey) {
+                    this.selectedKeyframes.clear();
+                }
+                
+                tracks.querySelectorAll('.keyframe-marker').forEach(marker => {
+                    const markerRect = marker.getBoundingClientRect();
+                    const markerCenterX = markerRect.left + markerRect.width / 2 - rect.left;
+                    const markerCenterY = markerRect.top + markerRect.height / 2 - rect.top;
+                    
+                    if (markerCenterX >= left && markerCenterX <= right &&
+                        markerCenterY >= top && markerCenterY <= bottom) {
+                        const key = marker.dataset.key;
+                        if (key) {
+                            this.selectedKeyframes.add(key);
+                        }
+                    }
+                });
+                
+                this.updateKeyframeMarkers();
+                this.boxSelection.justFinished = true;
+            }
+            
+            // Reset box selection
+            this.boxSelection.active = false;
+            boxSelectEl.style.display = 'none';
         });
         
         this.updateTimeline();
@@ -1834,26 +1953,33 @@ class GLBAnimationEditor {
         this.keyframes.forEach((frameData, frame) => {
             frameData.forEach((boneData, boneName) => {
                 const marker = document.createElement('div');
-                marker.className = 'keyframe-marker';
+                const key = `${frame}:${boneName}`;
+                const isSelected = this.selectedKeyframes.has(key);
+                
+                marker.className = 'keyframe-marker' + (isSelected ? ' selected' : '');
                 marker.style.left = `${frame * 20}px`;
                 marker.style.top = '50%';
-                marker.title = `${boneName} @ frame ${frame}`;
+                marker.title = `${boneName} @ frame ${frame}${isSelected ? ' (selected)' : ''}`;
                 marker.dataset.frame = frame;
                 marker.dataset.bone = boneName;
+                marker.dataset.key = key;
                 marker.style.cursor = 'grab';
                 
-                // Click to select
+                // Click to select keyframe
                 marker.addEventListener('click', (e) => {
                     if (marker.dataset.dragged === 'true') {
                         marker.dataset.dragged = 'false';
                         return;
                     }
                     e.stopPropagation();
+                    
+                    // Shift+click to add to selection, regular click to select single
+                    this.selectKeyframe(frame, boneName, e.shiftKey);
                     this.goToFrame(frame);
                     this.selectBone(boneName);
                 });
                 
-                // Drag to move keyframe
+                // Drag to move keyframe(s)
                 marker.addEventListener('mousedown', (e) => {
                     // Only handle left mouse button
                     if (e.button !== 0) return;
@@ -1867,8 +1993,18 @@ class GLBAnimationEditor {
                     let hasMoved = false;
                     let currentNewFrame = startFrame;
                     
+                    // If this keyframe is selected, we'll move all selected keyframes
+                    const movingSelected = this.selectedKeyframes.has(key) && this.selectedKeyframes.size > 1;
+                    
                     marker.style.cursor = 'grabbing';
                     marker.classList.add('dragging');
+                    
+                    // If moving selected keyframes, highlight them all
+                    if (movingSelected) {
+                        tracks.querySelectorAll('.keyframe-marker.selected').forEach(m => {
+                            m.classList.add('dragging');
+                        });
+                    }
                     
                     const onMouseMove = (moveEvent) => {
                         const deltaX = moveEvent.clientX - startX;
@@ -1879,8 +2015,20 @@ class GLBAnimationEditor {
                             hasMoved = true;
                         }
                         
+                        // Move visual position
                         marker.style.left = `${currentNewFrame * 20}px`;
                         marker.title = `${dragBoneName} @ frame ${currentNewFrame}`;
+                        
+                        // If moving selected, move all selected markers visually
+                        if (movingSelected) {
+                            tracks.querySelectorAll('.keyframe-marker.selected').forEach(m => {
+                                if (m !== marker) {
+                                    const origFrame = parseInt(m.dataset.frame, 10);
+                                    const newPos = Math.max(0, Math.min(this.totalFrames, origFrame + deltaFrames));
+                                    m.style.left = `${newPos * 20}px`;
+                                }
+                            });
+                        }
                     };
                     
                     const onMouseUp = () => {
@@ -1890,12 +2038,29 @@ class GLBAnimationEditor {
                         marker.style.cursor = 'grab';
                         marker.classList.remove('dragging');
                         
+                        if (movingSelected) {
+                            tracks.querySelectorAll('.keyframe-marker.selected').forEach(m => {
+                                m.classList.remove('dragging');
+                            });
+                        }
+                        
                         if (hasMoved && currentNewFrame !== startFrame) {
                             marker.dataset.dragged = 'true';
-                            this.moveKeyframe(dragBoneName, startFrame, currentNewFrame);
+                            const deltaFrames = currentNewFrame - startFrame;
+                            
+                            if (movingSelected) {
+                                // Move all selected keyframes
+                                this.moveSelectedKeyframes(deltaFrames);
+                            } else {
+                                // Move single keyframe
+                                this.moveKeyframe(dragBoneName, startFrame, currentNewFrame);
+                            }
                         } else {
                             // Reset position if not moved
                             marker.style.left = `${startFrame * 20}px`;
+                            if (movingSelected) {
+                                this.updateKeyframeMarkers();
+                            }
                         }
                     };
                     
@@ -1906,6 +2071,56 @@ class GLBAnimationEditor {
                 tracks.appendChild(marker);
             });
         });
+    }
+    
+    // Move all selected keyframes by a frame offset
+    moveSelectedKeyframes(deltaFrames) {
+        if (!this.currentAnimation || !this.currentAnimation.keyframes) return;
+        if (this.selectedKeyframes.size === 0) return;
+        
+        const keyframes = this.currentAnimation.keyframes;
+        const keyframesToMove = [];
+        
+        // Collect keyframes to move
+        this.selectedKeyframes.forEach(key => {
+            const [frame, boneName] = key.split(':');
+            const frameNum = parseInt(frame, 10);
+            const frameData = keyframes.get(frameNum);
+            
+            if (frameData?.has(boneName)) {
+                keyframesToMove.push({
+                    oldFrame: frameNum,
+                    newFrame: Math.max(0, Math.min(this.totalFrames, frameNum + deltaFrames)),
+                    boneName,
+                    data: frameData.get(boneName)
+                });
+            }
+        });
+        
+        // Remove old keyframes
+        keyframesToMove.forEach(({ oldFrame, boneName }) => {
+            const frameData = keyframes.get(oldFrame);
+            if (frameData) {
+                frameData.delete(boneName);
+                if (frameData.size === 0) {
+                    keyframes.delete(oldFrame);
+                }
+            }
+        });
+        
+        // Update selection and add new keyframes
+        this.selectedKeyframes.clear();
+        keyframesToMove.forEach(({ newFrame, boneName, data }) => {
+            if (!keyframes.has(newFrame)) {
+                keyframes.set(newFrame, new Map());
+            }
+            keyframes.get(newFrame).set(boneName, data);
+            this.selectedKeyframes.add(`${newFrame}:${boneName}`);
+        });
+        
+        this.updateKeyframeMarkers();
+        this.saveToHistory();
+        this.showToast(`Moved ${keyframesToMove.length} keyframe(s)`, 'info');
     }
     
     moveKeyframe(boneName, fromFrame, toFrame) {
@@ -2035,6 +2250,161 @@ class GLBAnimationEditor {
             }
             this.updateKeyframeMarkers();
             this.showToast(`Keyframe deleted`, 'info');
+        }
+    }
+    
+    // Select a keyframe (add to selection)
+    selectKeyframe(frame, boneName, addToSelection = false) {
+        const key = `${frame}:${boneName}`;
+        
+        if (!addToSelection) {
+            this.selectedKeyframes.clear();
+        }
+        
+        if (this.selectedKeyframes.has(key)) {
+            this.selectedKeyframes.delete(key);
+        } else {
+            this.selectedKeyframes.add(key);
+        }
+        
+        this.updateKeyframeMarkers();
+    }
+    
+    // Clear keyframe selection
+    clearKeyframeSelection() {
+        this.selectedKeyframes.clear();
+        this.updateKeyframeMarkers();
+    }
+    
+    // Duplicate selected keyframes (or current frame keyframe)
+    duplicateKeyframes() {
+        if (!this.currentAnimation || !this.currentAnimation.keyframes) {
+            this.showToast('No animation selected', 'error');
+            return;
+        }
+        
+        const keyframes = this.currentAnimation.keyframes;
+        let duplicatedCount = 0;
+        
+        // If we have selected keyframes, duplicate those
+        if (this.selectedKeyframes.size > 0) {
+            // Group keyframes by frame to find max frame offset
+            const keyframesToDuplicate = [];
+            this.selectedKeyframes.forEach(key => {
+                const [frame, boneName] = key.split(':');
+                const frameNum = parseInt(frame, 10);
+                const frameData = keyframes.get(frameNum);
+                if (frameData?.has(boneName)) {
+                    keyframesToDuplicate.push({
+                        frame: frameNum,
+                        boneName,
+                        data: frameData.get(boneName)
+                    });
+                }
+            });
+            
+            if (keyframesToDuplicate.length === 0) {
+                this.showToast('No valid keyframes selected', 'warning');
+                return;
+            }
+            
+            // Find the target frame (1 frame after the maximum selected frame)
+            const maxFrame = Math.max(...keyframesToDuplicate.map(k => k.frame));
+            const offset = 1;
+            
+            // Clear selection for new keyframes
+            this.selectedKeyframes.clear();
+            
+            // Duplicate each keyframe
+            keyframesToDuplicate.forEach(({ frame, boneName, data }) => {
+                const newFrame = frame + offset;
+                if (newFrame <= this.totalFrames) {
+                    if (!keyframes.has(newFrame)) {
+                        keyframes.set(newFrame, new Map());
+                    }
+                    
+                    // Deep clone the keyframe data
+                    keyframes.get(newFrame).set(boneName, {
+                        position: data.position.clone(),
+                        rotation: data.rotation.clone(),
+                        scale: data.scale.clone()
+                    });
+                    
+                    // Select the new keyframe
+                    this.selectedKeyframes.add(`${newFrame}:${boneName}`);
+                    duplicatedCount++;
+                }
+            });
+        } else if (this.selectedBone) {
+            // No selection, duplicate current bone's keyframe at current frame
+            const frameData = keyframes.get(this.currentFrame);
+            if (frameData?.has(this.selectedBone.name)) {
+                const data = frameData.get(this.selectedBone.name);
+                const newFrame = this.currentFrame + 1;
+                
+                if (newFrame <= this.totalFrames) {
+                    if (!keyframes.has(newFrame)) {
+                        keyframes.set(newFrame, new Map());
+                    }
+                    
+                    keyframes.get(newFrame).set(this.selectedBone.name, {
+                        position: data.position.clone(),
+                        rotation: data.rotation.clone(),
+                        scale: data.scale.clone()
+                    });
+                    
+                    this.selectedKeyframes.add(`${newFrame}:${this.selectedBone.name}`);
+                    duplicatedCount++;
+                }
+            } else {
+                this.showToast('No keyframe at current frame for selected bone', 'warning');
+                return;
+            }
+        } else {
+            this.showToast('Select keyframes or a bone first', 'warning');
+            return;
+        }
+        
+        this.updateKeyframeMarkers();
+        this.saveToHistory();
+        this.showToast(`Duplicated ${duplicatedCount} keyframe(s)`, 'success');
+    }
+    
+    // Delete all selected keyframes
+    deleteSelectedKeyframes() {
+        if (!this.currentAnimation || !this.currentAnimation.keyframes) {
+            return;
+        }
+        
+        if (this.selectedKeyframes.size === 0) {
+            // Fall back to deleting current bone's keyframe
+            this.deleteKeyframe();
+            return;
+        }
+        
+        const keyframes = this.currentAnimation.keyframes;
+        let deletedCount = 0;
+        
+        this.selectedKeyframes.forEach(key => {
+            const [frame, boneName] = key.split(':');
+            const frameNum = parseInt(frame, 10);
+            const frameData = keyframes.get(frameNum);
+            
+            if (frameData?.has(boneName)) {
+                frameData.delete(boneName);
+                if (frameData.size === 0) {
+                    keyframes.delete(frameNum);
+                }
+                deletedCount++;
+            }
+        });
+        
+        this.selectedKeyframes.clear();
+        this.updateKeyframeMarkers();
+        this.saveToHistory();
+        
+        if (deletedCount > 0) {
+            this.showToast(`Deleted ${deletedCount} keyframe(s)`, 'info');
         }
     }
     
@@ -3093,13 +3463,36 @@ class GLBAnimationEditor {
                 break;
             case 'Delete':
             case 'Backspace':
-                this.deleteKeyframe();
+                this.deleteSelectedKeyframes();
                 break;
             case 'ArrowLeft':
                 this.prevFrame();
                 break;
             case 'ArrowRight':
                 this.nextFrame();
+                break;
+            case 'KeyD':
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    this.duplicateKeyframes();
+                }
+                break;
+            case 'Escape':
+                this.clearKeyframeSelection();
+                break;
+            case 'KeyA':
+                if (e.ctrlKey || e.metaKey) {
+                    e.preventDefault();
+                    // Select all keyframes
+                    this.selectedKeyframes.clear();
+                    this.keyframes.forEach((frameData, frame) => {
+                        frameData.forEach((_, boneName) => {
+                            this.selectedKeyframes.add(`${frame}:${boneName}`);
+                        });
+                    });
+                    this.updateKeyframeMarkers();
+                    this.showToast(`Selected ${this.selectedKeyframes.size} keyframe(s)`, 'info');
+                }
                 break;
             case 'KeyZ':
                 if (e.ctrlKey || e.metaKey) {

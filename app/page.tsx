@@ -45,8 +45,8 @@ export default function Home() {
             <span className="font-display text-2xl font-semibold">frim</span>
           </div>
           <div className="flex items-center gap-4">
-            <Link href="/pricing" className="text-sm text-dark-400 hover:text-dark-200 transition-colors">
-              Pricing
+            <Link href="/pricing" className="text-sm text-frim-400 hover:text-frim-300 transition-colors font-medium">
+              100% Free
             </Link>
             <a
               href="https://discord.gg/YKfmSqZ5e8"
@@ -75,7 +75,7 @@ export default function Home() {
           <div className="max-w-xl">
             <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/20 px-4 py-2 rounded-full text-sm text-frim-400 mb-6">
               <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
-              Web-Based Animation Tool
+              🎉 100% Free — No Limits
             </div>
             
             <h1 className="font-display text-5xl lg:text-6xl font-bold leading-tight mb-6">
@@ -266,8 +266,8 @@ export default function Home() {
                 </div>
                 <div className="flex items-center gap-2 mb-3">
                   <h3 className="font-display text-lg font-semibold">{feature.title}</h3>
-                  {feature.highlight && (
-                    <span className="text-[10px] font-bold bg-frim-500 text-dark-950 px-1.5 py-0.5 rounded">PRO</span>
+                  {feature.comingSoon && (
+                    <span className="text-[10px] font-bold bg-amber-500/20 text-amber-400 px-1.5 py-0.5 rounded">SOON</span>
                   )}
                 </div>
                 <p className="text-dark-500 text-sm leading-relaxed">{feature.description}</p>
@@ -286,7 +286,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-6">
             <Link href="/pricing" className="text-sm text-dark-500 hover:text-dark-300 transition-colors">
-              Pricing
+              Features
             </Link>
             <a
               href="https://discord.gg/YKfmSqZ5e8"

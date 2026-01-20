@@ -1116,6 +1116,16 @@ body {
 .keyframe-marker.selected {
     background: var(--accent-tertiary);
     box-shadow: 0 0 15px var(--accent-tertiary);
+    transform: translate(-50%, -50%) rotate(45deg) scale(1.15);
+}
+
+.keyframe-box-selection {
+    position: absolute;
+    background: rgba(0, 229, 160, 0.15);
+    border: 1px solid var(--accent-primary);
+    border-radius: 2px;
+    pointer-events: none;
+    z-index: 50;
 }
 
 .timeline-tracks.drag-over {

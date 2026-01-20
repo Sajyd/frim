@@ -35,8 +35,6 @@ import {
   Clipboard,
   ClipboardPaste,
   FlipHorizontal,
-  Zap,
-  Lock,
   Package,
   Bot,
   Check,
@@ -57,9 +55,6 @@ interface EditorProps {
     modelData?: string
     modelName?: string
   }
-  animationLimit?: number
-  isPro?: boolean
-  canUseVideoAnalysis?: boolean
 }
 
 interface ProjectData {
@@ -88,7 +83,7 @@ interface HistoryState {
   boneStates: { [key: string]: { position: number[]; rotation: number[]; scale: number[] } }
 }
 
-export default function ThreeEditor({ projectName, onChange, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
+export default function ThreeEditor({ projectName, onChange, saving, initialData }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -135,10 +130,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Clipboard
   const clipboardRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null)
-
-  // Upgrade modal
-  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
-  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis'>('animation_limit')
 
   // Video analysis modal
   const [showVideoModal, setShowVideoModal] = useState(false)
@@ -1092,13 +1083,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   }, [selectedBone, bones, showToast])
 
   const createNewAnimation = useCallback(() => {
-    // Check animation limit for free users
-    if (!isPro && animations.size >= animationLimit) {
-      setUpgradeModalReason('animation_limit')
-      setShowUpgradeModal(true)
-      return
-    }
-
     const id = `anim_${animationCounterRef.current++}`
     const newAnim: Animation = {
       name: `Animation ${animations.size + 1}`,
@@ -1114,7 +1098,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setCurrentFrame(0)
     resetAllBones()
     showToast('New animation created', 'success')
-  }, [animations.size, resetAllBones, showToast, isPro, animationLimit])
+  }, [animations.size, resetAllBones, showToast])
 
   const deleteAnimation = useCallback((animId: string) => {
     if (animations.size <= 1) {
@@ -2558,22 +2542,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         <div className="p-3 border-b border-[#252b3d] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">ANIMATIONS</h3>
-            {!isPro && (
-              <span className="text-[10px] text-[#71717a] font-mono">
-                {animations.size}/{animationLimit}
-              </span>
-            )}
+            <span className="text-[10px] text-[#22c55e] font-mono">unlimited</span>
           </div>
           <button
             onClick={createNewAnimation}
-            className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
-              !isPro && animations.size >= animationLimit
-                ? 'bg-[#252b3d] text-[#71717a] hover:bg-[#3f3f46]'
-                : 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]'
-            }`}
-            title={!isPro && animations.size >= animationLimit ? 'Upgrade to Pro for more animations' : 'Create new animation'}
+            className="w-6 h-6 rounded flex items-center justify-center transition-colors bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]"
+            title="Create new animation"
           >
-            {!isPro && animations.size >= animationLimit ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-4 h-4" />}
+            <Plus className="w-4 h-4" />
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
@@ -2898,65 +2874,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
       {/* Toast container */}
       <div id="toast-container" className="fixed bottom-[180px] right-4 flex flex-col-reverse gap-2 z-50" />
-
-      {/* Upgrade Modal */}
-      {showUpgradeModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
-          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
-            <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              {upgradeModalReason === 'video_analysis' ? (
-                <Video className="w-8 h-8 text-[#22c55e]" />
-              ) : (
-                <Zap className="w-8 h-8 text-[#22c55e]" />
-              )}
-            </div>
-            <h2 className="text-xl font-semibold mb-2">
-              {upgradeModalReason === 'video_analysis' 
-                ? 'AI Video Motion Capture' 
-                : 'Animation Limit Reached'}
-            </h2>
-            <p className="text-[#a1a1aa] mb-6">
-              {upgradeModalReason === 'video_analysis' 
-                ? 'Extract animations from videos with AI pose detection. Upgrade to Pro to unlock this powerful feature.'
-                : `You've reached the limit of ${animationLimit} animation${animationLimit !== 1 ? 's' : ''} on the Free plan. Upgrade to Pro for unlimited animations.`}
-            </p>
-            
-            {/* Feature highlights */}
-            <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6 text-left">
-              <p className="text-xs font-semibold text-[#71717a] mb-3">PRO INCLUDES:</p>
-              <ul className="space-y-2">
-                {[
-                  'Unlimited animations per project',
-                  'AI Video Motion Capture',
-                  'Unlimited projects',
-                  'Priority support'
-                ].map((feature, i) => (
-                  <li key={i} className="flex items-center gap-2 text-sm text-[#a1a1aa]">
-                    <Check className="w-4 h-4 text-[#22c55e] shrink-0" />
-                    {feature}
-                  </li>
-                ))}
-              </ul>
-            </div>
-            
-            <div className="flex flex-col gap-3">
-              <a
-                href="/pricing"
-                className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
-              >
-                <Zap className="w-5 h-5" />
-                Upgrade to Pro - $12/month
-              </a>
-              <button
-                onClick={() => setShowUpgradeModal(false)}
-                className="w-full py-2 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
-              >
-                Maybe Later
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
 
       {/* Video Analysis Modal - Coming Soon (disabled) */}
 

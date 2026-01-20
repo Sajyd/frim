@@ -5,7 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
-import { ChevronLeft, Cloud, Save, Check, X } from 'lucide-react'
+import { ChevronLeft, Cloud, Save, Check } from 'lucide-react'
 
 // Dynamically import the editor with no SSR
 const ThreeEditor = dynamic(() => import('@/components/Editor/ThreeEditor'), {
@@ -37,14 +37,6 @@ interface ProjectData {
   thumbnail?: string
 }
 
-interface Subscription {
-  plan: string
-  limits: {
-    animationsPerProject: number | 'unlimited'
-    videoAnalysis: boolean
-  }
-}
-
 export default function EditorPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
@@ -55,7 +47,6 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [lastSaved, setLastSaved] = useState<Date | null>(null)
-  const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
   const pendingDataRef = useRef<ProjectData | null>(null)
@@ -69,7 +60,6 @@ export default function EditorPage() {
   useEffect(() => {
     if (session && projectId) {
       fetchProject()
-      fetchSubscription()
     }
   }, [session, projectId])
 
@@ -99,18 +89,6 @@ export default function EditorPage() {
       router.push('/dashboard')
     } finally {
       setLoading(false)
-    }
-  }
-
-  const fetchSubscription = async () => {
-    try {
-      const res = await fetch('/api/user/subscription')
-      if (res.ok) {
-        const data = await res.json()
-        setSubscription(data)
-      }
-    } catch (error) {
-      console.error('Failed to fetch subscription:', error)
     }
   }
 
@@ -231,11 +209,6 @@ export default function EditorPage() {
     )
   }
 
-  const isPro = subscription?.plan === 'pro'
-  const animationLimit = subscription?.limits?.animationsPerProject === 'unlimited' 
-    ? Infinity 
-    : (subscription?.limits?.animationsPerProject || 2)
-
   return (
     <div className="min-h-screen bg-[#0f1117] text-[#f4f4f5]">
       {/* Top Bar */}
@@ -268,14 +241,9 @@ export default function EditorPage() {
           {hasUnsavedChanges && (
             <span className="text-xs text-yellow-500">• Unsaved</span>
           )}
-          {!isPro && (
-            <Link
-              href="/pricing"
-              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors"
-            >
-              Free Plan
-            </Link>
-          )}
+          <span className="text-xs bg-[#22c55e]/10 text-[#22c55e] px-2 py-1 rounded">
+            Free — Unlimited
+          </span>
         </div>
 
         <div className="flex items-center gap-3">
@@ -325,9 +293,6 @@ export default function EditorPage() {
             modelData: project.modelData,
             modelName: project.modelName
           } : undefined}
-          animationLimit={animationLimit}
-          isPro={isPro}
-          canUseVideoAnalysis={subscription?.limits?.videoAnalysis || false}
         />
       </div>
 
