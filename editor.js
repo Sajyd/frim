@@ -2117,30 +2117,65 @@ class GLBAnimationEditor {
         const boneList = document.getElementById('reset-bones-list');
         if (!modal || !boneList) return;
         
+        // Get bones that have keyframes in current animation
+        const bonesWithKeyframes = new Set();
+        this.keyframes.forEach((frameData) => {
+            frameData.forEach((_, boneName) => {
+                bonesWithKeyframes.add(boneName);
+            });
+        });
+        
         // Populate bone list
         boneList.innerHTML = '';
         const sortedBones = Array.from(this.bones.keys()).sort();
         
         sortedBones.forEach(boneName => {
+            const hasKeyframes = bonesWithKeyframes.has(boneName);
             const item = document.createElement('label');
             item.className = 'bone-list-item';
             item.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; border-radius: 4px; transition: background 0.15s;';
             item.innerHTML = `
-                <input type="checkbox" class="bone-checkbox" data-bone="${boneName}" checked>
-                <span style="color: var(--text-primary);">${boneName}</span>
+                <input type="checkbox" class="bone-checkbox" data-bone="${boneName}" ${!hasKeyframes ? 'checked' : ''}>
+                <span style="color: ${hasKeyframes ? 'var(--accent-primary)' : 'var(--text-primary)'};">${boneName}</span>
+                ${hasKeyframes ? '<span style="font-size: 10px; color: var(--accent-primary); margin-left: auto;">🔑 has keyframes</span>' : ''}
             `;
             item.addEventListener('mouseenter', () => item.style.background = 'var(--bg-hover)');
             item.addEventListener('mouseleave', () => item.style.background = 'transparent');
             boneList.appendChild(item);
         });
         
-        // Setup select/deselect all buttons
+        // Setup select/deselect buttons
+        const selectAllBtn = document.getElementById('btn-select-all-bones');
+        const deselectAllBtn = document.getElementById('btn-deselect-all-bones');
+        const selectNoKeyframesBtn = document.getElementById('btn-select-no-keyframes');
+        const selectWithKeyframesBtn = document.getElementById('btn-select-with-keyframes');
+        
+        // Clone and replace to remove old event listeners
+        [selectAllBtn, deselectAllBtn, selectNoKeyframesBtn, selectWithKeyframesBtn].forEach(btn => {
+            if (btn) {
+                const newBtn = btn.cloneNode(true);
+                btn.parentNode.replaceChild(newBtn, btn);
+            }
+        });
+        
         document.getElementById('btn-select-all-bones')?.addEventListener('click', () => {
             boneList.querySelectorAll('.bone-checkbox').forEach(cb => cb.checked = true);
         });
         
         document.getElementById('btn-deselect-all-bones')?.addEventListener('click', () => {
             boneList.querySelectorAll('.bone-checkbox').forEach(cb => cb.checked = false);
+        });
+        
+        document.getElementById('btn-select-no-keyframes')?.addEventListener('click', () => {
+            boneList.querySelectorAll('.bone-checkbox').forEach(cb => {
+                cb.checked = !bonesWithKeyframes.has(cb.dataset.bone);
+            });
+        });
+        
+        document.getElementById('btn-select-with-keyframes')?.addEventListener('click', () => {
+            boneList.querySelectorAll('.bone-checkbox').forEach(cb => {
+                cb.checked = bonesWithKeyframes.has(cb.dataset.bone);
+            });
         });
         
         // Setup confirm button

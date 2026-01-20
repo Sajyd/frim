@@ -768,9 +768,11 @@
             </div>
             <div class="modal-body">
                 <p style="color: var(--text-secondary); margin-bottom: 12px;">Select bones to reset to their original position:</p>
-                <div class="bone-selection-controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                <div class="bone-selection-controls" style="display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 12px;">
                     <button class="btn-secondary btn-small" id="btn-select-all-bones">Select All</button>
                     <button class="btn-secondary btn-small" id="btn-deselect-all-bones">Deselect All</button>
+                    <button class="btn-secondary btn-small" id="btn-select-no-keyframes">Without Keyframes</button>
+                    <button class="btn-secondary btn-small" id="btn-select-with-keyframes">With Keyframes</button>
                 </div>
                 <div class="bone-list-container" id="reset-bones-list" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px;"></div>
                 <div style="margin-top: 12px;">
