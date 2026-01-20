@@ -540,17 +540,30 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   }, [showBoneView])
 
   // Load sample model from assets
-  const loadSampleModel = useCallback(() => {
+  const loadSampleModel = useCallback(async () => {
     if (!sceneRef.current) return
     
     showToast('Loading sample model...', 'info')
     
-    const loader = new GLTFLoader()
-    
-    // Load from assets folder - place your GLB file at /public/assets/sample-model.glb
-    loader.load(
-      '/assets/sample-model.glb',
-      (gltf) => {
+    try {
+      // Fetch the GLB file as ArrayBuffer to store for saving
+      const response = await fetch('/assets/sample-model.glb')
+      if (!response.ok) {
+        throw new Error('Failed to fetch sample model')
+      }
+      const arrayBuffer = await response.arrayBuffer()
+      
+      // Store base64 encoded model data for saving
+      const base64 = btoa(
+        new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+      )
+      modelDataRef.current = base64
+      console.log('Sample model loaded, base64 length:', base64.length)
+      
+      const loader = new GLTFLoader()
+      
+      // Parse the ArrayBuffer we already have
+      loader.parse(arrayBuffer, '', (gltf) => {
         originalGLTFRef.current = gltf
         setLoadedFilename('sample-model.glb')
 
@@ -696,13 +709,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           
           showToast(`Sample model loaded! Found ${boneMap.size} bones.`, 'success')
         }
-      },
-      undefined,
-      (error) => {
-        console.error('Failed to load sample model:', error)
-        showToast('Sample model not found. Please add a GLB file to /public/assets/sample-model.glb', 'error')
-      }
-    )
+      }, (error) => {
+        console.error('Failed to parse sample model:', error)
+        showToast('Failed to parse sample model', 'error')
+      })
+    } catch (error) {
+      console.error('Failed to load sample model:', error)
+      showToast('Sample model not found. Please add a GLB file to /public/assets/sample-model.glb', 'error')
+    }
   }, [showToast])
 
   const createBoneHelper = (boneName: string) => {
