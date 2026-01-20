@@ -236,6 +236,15 @@ export default function EditorPage() {
     ? Infinity 
     : (subscription?.limits?.animationsPerProject || 2)
 
+  // Debug: log project data
+  console.log('Editor page - project data:', {
+    hasProject: !!project,
+    hasModelData: !!project?.modelData,
+    modelDataLength: project?.modelData?.length,
+    modelName: project?.modelName,
+    animationsCount: project?.animations?.length
+  })
+
   return (
     <div className="min-h-screen bg-[#0f1117] text-[#f4f4f5]">
       {/* Top Bar */}

@@ -1365,9 +1365,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Load model from base64 data (for restoring saved projects)
   const loadModelFromBase64 = useCallback((base64: string, filename: string) => {
+    console.log('loadModelFromBase64 called with filename:', filename, 'base64 length:', base64.length)
     try {
       // Convert base64 to ArrayBuffer
       const binaryString = atob(base64)
+      console.log('Converted base64 to binary string, length:', binaryString.length)
       const bytes = new Uint8Array(binaryString.length)
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i)
@@ -1466,11 +1468,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         originalTransformsRef.current = originalTransforms
         setModelLoaded(true)
         setShowWelcome(false)
+        console.log('Model restored successfully, showWelcome set to false')
 
         showToast(`Project restored! Found ${boneMap.size} bones.`, 'success')
       }, (error) => {
         console.error('Failed to restore model:', error)
         showToast('Failed to restore model', 'error')
+        // Still hide welcome screen to show the editor
+        setShowWelcome(false)
       })
     } catch (err) {
       console.error('Error restoring model:', err)
@@ -1486,10 +1491,16 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     if (!sceneReady) return  // Wait for scene to be ready
 
     initialDataLoadedRef.current = true
-    console.log('Loading initial project data:', initialData.modelName)
+    console.log('Loading initial project data:', {
+      hasModelData: !!initialData.modelData,
+      modelDataLength: initialData.modelData?.length,
+      modelName: initialData.modelName,
+      animationsCount: initialData.animations?.length
+    })
 
     // Load model if we have model data
     if (initialData.modelData && initialData.modelName) {
+      console.log('Calling loadModelFromBase64...')
       loadModelFromBase64(initialData.modelData, initialData.modelName)
 
       // Load animations after a small delay to ensure model is loaded
