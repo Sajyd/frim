@@ -130,6 +130,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
 
   // Upgrade modal
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis'>('animation_limit')
 
   // Video analysis modal
   const [showVideoModal, setShowVideoModal] = useState(false)
@@ -928,6 +929,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
   const createNewAnimation = useCallback(() => {
     // Check animation limit for free users
     if (!isPro && animations.size >= animationLimit) {
+      setUpgradeModalReason('animation_limit')
       setShowUpgradeModal(true)
       return
     }
@@ -1900,7 +1902,14 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
         
         {/* Video Analysis (Pro feature) */}
         <button
-          onClick={() => canUseVideoAnalysis ? setShowVideoModal(true) : setShowUpgradeModal(true)}
+          onClick={() => {
+            if (canUseVideoAnalysis) {
+              setShowVideoModal(true)
+            } else {
+              setUpgradeModalReason('video_analysis')
+              setShowUpgradeModal(true)
+            }
+          }}
           className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
             canUseVideoAnalysis 
               ? 'text-[#a1a1aa] hover:bg-[#1c2130] hover:text-[#22c55e]' 
@@ -2397,12 +2406,41 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
           <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
             <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              <Zap className="w-8 h-8 text-[#22c55e]" />
+              {upgradeModalReason === 'video_analysis' ? (
+                <Video className="w-8 h-8 text-[#22c55e]" />
+              ) : (
+                <Zap className="w-8 h-8 text-[#22c55e]" />
+              )}
             </div>
-            <h2 className="text-xl font-semibold mb-2">Pro Feature</h2>
+            <h2 className="text-xl font-semibold mb-2">
+              {upgradeModalReason === 'video_analysis' 
+                ? 'AI Video Motion Capture' 
+                : 'Animation Limit Reached'}
+            </h2>
             <p className="text-[#a1a1aa] mb-6">
-              This feature requires a Pro subscription. Upgrade to unlock unlimited animations, AI video motion capture, and more.
+              {upgradeModalReason === 'video_analysis' 
+                ? 'Extract animations from videos with AI pose detection. Upgrade to Pro to unlock this powerful feature.'
+                : `You've reached the limit of ${animationLimit} animation${animationLimit !== 1 ? 's' : ''} on the Free plan. Upgrade to Pro for unlimited animations.`}
             </p>
+            
+            {/* Feature highlights */}
+            <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6 text-left">
+              <p className="text-xs font-semibold text-[#71717a] mb-3">PRO INCLUDES:</p>
+              <ul className="space-y-2">
+                {[
+                  'Unlimited animations per project',
+                  'AI Video Motion Capture',
+                  'Unlimited projects',
+                  'Priority support'
+                ].map((feature, i) => (
+                  <li key={i} className="flex items-center gap-2 text-sm text-[#a1a1aa]">
+                    <Check className="w-4 h-4 text-[#22c55e] shrink-0" />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            
             <div className="flex flex-col gap-3">
               <a
                 href="/pricing"
