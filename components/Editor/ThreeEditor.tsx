@@ -63,6 +63,7 @@ interface EditorProps {
 interface ProjectData {
   animations: any[]
   modelName: string
+  modelData?: string
 }
 
 interface Animation {
@@ -102,6 +103,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const boneVisualizerGroupRef = useRef<THREE.Group | null>(null)
   const modelRef = useRef<THREE.Group | null>(null)
   const originalGLTFRef = useRef<any>(null)
+  const modelDataRef = useRef<string | null>(null)  // Store base64 encoded model data
 
   // Editor state
   const [currentTool, setCurrentTool] = useState<'select' | 'rotate' | 'translate' | 'scale'>('rotate')
@@ -193,7 +195,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const getProjectData = useCallback((): ProjectData => {
     return {
       animations: serializeAnimations(),
-      modelName: loadedFilename
+      modelName: loadedFilename,
+      modelData: modelDataRef.current || undefined
     }
   }, [serializeAnimations, loadedFilename])
 
@@ -1145,6 +1148,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     reader.onload = async (e) => {
       try {
         const arrayBuffer = e.target?.result as ArrayBuffer
+        
+        // Store base64 encoded model data for saving
+        const base64 = btoa(
+          new Uint8Array(arrayBuffer).reduce((data, byte) => data + String.fromCharCode(byte), '')
+        )
+        modelDataRef.current = base64
+        
         const loader = new GLTFLoader()
 
         loader.parse(arrayBuffer, '', (gltf) => {
@@ -1313,6 +1323,179 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     }
     reader.readAsArrayBuffer(file)
   }, [showToast])
+
+  // Load model from base64 data (for restoring saved projects)
+  const loadModelFromBase64 = useCallback((base64: string, filename: string) => {
+    try {
+      // Convert base64 to ArrayBuffer
+      const binaryString = atob(base64)
+      const bytes = new Uint8Array(binaryString.length)
+      for (let i = 0; i < binaryString.length; i++) {
+        bytes[i] = binaryString.charCodeAt(i)
+      }
+      const arrayBuffer = bytes.buffer
+
+      // Store the base64 data
+      modelDataRef.current = base64
+
+      const loader = new GLTFLoader()
+      loader.parse(arrayBuffer, '', (gltf) => {
+        originalGLTFRef.current = gltf
+        setLoadedFilename(filename)
+
+        // Clear existing model and helpers
+        if (modelRef.current && sceneRef.current) {
+          sceneRef.current.remove(modelRef.current)
+        }
+        boneHelpersRef.current.forEach(helper => {
+          if (helper.parent) helper.parent.remove(helper)
+        })
+        boneHelpersRef.current = []
+
+        // Add new model
+        const model = gltf.scene
+        model.position.set(0, 0, 0)
+
+        // Normalize scale
+        const box = new THREE.Box3().setFromObject(model)
+        const size = box.getSize(new THREE.Vector3())
+        const maxDim = Math.max(size.x, size.y, size.z)
+        if (maxDim > 3) {
+          model.scale.setScalar(2 / maxDim)
+        }
+
+        // Center
+        box.setFromObject(model)
+        const center = box.getCenter(new THREE.Vector3())
+        model.position.sub(new THREE.Vector3(center.x, box.min.y, center.z))
+
+        // Setup shadows
+        model.traverse((child) => {
+          if ((child as THREE.Mesh).isMesh) {
+            child.castShadow = true
+            child.receiveShadow = true
+          }
+        })
+
+        sceneRef.current?.add(model)
+        modelRef.current = model
+
+        // Find bones
+        const boneMap = new Map<string, THREE.Bone>()
+        const originalTransforms = new Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>()
+
+        model.traverse((child) => {
+          if ((child as THREE.SkinnedMesh).isSkinnedMesh && (child as THREE.SkinnedMesh).skeleton) {
+            ;(child as THREE.SkinnedMesh).skeleton.bones.forEach((bone) => {
+              boneMap.set(bone.name, bone)
+              originalTransforms.set(bone.name, {
+                position: bone.position.clone(),
+                rotation: bone.rotation.clone(),
+                scale: bone.scale.clone()
+              })
+            })
+          }
+          if ((child as THREE.Bone).isBone) {
+            boneMap.set(child.name, child as THREE.Bone)
+            if (!originalTransforms.has(child.name)) {
+              originalTransforms.set(child.name, {
+                position: (child as THREE.Bone).position.clone(),
+                rotation: (child as THREE.Bone).rotation.clone(),
+                scale: (child as THREE.Bone).scale.clone()
+              })
+            }
+          }
+        })
+
+        // Create bone helpers
+        if (boneVisualizerGroupRef.current) {
+          boneVisualizerGroupRef.current.clear()
+        }
+        const helpers: THREE.Group[] = []
+        boneMap.forEach((bone, name) => {
+          const helper = createBoneHelper(name)
+          helper.userData.boneName = name
+          helper.userData.bone = bone
+          if (boneVisualizerGroupRef.current) {
+            boneVisualizerGroupRef.current.add(helper)
+          }
+          helpers.push(helper)
+        })
+        boneHelpersRef.current = helpers
+
+        setBones(boneMap)
+        originalTransformsRef.current = originalTransforms
+        setModelLoaded(true)
+        setShowWelcome(false)
+
+        showToast(`Project restored! Found ${boneMap.size} bones.`, 'success')
+      }, (error) => {
+        console.error('Failed to restore model:', error)
+        showToast('Failed to restore model', 'error')
+      })
+    } catch (err) {
+      console.error('Error restoring model:', err)
+      showToast('Failed to restore model', 'error')
+    }
+  }, [showToast])
+
+  // Load initial data when component mounts
+  const initialDataLoadedRef = useRef(false)
+  useEffect(() => {
+    if (initialDataLoadedRef.current) return
+    if (!initialData) return
+    if (!sceneRef.current) return  // Wait for scene to be ready
+
+    initialDataLoadedRef.current = true
+
+    // Load model if we have model data
+    if (initialData.modelData && initialData.modelName) {
+      loadModelFromBase64(initialData.modelData, initialData.modelName)
+
+      // Load animations after a small delay to ensure model is loaded
+      if (initialData.animations && initialData.animations.length > 0) {
+        setTimeout(() => {
+          const newAnimations = new Map<string, Animation>()
+          initialData.animations!.forEach((animData: any, index: number) => {
+            const animId = `anim_${animationCounterRef.current++}`
+            const keyframes = new Map<number, Map<string, BoneKeyframe>>()
+            
+            if (animData.keyframes) {
+              Object.entries(animData.keyframes).forEach(([frameStr, bonesData]: [string, any]) => {
+                const frame = parseInt(frameStr)
+                const boneKeyframes = new Map<string, BoneKeyframe>()
+                Object.entries(bonesData).forEach(([boneName, boneData]: [string, any]) => {
+                  boneKeyframes.set(boneName, {
+                    position: new THREE.Vector3(...boneData.position),
+                    rotation: new THREE.Quaternion(...boneData.rotation),
+                    scale: new THREE.Vector3(...boneData.scale)
+                  })
+                })
+                keyframes.set(frame, boneKeyframes)
+              })
+            }
+
+            newAnimations.set(animId, {
+              name: animData.name || `Animation ${index + 1}`,
+              fps: animData.fps || 24,
+              totalFrames: animData.totalFrames || 30,
+              speed: animData.speed || 1,
+              loop: animData.loop !== false,
+              keyframes
+            })
+          })
+
+          if (newAnimations.size > 0) {
+            setAnimations(newAnimations)
+            setCurrentAnimationId(newAnimations.keys().next().value)
+          }
+        }, 100)
+      }
+    } else if (initialData.animations && initialData.animations.length > 0) {
+      // We have animations but no model - just load animations and show welcome
+      // (user will need to load a model)
+    }
+  }, [initialData, loadModelFromBase64])
 
   // Export JSON
   const exportJSON = useCallback(() => {
