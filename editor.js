@@ -588,7 +588,7 @@ class GLBAnimationEditor {
     
     convertClipToAnimationData(clip) {
         const duration = clip.duration;
-        const fps = 24;
+        const fps = 60;
         const totalFrames = Math.ceil(duration * fps);
         const keyframes = new Map();
         
@@ -2419,7 +2419,7 @@ class GLBAnimationEditor {
         const gltf = this.pendingGLBImport.gltf;
         
         const sampleRate = parseInt(document.getElementById('glb-sample-rate')?.value || '2');
-        const targetFPS = parseInt(document.getElementById('glb-target-fps')?.value || '24');
+        const targetFPS = parseInt(document.getElementById('glb-target-fps')?.value || '60');
         
         this.showToast(`Converting "${clip.name}"...`, 'info');
         

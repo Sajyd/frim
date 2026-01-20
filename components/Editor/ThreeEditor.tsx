@@ -6,10 +6,46 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import {
+  FolderOpen,
+  Download,
+  Upload,
+  FileJson,
+  Save,
+  Undo2,
+  Redo2,
+  MousePointer2,
+  RotateCcw,
+  Move,
+  Maximize2,
+  Grid3X3,
+  Bone,
+  Play,
+  Pause,
+  Square,
+  SkipBack,
+  SkipForward,
+  Plus,
+  Copy,
+  Trash2,
+  Key,
+  RefreshCw,
+  Clipboard,
+  ClipboardPaste,
+  FlipHorizontal,
+  Zap,
+  Lock,
+  Package,
+  Bot,
+  Check,
+  X,
+  AlertTriangle,
+  Info
+} from 'lucide-react'
 
 interface EditorProps {
   projectName: string
-  onSave: () => void
+  onSave: (data: ProjectData) => void
   saving: boolean
   initialData?: {
     animations?: any[]
@@ -18,6 +54,11 @@ interface EditorProps {
   }
   animationLimit?: number
   isPro?: boolean
+}
+
+interface ProjectData {
+  animations: any[]
+  modelName: string
 }
 
 interface Animation {
@@ -99,12 +140,52 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
   const speed = currentAnimation?.speed || 1
   const loop = currentAnimation?.loop !== false
 
+  // Serialize animations for saving
+  const serializeAnimations = useCallback(() => {
+    const serialized: any[] = []
+    animations.forEach((anim, id) => {
+      const keyframesObj: Record<number, Record<string, any>> = {}
+      anim.keyframes.forEach((frameData, frame) => {
+        keyframesObj[frame] = {}
+        frameData.forEach((boneData, boneName) => {
+          keyframesObj[frame][boneName] = {
+            position: boneData.position.toArray(),
+            rotation: [boneData.rotation.x, boneData.rotation.y, boneData.rotation.z, boneData.rotation.w],
+            scale: boneData.scale.toArray()
+          }
+        })
+      })
+      serialized.push({
+        id,
+        name: anim.name,
+        fps: anim.fps,
+        totalFrames: anim.totalFrames,
+        speed: anim.speed,
+        loop: anim.loop,
+        keyframes: keyframesObj
+      })
+    })
+    return serialized
+  }, [animations])
+
+  // Get current project data for saving
+  const getProjectData = useCallback((): ProjectData => {
+    return {
+      animations: serializeAnimations(),
+      modelName: loadedFilename
+    }
+  }, [serializeAnimations, loadedFilename])
+
+  // Expose save function
+  const handleSave = useCallback(() => {
+    onSave(getProjectData())
+  }, [onSave, getProjectData])
+
   // Toast notification
   const showToast = useCallback((message: string, type: 'success' | 'error' | 'warning' | 'info' = 'info') => {
     const container = document.getElementById('toast-container')
     if (!container) return
 
-    const icons: Record<string, string> = { success: '✓', error: '✕', warning: '⚠', info: 'ℹ' }
     const colors: Record<string, string> = {
       success: 'bg-green-500',
       error: 'bg-red-500',
@@ -114,7 +195,19 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
 
     const toast = document.createElement('div')
     toast.className = `flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${colors[type]} text-white animate-slide-up`
-    toast.innerHTML = `<span>${icons[type]}</span><span>${message}</span>`
+    
+    const iconSpan = document.createElement('span')
+    iconSpan.className = 'w-4 h-4'
+    if (type === 'success') iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>'
+    else if (type === 'error') iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>'
+    else if (type === 'warning') iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 9v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>'
+    else iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4m0-4h.01"/></svg>'
+    
+    const textSpan = document.createElement('span')
+    textSpan.textContent = message
+    
+    toast.appendChild(iconSpan)
+    toast.appendChild(textSpan)
     container.appendChild(toast)
 
     setTimeout(() => {
@@ -437,12 +530,12 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           glbAnimations.forEach((clip, index) => {
             const animId = `anim_${animationCounterRef.current++}`
             const { keyframes, totalFrames } = convertGLBClipToKeyframes(
-              clip, boneMap, originalTransforms, 24, 2
+              clip, boneMap, originalTransforms, 60, 2
             )
             
             newAnimations.set(animId, {
               name: clip.name || `Animation ${index + 1}`,
-              fps: 24,
+              fps: 60,
               totalFrames,
               speed: 1,
               loop: true,
@@ -954,7 +1047,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     clip: THREE.AnimationClip, 
     boneMap: Map<string, THREE.Bone>,
     originalTransforms: Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>,
-    targetFPS: number = 24,
+    targetFPS: number = 60,
     sampleRate: number = 2
   ) => {
     const duration = clip.duration
@@ -1122,12 +1215,12 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
             glbAnimations.forEach((clip, index) => {
               const animId = `anim_${animationCounterRef.current++}`
               const { keyframes, totalFrames } = convertGLBClipToKeyframes(
-                clip, boneMap, originalTransforms, 24, 2
+                clip, boneMap, originalTransforms, 60, 2
               )
               
               newAnimations.set(animId, {
                 name: clip.name || `Animation ${index + 1}`,
-                fps: 24,
+                fps: 60,
                 totalFrames,
                 speed: 1,
                 loop: true,
@@ -1540,8 +1633,8 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
       {showWelcome && (
         <div className="absolute inset-0 bg-[#0f1117]/95 backdrop-blur-sm flex items-center justify-center z-50">
           <div className="max-w-md w-full mx-4 bg-[#151821] border border-[#252b3d] rounded-2xl p-8 text-center">
-            <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-[#22c55e] to-[#16a34a] rounded-2xl flex items-center justify-center text-4xl shadow-lg shadow-[#22c55e]/20">
-              🎬
+            <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-[#22c55e] to-[#16a34a] rounded-2xl flex items-center justify-center shadow-lg shadow-[#22c55e]/20">
+              <Bone className="w-10 h-10 text-white" />
             </div>
             <h2 className="text-2xl font-bold text-white mb-2">Welcome to Frim</h2>
             <p className="text-[#a1a1aa] mb-8">GLB Animation Editor - Create and edit skeletal animations</p>
@@ -1551,14 +1644,16 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                 onClick={loadSampleModel}
                 className="w-full py-3 px-4 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
               >
-                🤖 Load Sample Model
+                <Bot className="w-5 h-5" />
+                Load Sample Model
               </button>
               
               <button
                 onClick={() => fileInputRef.current?.click()}
                 className="w-full py-3 px-4 bg-[#1c2130] text-white border border-[#252b3d] rounded-xl font-semibold hover:bg-[#252b3d] transition-colors flex items-center justify-center gap-2"
               >
-                📂 Import GLB/GLTF File
+                <FolderOpen className="w-5 h-5" />
+                Import GLB/GLTF File
               </button>
             </div>
             
@@ -1592,89 +1687,110 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
         {/* File operations */}
         <button
           onClick={() => fileInputRef.current?.click()}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
           title="Load Model (GLB/GLTF)"
         >
-          📂
+          <FolderOpen className="w-5 h-5" />
         </button>
         <button
           onClick={() => document.getElementById('json-import-input')?.click()}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
           title="Import Animation (JSON)"
         >
-          📥
+          <Upload className="w-5 h-5" />
         </button>
         <button
           onClick={exportJSON}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
           title="Export JSON"
         >
-          📄
+          <FileJson className="w-5 h-5" />
         </button>
         <button
           onClick={exportGLB}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
           title="Export GLB with Animation"
         >
-          💾
+          <Download className="w-5 h-5" />
         </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
         {/* Undo/Redo */}
         <button
           onClick={undo}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors disabled:opacity-30"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors disabled:opacity-30"
           title="Undo (Ctrl+Z)"
           disabled={historyIndex <= 0}
         >
-          ↩
+          <Undo2 className="w-5 h-5" />
         </button>
         <button
           onClick={redo}
-          className="w-10 h-10 rounded-lg flex items-center justify-center text-lg text-[#a1a1aa] hover:bg-[#1c2130] transition-colors disabled:opacity-30"
+          className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors disabled:opacity-30"
           title="Redo (Ctrl+Y)"
           disabled={historyIndex >= history.length - 1}
         >
-          ↪
+          <Redo2 className="w-5 h-5" />
         </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
         {/* Transform tools */}
-        {(['select', 'rotate', 'translate', 'scale'] as const).map(tool => (
-          <button
-            key={tool}
-            onClick={() => setCurrentTool(tool)}
-            className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-colors ${
-              currentTool === tool ? 'bg-[#22c55e] text-[#09090b]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
-            }`}
-            title={`${tool.charAt(0).toUpperCase() + tool.slice(1)} (${tool[0].toUpperCase()})`}
-          >
-            {tool === 'select' && '◇'}
-            {tool === 'rotate' && '↻'}
-            {tool === 'translate' && '✥'}
-            {tool === 'scale' && '⤢'}
-          </button>
-        ))}
+        <button
+          onClick={() => setCurrentTool('select')}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            currentTool === 'select' ? 'bg-[#22c55e] text-[#09090b]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
+          }`}
+          title="Select (V)"
+        >
+          <MousePointer2 className="w-5 h-5" />
+        </button>
+        <button
+          onClick={() => setCurrentTool('rotate')}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            currentTool === 'rotate' ? 'bg-[#22c55e] text-[#09090b]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
+          }`}
+          title="Rotate (R)"
+        >
+          <RotateCcw className="w-5 h-5" />
+        </button>
+        <button
+          onClick={() => setCurrentTool('translate')}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            currentTool === 'translate' ? 'bg-[#22c55e] text-[#09090b]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
+          }`}
+          title="Translate (T)"
+        >
+          <Move className="w-5 h-5" />
+        </button>
+        <button
+          onClick={() => setCurrentTool('scale')}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
+            currentTool === 'scale' ? 'bg-[#22c55e] text-[#09090b]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
+          }`}
+          title="Scale (S)"
+        >
+          <Maximize2 className="w-5 h-5" />
+        </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
         {/* View toggles */}
         <button
           onClick={() => setShowGrid(v => !v)}
-          className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-colors ${
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
             showGrid ? 'bg-[#22c55e]/20 text-[#22c55e]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
           }`}
           title="Toggle Grid"
         >
-          #
+          <Grid3X3 className="w-5 h-5" />
         </button>
         <button
           onClick={() => setShowBoneView(v => !v)}
-          className={`w-10 h-10 rounded-lg flex items-center justify-center text-lg transition-colors ${
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors ${
             showBoneView ? 'bg-[#22c55e]/20 text-[#22c55e]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
           }`}
           title="Toggle Bone View (B)"
         >
-          🦴
+          <Bone className="w-5 h-5" />
         </button>
       </div>
 
@@ -1740,7 +1856,10 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           </div>
         </div>
         <div className="p-3 border-t border-[#252b3d]">
-          <p className="text-[10px] text-[#71717a]">📦 {loadedFilename || 'No model'}</p>
+          <p className="text-[10px] text-[#71717a] flex items-center gap-1">
+            <Package className="w-3 h-3" />
+            {loadedFilename || 'No model'}
+          </p>
         </div>
       </div>
 
@@ -1836,21 +1955,32 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
             <div className="grid grid-cols-2 gap-2">
               <button
                 onClick={addKeyframe}
-                className="py-2 bg-[#22c55e] text-[#09090b] rounded-lg font-semibold text-xs hover:bg-[#4ade80] transition-colors"
+                className="py-2 bg-[#22c55e] text-[#09090b] rounded-lg font-semibold text-xs hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-1"
               >
-                🔑 Keyframe
+                <Key className="w-3.5 h-3.5" />
+                Keyframe
               </button>
               <button
                 onClick={resetBone}
-                className="py-2 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors"
+                className="py-2 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
               >
-                ↺ Reset
+                <RefreshCw className="w-3.5 h-3.5" />
+                Reset
               </button>
             </div>
             <div className="grid grid-cols-3 gap-1">
-              <button onClick={copyPose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46]">Copy</button>
-              <button onClick={pastePose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46]">Paste</button>
-              <button onClick={mirrorPose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46]">Mirror</button>
+              <button onClick={copyPose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46] flex items-center justify-center gap-1">
+                <Clipboard className="w-3 h-3" />
+                Copy
+              </button>
+              <button onClick={pastePose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46] flex items-center justify-center gap-1">
+                <ClipboardPaste className="w-3 h-3" />
+                Paste
+              </button>
+              <button onClick={mirrorPose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46] flex items-center justify-center gap-1">
+                <FlipHorizontal className="w-3 h-3" />
+                Mirror
+              </button>
             </div>
           </div>
         ) : (
@@ -1872,14 +2002,14 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           <button
             onClick={createNewAnimation}
             disabled={!isPro && animations.size >= animationLimit}
-            className={`w-6 h-6 rounded text-xs font-bold transition-colors ${
+            className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
               !isPro && animations.size >= animationLimit
                 ? 'bg-[#252b3d] text-[#71717a] cursor-not-allowed'
                 : 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]'
             }`}
             title={!isPro && animations.size >= animationLimit ? 'Upgrade to Pro for more animations' : 'Create new animation'}
           >
-            {!isPro && animations.size >= animationLimit ? '🔒' : '+'}
+            {!isPro && animations.size >= animationLimit ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-4 h-4" />}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
@@ -1923,17 +2053,17 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                   <div className="flex gap-1">
                     <button
                       onClick={(e) => { e.stopPropagation(); duplicateAnimation(id) }}
-                      className="w-5 h-5 rounded text-[10px] text-[#71717a] hover:bg-[#252b3d]"
+                      className="w-5 h-5 rounded flex items-center justify-center text-[#71717a] hover:bg-[#252b3d] hover:text-[#a1a1aa]"
                       title="Duplicate"
                     >
-                      📋
+                      <Copy className="w-3 h-3" />
                     </button>
                     <button
                       onClick={(e) => { e.stopPropagation(); deleteAnimation(id) }}
-                      className="w-5 h-5 rounded text-[10px] text-[#71717a] hover:bg-[#252b3d]"
+                      className="w-5 h-5 rounded flex items-center justify-center text-[#71717a] hover:bg-[#252b3d] hover:text-red-400"
                       title="Delete"
                     >
-                      🗑
+                      <Trash2 className="w-3 h-3" />
                     </button>
                   </div>
                 </div>
@@ -1953,29 +2083,29 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           <div className="flex items-center gap-2">
             <button
               onClick={() => goToFrame(currentFrame - 1)}
-              className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] text-sm"
+              className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] flex items-center justify-center"
             >
-              ⏮
+              <SkipBack className="w-4 h-4" />
             </button>
             <button
               onClick={() => setIsPlaying(p => !p)}
-              className={`w-8 h-8 border border-[#252b3d] rounded-md text-sm ${
+              className={`w-8 h-8 border border-[#252b3d] rounded-md flex items-center justify-center ${
                 isPlaying ? 'bg-[#22c55e] text-[#09090b]' : 'bg-[#151821] text-[#a1a1aa] hover:bg-[#1c2130]'
               }`}
             >
-              {isPlaying ? '⏸' : '▶'}
+              {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
             </button>
             <button
               onClick={() => { setIsPlaying(false); goToFrame(0) }}
-              className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] text-sm"
+              className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] flex items-center justify-center"
             >
-              ⏹
+              <Square className="w-4 h-4" />
             </button>
             <button
               onClick={() => goToFrame(currentFrame + 1)}
-              className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] text-sm"
+              className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] flex items-center justify-center"
             >
-              ⏭
+              <SkipForward className="w-4 h-4" />
             </button>
             <div className="flex items-center gap-1 font-mono text-sm text-[#a1a1aa] ml-2">
               <input
@@ -2143,9 +2273,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
           <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
             <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              <svg className="w-8 h-8 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-              </svg>
+              <Zap className="w-8 h-8 text-[#22c55e]" />
             </div>
             <h2 className="text-xl font-semibold mb-2">Animation Limit Reached</h2>
             <p className="text-[#a1a1aa] mb-6">
@@ -2157,9 +2285,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                 href="/pricing"
                 className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                </svg>
+                <Zap className="w-5 h-5" />
                 Upgrade to Pro - $12/month
               </a>
               <button

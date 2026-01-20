@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
+import { ChevronLeft, Cloud, Save, Check, X } from 'lucide-react'
 
 // Dynamically import the editor with no SSR
 const ThreeEditor = dynamic(() => import('@/components/Editor/ThreeEditor'), {
@@ -29,6 +30,11 @@ interface Project {
   modelName?: string
 }
 
+interface ProjectData {
+  animations: any[]
+  modelName: string
+}
+
 interface Subscription {
   plan: string
   limits: {
@@ -47,7 +53,9 @@ export default function EditorPage() {
   const [saving, setSaving] = useState(false)
   const [lastSaved, setLastSaved] = useState<Date | null>(null)
   const [subscription, setSubscription] = useState<Subscription | null>(null)
+  const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
+  const pendingDataRef = useRef<ProjectData | null>(null)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -61,6 +69,18 @@ export default function EditorPage() {
       fetchSubscription()
     }
   }, [session, projectId])
+
+  // Warn user before leaving with unsaved changes
+  useEffect(() => {
+    const handleBeforeUnload = (e: BeforeUnloadEvent) => {
+      if (hasUnsavedChanges) {
+        e.preventDefault()
+        e.returnValue = ''
+      }
+    }
+    window.addEventListener('beforeunload', handleBeforeUnload)
+    return () => window.removeEventListener('beforeunload', handleBeforeUnload)
+  }, [hasUnsavedChanges])
 
   const fetchProject = async () => {
     try {
@@ -91,23 +111,31 @@ export default function EditorPage() {
     }
   }
 
-  const saveProject = useCallback(async () => {
+  const saveProject = useCallback(async (data?: ProjectData) => {
     if (!project) return
+
+    const dataToSave = data || pendingDataRef.current
+    if (!dataToSave) {
+      showToast('Nothing to save', 'info')
+      return
+    }
 
     setSaving(true)
     try {
-      // For now, just save the project name - we'll add animation data later
       const res = await fetch(`/api/projects/${projectId}`, {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name: project.name,
-          animations: [],
+          animations: dataToSave.animations,
+          modelName: dataToSave.modelName,
         }),
       })
 
       if (res.ok) {
         setLastSaved(new Date())
+        setHasUnsavedChanges(false)
+        pendingDataRef.current = null
         showToast('Project saved!', 'success')
       } else {
         showToast('Failed to save project', 'error')
@@ -120,11 +148,20 @@ export default function EditorPage() {
     }
   }, [project, projectId])
 
-  // Auto-save every 2 minutes
+  // Handle data change from editor
+  const handleEditorSave = useCallback((data: ProjectData) => {
+    pendingDataRef.current = data
+    setHasUnsavedChanges(true)
+    saveProject(data)
+  }, [saveProject])
+
+  // Auto-save every 2 minutes if there are unsaved changes
   useEffect(() => {
     if (project) {
       autoSaveTimerRef.current = setInterval(() => {
-        saveProject()
+        if (hasUnsavedChanges && pendingDataRef.current) {
+          saveProject(pendingDataRef.current)
+        }
       }, 120000)
     }
 
@@ -133,14 +170,16 @@ export default function EditorPage() {
         clearInterval(autoSaveTimerRef.current)
       }
     }
-  }, [project, saveProject])
+  }, [project, hasUnsavedChanges, saveProject])
 
   // Keyboard shortcut for save
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if ((e.metaKey || e.ctrlKey) && e.key === 's') {
         e.preventDefault()
-        saveProject()
+        if (pendingDataRef.current) {
+          saveProject(pendingDataRef.current)
+        }
       }
     }
 
@@ -156,10 +195,18 @@ export default function EditorPage() {
     toast.className = `fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2 animate-slide-up ${
       type === 'success' ? 'bg-green-500/90' : type === 'error' ? 'bg-red-500/90' : 'bg-blue-500/90'
     } text-white`
-    toast.innerHTML = `
-      <span>${type === 'success' ? '✓' : type === 'error' ? '✕' : 'ℹ'}</span>
-      <span>${message}</span>
-    `
+    
+    const iconSpan = document.createElement('span')
+    iconSpan.className = 'w-4 h-4'
+    if (type === 'success') iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6L9 17l-5-5"/></svg>'
+    else if (type === 'error') iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 6L6 18M6 6l12 12"/></svg>'
+    else iconSpan.innerHTML = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="10"/><path d="M12 16v-4m0-4h.01"/></svg>'
+    
+    const textSpan = document.createElement('span')
+    textSpan.textContent = message
+    
+    toast.appendChild(iconSpan)
+    toast.appendChild(textSpan)
     container.appendChild(toast)
 
     setTimeout(() => {
@@ -194,9 +241,7 @@ export default function EditorPage() {
             href="/dashboard"
             className="flex items-center gap-2 text-[#a1a1aa] hover:text-[#f4f4f5] transition-colors"
           >
-            <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 19l-7-7 7-7" />
-            </svg>
+            <ChevronLeft className="w-5 h-5" />
             <span className="text-sm">Dashboard</span>
           </Link>
           <div className="w-px h-6 bg-[#252b3d]" />
@@ -216,6 +261,9 @@ export default function EditorPage() {
 
         <div className="flex-1 flex justify-center items-center gap-3">
           <span className="text-sm font-medium">{project?.name || 'Untitled Project'}</span>
+          {hasUnsavedChanges && (
+            <span className="text-xs text-yellow-500">• Unsaved</span>
+          )}
           {!isPro && (
             <Link
               href="/pricing"
@@ -228,14 +276,15 @@ export default function EditorPage() {
 
         <div className="flex items-center gap-3">
           {lastSaved && (
-            <span className="text-xs text-[#71717a]">
+            <span className="text-xs text-[#71717a] flex items-center gap-1">
+              <Cloud className="w-3.5 h-3.5" />
               Saved {lastSaved.toLocaleTimeString()}
             </span>
           )}
           <button
-            onClick={saveProject}
-            disabled={saving}
-            className="flex items-center gap-2 px-4 py-2 bg-[#22c55e] text-[#09090b] rounded-lg text-sm font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50"
+            onClick={() => pendingDataRef.current && saveProject(pendingDataRef.current)}
+            disabled={saving || !hasUnsavedChanges}
+            className="flex items-center gap-2 px-4 py-2 bg-[#22c55e] text-[#09090b] rounded-lg text-sm font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? (
               <>
@@ -244,9 +293,7 @@ export default function EditorPage() {
               </>
             ) : (
               <>
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                </svg>
+                <Save className="w-4 h-4" />
                 Save
               </>
             )}
@@ -258,8 +305,13 @@ export default function EditorPage() {
       <div className="pt-[52px]">
         <ThreeEditor 
           projectName={project?.name || 'Untitled'} 
-          onSave={saveProject}
+          onSave={handleEditorSave}
           saving={saving}
+          initialData={project ? {
+            animations: project.animations,
+            modelData: project.modelData,
+            modelName: project.modelName
+          } : undefined}
           animationLimit={animationLimit}
           isPro={isPro}
         />
