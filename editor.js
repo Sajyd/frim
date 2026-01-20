@@ -1875,10 +1875,11 @@ class GLBAnimationEditor {
         }
         
         // Add keyframe with original bone transform values
+        // Explicitly construct new Vector3/Quaternion to ensure proper types
         this.keyframes.get(this.currentFrame).set(this.selectedBone.name, {
-            position: original.position.clone(),
+            position: new THREE.Vector3().copy(original.position),
             rotation: new THREE.Quaternion().setFromEuler(original.rotation),
-            scale: original.scale.clone()
+            scale: new THREE.Vector3().copy(original.scale)
         });
         
         // Also reset the bone visually to match
