@@ -2158,99 +2158,86 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     }
 
     // === HIPS ===
-    // Calculate hip rotation from the hip-to-hip vector and forward direction
-    const hipVector = new THREE.Vector3().subVectors(rightHip, leftHip).normalize()
-    const spineDir = new THREE.Vector3().subVectors(midShoulder, midHip).normalize()
-    const hipForward = new THREE.Vector3().crossVectors(hipVector, spineDir).normalize()
+    // Calculate hip orientation using quaternion from basis vectors (no Euler angles)
+    const hipRight = new THREE.Vector3().subVectors(rightHip, leftHip).normalize()
+    const hipUp = new THREE.Vector3().subVectors(midShoulder, midHip).normalize()
+    const hipForward = new THREE.Vector3().crossVectors(hipRight, hipUp).normalize()
+    // Recalculate up to ensure orthogonality
+    const hipUpOrtho = new THREE.Vector3().crossVectors(hipForward, hipRight).normalize()
     
-    // Calculate hip twist (rotation around Y)
-    const hipYaw = Math.atan2(hipForward.x, hipForward.z)
-    // Calculate hip tilt (forward/backward lean)
-    const hipPitch = Math.asin(Math.max(-1, Math.min(1, -spineDir.z))) * 0.5
-    // Calculate hip roll (side lean)
-    const hipRoll = Math.atan2(hipVector.y, hipVector.x) 
-    
-    const hipsRotation = new THREE.Quaternion().setFromEuler(
-      new THREE.Euler(hipPitch, hipYaw, hipRoll * 0.3, 'YXZ')
-    )
+    // Build rotation matrix from basis vectors and convert to quaternion
+    const hipMatrix = new THREE.Matrix4().makeBasis(hipRight, hipUpOrtho, hipForward)
+    const hipsRotation = new THREE.Quaternion().setFromRotationMatrix(hipMatrix)
     setBoneKeyframe('Hips', hipsRotation)
 
     // === SPINE CHAIN ===
-    // Spine direction from hips to shoulders
-    const spineRotation = calculateBoneRotation(midHip, midShoulder, REST_UP)
+    // Spine direction from hips to shoulders using pure quaternion
+    const spineDir = new THREE.Vector3().subVectors(midShoulder, midHip).normalize()
+    const spineRotation = new THREE.Quaternion().setFromUnitVectors(REST_UP, spineDir)
     
-    // Distribute spine rotation across spine bones (30%, 30%, 40%)
-    const spineQuat = new THREE.Quaternion().slerpQuaternions(
-      new THREE.Quaternion(), spineRotation, 0.3
-    )
-    const spine1Quat = new THREE.Quaternion().slerpQuaternions(
-      new THREE.Quaternion(), spineRotation, 0.3
-    )
-    const spine2Quat = new THREE.Quaternion().slerpQuaternions(
-      new THREE.Quaternion(), spineRotation, 0.4
-    )
+    // Distribute spine rotation across spine bones using SLERP (30%, 30%, 40%)
+    const identity = new THREE.Quaternion()
+    const spineQuat = new THREE.Quaternion().slerpQuaternions(identity, spineRotation, 0.3)
+    const spine1Quat = new THREE.Quaternion().slerpQuaternions(identity, spineRotation, 0.3)
+    const spine2Quat = new THREE.Quaternion().slerpQuaternions(identity, spineRotation, 0.4)
     
     setBoneKeyframe('Spine', spineQuat)
     setBoneKeyframe('Spine1', spine1Quat)
     setBoneKeyframe('Spine2', spine2Quat)
 
     // === NECK & HEAD ===
-    // Simple upward direction for neck (skip face landmarks)
     setBoneKeyframe('Neck', new THREE.Quaternion())
     setBoneKeyframe('Head', new THREE.Quaternion())
 
     // === LEFT ARM CHAIN ===
-    // Upper arm: from shoulder to elbow
+    // Upper arm: world space rotation
     const leftArmDir = new THREE.Vector3().subVectors(leftElbow, leftShoulder).normalize()
     const leftArmRotation = new THREE.Quaternion().setFromUnitVectors(REST_LEFT, leftArmDir)
     
-    // Forearm: from elbow to wrist (relative to upper arm)
-    const leftForearmDir = new THREE.Vector3().subVectors(leftWrist, leftElbow).normalize()
-    // Calculate forearm rotation relative to the arm
-    const leftForearmLocal = leftForearmDir.clone().applyQuaternion(leftArmRotation.clone().invert())
-    const leftForearmRotation = new THREE.Quaternion().setFromUnitVectors(REST_LEFT, leftForearmLocal)
+    // Forearm: calculate in world space, then get local rotation relative to parent
+    const leftForearmDirWorld = new THREE.Vector3().subVectors(leftWrist, leftElbow).normalize()
+    const leftForearmRotWorld = new THREE.Quaternion().setFromUnitVectors(REST_LEFT, leftForearmDirWorld)
+    // Local rotation = inverse(parent) * world
+    const leftForearmRotation = leftArmRotation.clone().invert().multiply(leftForearmRotWorld)
     
     setBoneKeyframe('LeftShoulder', new THREE.Quaternion())
     setBoneKeyframe('LeftArm', leftArmRotation)
     setBoneKeyframe('LeftForeArm', leftForearmRotation)
 
     // === RIGHT ARM CHAIN ===
-    // Upper arm: from shoulder to elbow
     const rightArmDir = new THREE.Vector3().subVectors(rightElbow, rightShoulder).normalize()
     const rightArmRotation = new THREE.Quaternion().setFromUnitVectors(REST_RIGHT, rightArmDir)
     
-    // Forearm: from elbow to wrist (relative to upper arm)
-    const rightForearmDir = new THREE.Vector3().subVectors(rightWrist, rightElbow).normalize()
-    const rightForearmLocal = rightForearmDir.clone().applyQuaternion(rightArmRotation.clone().invert())
-    const rightForearmRotation = new THREE.Quaternion().setFromUnitVectors(REST_RIGHT, rightForearmLocal)
+    const rightForearmDirWorld = new THREE.Vector3().subVectors(rightWrist, rightElbow).normalize()
+    const rightForearmRotWorld = new THREE.Quaternion().setFromUnitVectors(REST_RIGHT, rightForearmDirWorld)
+    // Local rotation = inverse(parent) * world
+    const rightForearmRotation = rightArmRotation.clone().invert().multiply(rightForearmRotWorld)
     
     setBoneKeyframe('RightShoulder', new THREE.Quaternion())
     setBoneKeyframe('RightArm', rightArmRotation)
     setBoneKeyframe('RightForeArm', rightForearmRotation)
 
     // === LEFT LEG CHAIN ===
-    // Thigh: from hip to knee
     const leftThighDir = new THREE.Vector3().subVectors(leftKnee, leftHip).normalize()
     const leftUpLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, leftThighDir)
     
-    // Shin: from knee to ankle (relative to thigh)
-    const leftShinDir = new THREE.Vector3().subVectors(leftAnkle, leftKnee).normalize()
-    const leftShinLocal = leftShinDir.clone().applyQuaternion(leftUpLegRotation.clone().invert())
-    const leftLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, leftShinLocal)
+    const leftShinDirWorld = new THREE.Vector3().subVectors(leftAnkle, leftKnee).normalize()
+    const leftShinRotWorld = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, leftShinDirWorld)
+    // Local rotation = inverse(parent) * world
+    const leftLegRotation = leftUpLegRotation.clone().invert().multiply(leftShinRotWorld)
     
     setBoneKeyframe('LeftUpLeg', leftUpLegRotation)
     setBoneKeyframe('LeftLeg', leftLegRotation)
     setBoneKeyframe('LeftFoot', new THREE.Quaternion())
 
     // === RIGHT LEG CHAIN ===
-    // Thigh: from hip to knee
     const rightThighDir = new THREE.Vector3().subVectors(rightKnee, rightHip).normalize()
     const rightUpLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, rightThighDir)
     
-    // Shin: from knee to ankle (relative to thigh)
-    const rightShinDir = new THREE.Vector3().subVectors(rightAnkle, rightKnee).normalize()
-    const rightShinLocal = rightShinDir.clone().applyQuaternion(rightUpLegRotation.clone().invert())
-    const rightLegRotation = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, rightShinLocal)
+    const rightShinDirWorld = new THREE.Vector3().subVectors(rightAnkle, rightKnee).normalize()
+    const rightShinRotWorld = new THREE.Quaternion().setFromUnitVectors(REST_DOWN, rightShinDirWorld)
+    // Local rotation = inverse(parent) * world  
+    const rightLegRotation = rightUpLegRotation.clone().invert().multiply(rightShinRotWorld)
     
     setBoneKeyframe('RightUpLeg', rightUpLegRotation)
     setBoneKeyframe('RightLeg', rightLegRotation)
