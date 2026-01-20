@@ -46,6 +46,13 @@ model User {
   projects      Project[]
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt
+  
+  // Subscription fields
+  plan              String    @default("free") // free, pro
+  stripeCustomerId  String?   @unique
+  stripeSubscriptionId String?
+  stripePriceId     String?
+  stripeCurrentPeriodEnd DateTime?
 }
 
 model VerificationToken {

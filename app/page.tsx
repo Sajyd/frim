@@ -45,6 +45,9 @@ export default function Home() {
             <span className="font-display text-2xl font-semibold">frim</span>
           </div>
           <div className="flex items-center gap-4">
+            <Link href="/pricing" className="text-sm text-dark-400 hover:text-dark-200 transition-colors">
+              Pricing
+            </Link>
             <Link href="/auth/signin" className="btn-secondary text-sm py-2">
               Sign In
             </Link>
