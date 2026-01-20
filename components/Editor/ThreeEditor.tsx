@@ -167,6 +167,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Serialize animations for saving
   const serializeAnimations = useCallback(() => {
+    console.log('serializeAnimations called, animations count:', animations.size)
     const serialized: any[] = []
     animations.forEach((anim, id) => {
       const keyframesObj: Record<number, Record<string, any>> = {}
@@ -1914,10 +1915,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       }
       return
     }
-    // Notify parent of changes
-    if (notifyChangeRef.current) {
-      notifyChangeRef.current()
-    }
+    // Notify parent of changes with a small delay to ensure state is settled
+    const timeoutId = setTimeout(() => {
+      if (notifyChangeRef.current) {
+        console.log('Notifying parent of animation changes, animations count:', animations.size)
+        notifyChangeRef.current()
+      }
+    }, 50)
+    return () => clearTimeout(timeoutId)
   }, [animations])
 
   // Save initial state to history when model loads

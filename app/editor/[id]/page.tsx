@@ -124,6 +124,13 @@ export default function EditorPage() {
     }
 
     setSaving(true)
+    console.log('Saving project with data:', {
+      animationsCount: dataToSave.animations?.length,
+      firstAnimName: dataToSave.animations?.[0]?.name,
+      hasModelData: !!dataToSave.modelData,
+      modelName: dataToSave.modelName,
+      hasThumbnail: !!dataToSave.thumbnail
+    })
     try {
       const res = await fetch(`/api/projects/${projectId}`, {
         method: 'PUT',
@@ -155,6 +162,12 @@ export default function EditorPage() {
 
   // Handle data change from editor (just mark as changed, don't auto-save)
   const handleEditorChange = useCallback((data: ProjectData) => {
+    console.log('handleEditorChange received data:', {
+      animationsCount: data.animations?.length,
+      hasModelData: !!data.modelData,
+      modelName: data.modelName,
+      hasThumbnail: !!data.thumbnail
+    })
     pendingDataRef.current = data
     setHasUnsavedChanges(true)
   }, [])
