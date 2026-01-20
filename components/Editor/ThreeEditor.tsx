@@ -152,6 +152,12 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [exportIncludeModel, setExportIncludeModel] = useState(true)
   const [exportingGLB, setExportingGLB] = useState(false)
 
+  // Drag-to-select state
+  const [isDragSelecting, setIsDragSelecting] = useState(false)
+  const [selectionStart, setSelectionStart] = useState<{ x: number; y: number } | null>(null)
+  const [selectionEnd, setSelectionEnd] = useState<{ x: number; y: number } | null>(null)
+  const dragSelectTimeoutRef = useRef<NodeJS.Timeout | null>(null)
+
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
 
@@ -1991,47 +1997,148 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, undo, redo, copyPose, resetBone, totalFrames])
 
-  // Canvas click for bone selection
+  // Canvas click and drag-to-select for bone selection
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
-    const handleClick = (e: MouseEvent) => {
-      if (!cameraRef.current || !sceneRef.current) return
+    let mouseDownPos: { x: number; y: number } | null = null
+    let hasDragged = false
+    const DRAG_THRESHOLD = 5 // pixels
 
+    const handleMouseDown = (e: MouseEvent) => {
+      // Only handle left mouse button
+      if (e.button !== 0) return
+      
       const rect = canvas.getBoundingClientRect()
-      const mouse = new THREE.Vector2(
-        ((e.clientX - rect.left) / rect.width) * 2 - 1,
-        -((e.clientY - rect.top) / rect.height) * 2 + 1
-      )
+      mouseDownPos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      hasDragged = false
+      setSelectionStart(mouseDownPos)
+      setSelectionEnd(mouseDownPos)
+    }
 
-      const raycaster = new THREE.Raycaster()
-      raycaster.setFromCamera(mouse, cameraRef.current)
-
-      const meshesToTest: THREE.Mesh[] = []
-      boneHelpersRef.current.forEach(helper => {
-        helper.traverse(child => {
-          if ((child as THREE.Mesh).isMesh) {
-            meshesToTest.push(child as THREE.Mesh)
-          }
-        })
-      })
-
-      const intersects = raycaster.intersectObjects(meshesToTest, false)
-
-      if (intersects.length > 0) {
-        let obj: THREE.Object3D | null = intersects[0].object
-        while (obj && !obj.userData.boneName) {
-          obj = obj.parent
-        }
-        if (obj?.userData.boneName) {
-          handleBoneSelect(obj.userData.boneName)
-        }
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!mouseDownPos) return
+      
+      const rect = canvas.getBoundingClientRect()
+      const currentPos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+      
+      // Check if we've dragged enough to start selection box
+      const dx = currentPos.x - mouseDownPos.x
+      const dy = currentPos.y - mouseDownPos.y
+      const distance = Math.sqrt(dx * dx + dy * dy)
+      
+      if (distance > DRAG_THRESHOLD) {
+        hasDragged = true
+        setIsDragSelecting(true)
+        setSelectionEnd(currentPos)
       }
     }
 
-    canvas.addEventListener('click', handleClick)
-    return () => canvas.removeEventListener('click', handleClick)
+    const handleMouseUp = (e: MouseEvent) => {
+      if (!mouseDownPos) return
+      
+      const rect = canvas.getBoundingClientRect()
+      const endPos = { x: e.clientX - rect.left, y: e.clientY - rect.top }
+
+      if (hasDragged && cameraRef.current) {
+        // Drag selection - find all bones within the selection box
+        const minX = Math.min(mouseDownPos.x, endPos.x)
+        const maxX = Math.max(mouseDownPos.x, endPos.x)
+        const minY = Math.min(mouseDownPos.y, endPos.y)
+        const maxY = Math.max(mouseDownPos.y, endPos.y)
+
+        // Find bones within selection box
+        let closestBone: string | null = null
+        let closestDistance = Infinity
+
+        boneHelpersRef.current.forEach(helper => {
+          const boneName = helper.userData.boneName
+          if (!boneName) return
+
+          // Get bone world position
+          const worldPos = new THREE.Vector3()
+          helper.getWorldPosition(worldPos)
+
+          // Project to screen space
+          const screenPos = worldPos.clone().project(cameraRef.current!)
+          const screenX = (screenPos.x + 1) / 2 * rect.width
+          const screenY = (-screenPos.y + 1) / 2 * rect.height
+
+          // Check if bone is within selection box
+          if (screenX >= minX && screenX <= maxX && screenY >= minY && screenY <= maxY) {
+            // Find center of selection box and calculate distance
+            const centerX = (minX + maxX) / 2
+            const centerY = (minY + maxY) / 2
+            const distance = Math.sqrt(
+              Math.pow(screenX - centerX, 2) + Math.pow(screenY - centerY, 2)
+            )
+            if (distance < closestDistance) {
+              closestDistance = distance
+              closestBone = boneName
+            }
+          }
+        })
+
+        if (closestBone) {
+          handleBoneSelect(closestBone)
+        }
+      } else {
+        // Single click - raycast to select bone
+        if (!cameraRef.current || !sceneRef.current) {
+          mouseDownPos = null
+          setIsDragSelecting(false)
+          setSelectionStart(null)
+          setSelectionEnd(null)
+          return
+        }
+
+        const mouse = new THREE.Vector2(
+          (endPos.x / rect.width) * 2 - 1,
+          -(endPos.y / rect.height) * 2 + 1
+        )
+
+        const raycaster = new THREE.Raycaster()
+        raycaster.setFromCamera(mouse, cameraRef.current)
+
+        const meshesToTest: THREE.Mesh[] = []
+        boneHelpersRef.current.forEach(helper => {
+          helper.traverse(child => {
+            if ((child as THREE.Mesh).isMesh) {
+              meshesToTest.push(child as THREE.Mesh)
+            }
+          })
+        })
+
+        const intersects = raycaster.intersectObjects(meshesToTest, false)
+
+        if (intersects.length > 0) {
+          let obj: THREE.Object3D | null = intersects[0].object
+          while (obj && !obj.userData.boneName) {
+            obj = obj.parent
+          }
+          if (obj?.userData.boneName) {
+            handleBoneSelect(obj.userData.boneName)
+          }
+        }
+      }
+
+      // Reset drag state
+      mouseDownPos = null
+      setIsDragSelecting(false)
+      setSelectionStart(null)
+      setSelectionEnd(null)
+    }
+
+    canvas.addEventListener('mousedown', handleMouseDown)
+    canvas.addEventListener('mousemove', handleMouseMove)
+    canvas.addEventListener('mouseup', handleMouseUp)
+    
+    return () => {
+      canvas.removeEventListener('mousedown', handleMouseDown)
+      canvas.removeEventListener('mousemove', handleMouseMove)
+      canvas.removeEventListener('mouseup', handleMouseUp)
+    }
   }, [handleBoneSelect])
 
   // Drag and drop
@@ -2140,6 +2247,19 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       onDragOver={handleDragOver}
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
+
+      {/* Drag Selection Box */}
+      {isDragSelecting && selectionStart && selectionEnd && (
+        <div
+          className="absolute pointer-events-none border-2 border-[#22c55e] bg-[#22c55e]/10 z-20"
+          style={{
+            left: Math.min(selectionStart.x, selectionEnd.x),
+            top: Math.min(selectionStart.y, selectionEnd.y),
+            width: Math.abs(selectionEnd.x - selectionStart.x),
+            height: Math.abs(selectionEnd.y - selectionStart.y),
+          }}
+        />
+      )}
 
       {/* Welcome Screen */}
       {showWelcome && (

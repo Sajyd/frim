@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Create checkout session
+    // Create checkout session with promotional code support
     const checkoutSession = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
@@ -51,6 +51,7 @@ export async function POST(request: NextRequest) {
           quantity: 1,
         },
       ],
+      allow_promotion_codes: true,
       success_url: `${process.env.NEXTAUTH_URL}/dashboard?success=true`,
       cancel_url: `${process.env.NEXTAUTH_URL}/pricing?canceled=true`,
       metadata: {

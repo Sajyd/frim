@@ -30,6 +30,8 @@ interface Subscription {
   }
 }
 
+const SUPPORT_EMAIL = 'support@frim.app'
+
 export default function Dashboard() {
   return (
     <Suspense fallback={
@@ -55,6 +57,8 @@ function DashboardContent() {
   const [subscription, setSubscription] = useState<Subscription | null>(null)
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
   const [showSuccessToast, setShowSuccessToast] = useState(false)
+  const [showSubscriptionModal, setShowSubscriptionModal] = useState(false)
+  const [cancelingSubscription, setCancelingSubscription] = useState(false)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -171,6 +175,26 @@ function DashboardContent() {
     }
   }
 
+  const handleManageSubscription = async () => {
+    setCancelingSubscription(true)
+    try {
+      const res = await fetch('/api/stripe/portal', {
+        method: 'POST',
+      })
+      const data = await res.json()
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        throw new Error(data.error || 'Failed to open billing portal')
+      }
+    } catch (error) {
+      console.error('Portal error:', error)
+      alert('Failed to open billing portal. Please try again.')
+    } finally {
+      setCancelingSubscription(false)
+    }
+  }
+
   if (status === 'loading' || loading) {
     return (
       <div className="min-h-screen bg-dark-950 flex items-center justify-center">
@@ -210,6 +234,17 @@ function DashboardContent() {
           </Link>
 
           <div className="flex items-center gap-4">
+            <a
+              href="https://discord.gg/YKfmSqZ5e8"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="hidden sm:flex items-center gap-2 text-sm text-dark-400 hover:text-[#5865F2] transition-colors"
+            >
+              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+              </svg>
+              Discord
+            </a>
             {!isPro && (
               <Link
                 href="/pricing"
@@ -297,6 +332,14 @@ function DashboardContent() {
                   >
                     Need more?
                   </Link>
+                )}
+                {isPro && (
+                  <button
+                    onClick={() => setShowSubscriptionModal(true)}
+                    className="text-xs text-dark-400 hover:text-dark-200 px-3 py-1.5 rounded-lg hover:bg-dark-800 transition-colors"
+                  >
+                    Manage →
+                  </button>
                 )}
               </div>
             </div>
@@ -502,6 +545,125 @@ function DashboardContent() {
           </div>
         </div>
       )}
+
+      {/* Subscription Management Modal */}
+      {showSubscriptionModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
+          <div className="bg-dark-900 border border-dark-800 rounded-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="font-display text-xl font-semibold">Subscription</h2>
+              <button
+                onClick={() => setShowSubscriptionModal(false)}
+                className="p-2 text-dark-400 hover:text-dark-200 hover:bg-dark-800 rounded-lg transition-colors"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                </svg>
+              </button>
+            </div>
+            
+            <div className="bg-dark-950 border border-dark-800 rounded-xl p-4 mb-6">
+              <div className="flex items-center gap-3 mb-3">
+                <div className="w-10 h-10 bg-frim-500/20 rounded-xl flex items-center justify-center">
+                  <svg className="w-5 h-5 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                </div>
+                <div>
+                  <p className="font-semibold text-frim-400">Pro Plan</p>
+                  <p className="text-sm text-dark-500">$12/month</p>
+                </div>
+              </div>
+              {subscription?.currentPeriodEnd && (
+                <p className="text-sm text-dark-400">
+                  Next billing: {new Date(subscription.currentPeriodEnd).toLocaleDateString('en-US', { 
+                    month: 'long', 
+                    day: 'numeric', 
+                    year: 'numeric' 
+                  })}
+                </p>
+              )}
+            </div>
+
+            <div className="space-y-3">
+              <button
+                onClick={handleManageSubscription}
+                disabled={cancelingSubscription}
+                className="w-full bg-dark-800 hover:bg-dark-700 text-dark-200 py-3 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                {cancelingSubscription ? (
+                  <>
+                    <span className="spinner w-4 h-4" />
+                    Loading...
+                  </>
+                ) : (
+                  <>
+                    <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+                    </svg>
+                    Manage Billing & Cancel
+                  </>
+                )}
+              </button>
+              <a
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="w-full bg-dark-950 hover:bg-dark-800 border border-dark-700 text-dark-300 py-3 rounded-xl font-medium transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                Contact Support
+              </a>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Footer */}
+      <footer className="border-t border-dark-800 mt-auto">
+        <div className="max-w-7xl mx-auto px-6 py-8">
+          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
+            <div className="flex items-center gap-2 text-dark-500">
+              <svg className="w-6 h-6" viewBox="0 0 32 32" fill="none">
+                <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
+                <circle cx="16" cy="10" r="3" fill="currentColor"/>
+                <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" strokeWidth="2"/>
+                <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" strokeWidth="2"/>
+                <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
+                <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
+                <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
+              </svg>
+              <span className="text-sm">© 2026 Frim</span>
+            </div>
+            <div className="flex items-center gap-6">
+              <Link href="/pricing" className="text-sm text-dark-500 hover:text-dark-300 transition-colors">
+                Pricing
+              </Link>
+              <a
+                href="https://discord.gg/YKfmSqZ5e8"
+                target="_blank"
+                rel="noopener noreferrer"
+                className="text-sm text-dark-500 hover:text-[#5865F2] transition-colors flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
+                  <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
+                </svg>
+                Discord
+              </a>
+              <a 
+                href={`mailto:${SUPPORT_EMAIL}`}
+                className="text-sm text-dark-500 hover:text-dark-300 transition-colors flex items-center gap-1.5"
+              >
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+                </svg>
+                Support
+              </a>
+            </div>
+          </div>
+        </div>
+      </footer>
 
       <style jsx>{`
         @keyframes slide-down {
