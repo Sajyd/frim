@@ -150,6 +150,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [showExportModal, setShowExportModal] = useState(false)
   const [selectedExportAnimations, setSelectedExportAnimations] = useState<Set<string>>(new Set())
   const [exportFilename, setExportFilename] = useState('model_animated')
+  
+  // Reset bones modal
+  const [showResetBonesModal, setShowResetBonesModal] = useState(false)
+  const [selectedResetBones, setSelectedResetBones] = useState<Set<string>>(new Set())
+  const [resetAddKeyframe, setResetAddKeyframe] = useState(true)
   const [exportIncludeModel, setExportIncludeModel] = useState(true)
   const [exportingGLB, setExportingGLB] = useState(false)
 
@@ -2807,6 +2812,31 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 Reset
               </button>
             </div>
+            <button
+              onClick={() => {
+                // Pre-select bones without keyframes
+                const bonesWithKeyframes = new Set<string>()
+                if (currentAnimation) {
+                  currentAnimation.keyframes.forEach((frameData) => {
+                    frameData.forEach((_, boneName) => {
+                      bonesWithKeyframes.add(boneName)
+                    })
+                  })
+                }
+                const bonesWithoutKeyframes = new Set<string>()
+                bones.forEach((_, boneName) => {
+                  if (!bonesWithKeyframes.has(boneName)) {
+                    bonesWithoutKeyframes.add(boneName)
+                  }
+                })
+                setSelectedResetBones(bonesWithoutKeyframes)
+                setShowResetBonesModal(true)
+              }}
+              className="w-full py-1.5 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
+            >
+              <RefreshCw className="w-3.5 h-3.5" />
+              Reset Multiple Bones
+            </button>
             <div className="grid grid-cols-3 gap-1">
               <button onClick={copyPose} className="py-1.5 bg-[#27272a] text-[#a1a1aa] rounded text-[10px] hover:bg-[#3f3f46] flex items-center justify-center gap-1">
                 <Clipboard className="w-3 h-3" />
@@ -3456,6 +3486,212 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     Export GLB
                   </>
                 )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Reset Bones Modal */}
+      {showResetBonesModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg p-6 animate-slide-up">
+            <div className="flex items-center justify-between mb-4">
+              <h2 className="text-lg font-semibold text-[#f4f4f5] flex items-center gap-2">
+                <RefreshCw className="w-5 h-5" />
+                Reset Bones
+              </h2>
+              <button
+                onClick={() => setShowResetBonesModal(false)}
+                className="p-1 rounded-lg hover:bg-[#252b3d] transition-colors"
+              >
+                <X className="w-5 h-5 text-[#71717a]" />
+              </button>
+            </div>
+
+            <p className="text-sm text-[#71717a] mb-4">
+              Select bones to reset to their original T-pose position:
+            </p>
+
+            {/* Selection buttons */}
+            <div className="flex gap-2 mb-3">
+              <button
+                onClick={() => setSelectedResetBones(new Set(bones.keys()))}
+                className="text-[10px] px-2 py-1 bg-[#252b3d] text-[#a1a1aa] rounded hover:bg-[#2f3649] transition-colors"
+              >
+                Select All
+              </button>
+              <button
+                onClick={() => setSelectedResetBones(new Set())}
+                className="text-[10px] px-2 py-1 bg-[#252b3d] text-[#a1a1aa] rounded hover:bg-[#2f3649] transition-colors"
+              >
+                Deselect All
+              </button>
+              <button
+                onClick={() => {
+                  const bonesWithKeyframes = new Set<string>()
+                  if (currentAnimation) {
+                    currentAnimation.keyframes.forEach((frameData) => {
+                      frameData.forEach((_, boneName) => {
+                        bonesWithKeyframes.add(boneName)
+                      })
+                    })
+                  }
+                  const bonesWithoutKeyframes = new Set<string>()
+                  bones.forEach((_, boneName) => {
+                    if (!bonesWithKeyframes.has(boneName)) {
+                      bonesWithoutKeyframes.add(boneName)
+                    }
+                  })
+                  setSelectedResetBones(bonesWithoutKeyframes)
+                }}
+                className="text-[10px] px-2 py-1 bg-[#252b3d] text-[#a1a1aa] rounded hover:bg-[#2f3649] transition-colors"
+              >
+                Without Keyframes
+              </button>
+              <button
+                onClick={() => {
+                  const bonesWithKeyframes = new Set<string>()
+                  if (currentAnimation) {
+                    currentAnimation.keyframes.forEach((frameData) => {
+                      frameData.forEach((_, boneName) => {
+                        bonesWithKeyframes.add(boneName)
+                      })
+                    })
+                  }
+                  setSelectedResetBones(bonesWithKeyframes)
+                }}
+                className="text-[10px] px-2 py-1 bg-[#252b3d] text-[#a1a1aa] rounded hover:bg-[#2f3649] transition-colors"
+              >
+                With Keyframes
+              </button>
+            </div>
+
+            {/* Bone list */}
+            <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl max-h-[300px] overflow-y-auto mb-4">
+              {Array.from(bones.keys()).sort().map((boneName) => {
+                const hasKeyframes = (() => {
+                  if (!currentAnimation) return false
+                  let has = false
+                  currentAnimation.keyframes.forEach((frameData) => {
+                    if (frameData.has(boneName)) has = true
+                  })
+                  return has
+                })()
+                return (
+                  <label
+                    key={boneName}
+                    className="flex items-center gap-3 p-2 border-b border-[#252b3d] last:border-b-0 cursor-pointer hover:bg-[#151821] transition-colors"
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedResetBones.has(boneName)}
+                      onChange={() => {
+                        const newSelected = new Set(selectedResetBones)
+                        if (newSelected.has(boneName)) {
+                          newSelected.delete(boneName)
+                        } else {
+                          newSelected.add(boneName)
+                        }
+                        setSelectedResetBones(newSelected)
+                      }}
+                      className="w-4 h-4 rounded border-[#252b3d] bg-[#0f1117] text-[#22c55e] focus:ring-[#22c55e] focus:ring-offset-0"
+                    />
+                    <span className={`text-sm ${hasKeyframes ? 'text-[#22c55e]' : 'text-[#f4f4f5]'}`}>
+                      {boneName}
+                    </span>
+                    {hasKeyframes && (
+                      <span className="text-[10px] text-[#22c55e] ml-auto">🔑 has keyframes</span>
+                    )}
+                  </label>
+                )
+              })}
+            </div>
+
+            {/* Add keyframe option */}
+            <label className="flex items-center gap-3 p-3 bg-[#0f1117] border border-[#252b3d] rounded-xl cursor-pointer hover:border-[#3f3f46] transition-colors mb-4">
+              <input
+                type="checkbox"
+                checked={resetAddKeyframe}
+                onChange={(e) => setResetAddKeyframe(e.target.checked)}
+                className="w-4 h-4 rounded border-[#252b3d] bg-[#0f1117] text-[#22c55e] focus:ring-[#22c55e] focus:ring-offset-0"
+              />
+              <div>
+                <p className="text-sm text-[#f4f4f5]">Add keyframe after reset</p>
+                <p className="text-[10px] text-[#71717a]">Create keyframes at current frame for reset bones</p>
+              </div>
+            </label>
+
+            <p className="text-[10px] text-[#71717a] mb-4">
+              {selectedResetBones.size > 0 ? (
+                <span className="text-[#22c55e]">{selectedResetBones.size} bone(s) selected</span>
+              ) : (
+                <span>No bones selected</span>
+              )}
+            </p>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowResetBonesModal(false)}
+                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  if (selectedResetBones.size === 0) {
+                    showToast('No bones selected', 'warning')
+                    return
+                  }
+                  
+                  // Reset selected bones
+                  selectedResetBones.forEach(boneName => {
+                    const bone = bones.get(boneName)
+                    const original = originalTransformsRef.current.get(boneName)
+                    if (bone && original) {
+                      bone.position.copy(original.position)
+                      bone.rotation.copy(original.rotation)
+                      bone.scale.copy(original.scale)
+                    }
+                  })
+                  
+                  // Add keyframes if checkbox is checked
+                  if (resetAddKeyframe && currentAnimationId) {
+                    setAnimations(prev => {
+                      const newAnimations = new Map(prev)
+                      const anim = newAnimations.get(currentAnimationId)
+                      if (!anim) return prev
+                      
+                      const newKeyframes = new Map(anim.keyframes)
+                      if (!newKeyframes.has(currentFrame)) {
+                        newKeyframes.set(currentFrame, new Map())
+                      }
+                      
+                      selectedResetBones.forEach(boneName => {
+                        const original = originalTransformsRef.current.get(boneName)
+                        if (original) {
+                          newKeyframes.get(currentFrame)!.set(boneName, {
+                            position: new THREE.Vector3().copy(original.position),
+                            rotation: new THREE.Quaternion().setFromEuler(original.rotation),
+                            scale: new THREE.Vector3().copy(original.scale)
+                          })
+                        }
+                      })
+                      
+                      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
+                      return newAnimations
+                    })
+                  }
+                  
+                  showToast(`${selectedResetBones.size} bone(s) reset${resetAddKeyframe ? ' with keyframes' : ''}`, 'success')
+                  setShowResetBonesModal(false)
+                }}
+                disabled={selectedResetBones.size === 0}
+                className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                <RefreshCw className="w-4 h-4" />
+                Reset Selected
               </button>
             </div>
           </div>
