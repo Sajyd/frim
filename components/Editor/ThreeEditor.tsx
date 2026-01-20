@@ -1487,7 +1487,10 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
           if (newAnimations.size > 0) {
             setAnimations(newAnimations)
-            setCurrentAnimationId(newAnimations.keys().next().value)
+            const firstAnimId = newAnimations.keys().next().value
+            if (firstAnimId) {
+              setCurrentAnimationId(firstAnimId)
+            }
           }
         }, 100)
       }
