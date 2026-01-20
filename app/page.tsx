@@ -150,29 +150,28 @@ export default function Home() {
       {/* AI Video Motion Capture Section */}
       <section className="relative py-24 px-6">
         <div className="max-w-6xl mx-auto">
-          <div className="relative bg-gradient-to-br from-dark-900 via-dark-900 to-frim-950/30 border border-frim-500/20 rounded-3xl p-8 md:p-12 overflow-hidden">
+          <div className="relative bg-gradient-to-br from-dark-900 via-dark-900 to-dark-800/50 border border-dark-700/50 rounded-3xl p-8 md:p-12 overflow-hidden">
             {/* Background decoration */}
-            <div className="absolute top-0 right-0 w-96 h-96 bg-frim-500/10 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-            <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/10 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+            <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+            <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
             
             <div className="relative grid lg:grid-cols-2 gap-12 items-center">
               <div>
-                <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/30 px-3 py-1.5 rounded-full text-xs font-semibold text-frim-400 mb-6">
+                <div className="inline-flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full text-xs font-semibold text-amber-400 mb-6">
                   <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  PRO FEATURE
+                  COMING SOON
                 </div>
                 
                 <h2 className="font-display text-3xl md:text-4xl font-bold mb-4">
                   AI Video<br />
-                  <span className="gradient-text">Motion Capture</span>
+                  <span className="bg-gradient-to-r from-amber-400 to-orange-400 bg-clip-text text-transparent">Motion Capture</span>
                 </h2>
                 
                 <p className="text-dark-400 mb-6 leading-relaxed">
-                  Upload any video and let AI extract human movements automatically. 
-                  Our pose estimation technology maps body motion to your model's bones — 
-                  no expensive mocap suits required.
+                  We&apos;re building something amazing! Soon you&apos;ll be able to upload any video 
+                  and let AI extract human movements automatically — no expensive mocap suits required.
                 </p>
                 
                 <ul className="space-y-3 mb-8">
@@ -182,9 +181,9 @@ export default function Home() {
                     'Auto-generates keyframes for bones',
                     'Works with any rigged humanoid model'
                   ].map((item, i) => (
-                    <li key={i} className="flex items-center gap-3 text-sm text-dark-300">
-                      <div className="w-5 h-5 rounded-full bg-frim-500/20 flex items-center justify-center shrink-0">
-                        <svg className="w-3 h-3 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <li key={i} className="flex items-center gap-3 text-sm text-dark-500">
+                      <div className="w-5 h-5 rounded-full bg-dark-700 flex items-center justify-center shrink-0">
+                        <svg className="w-3 h-3 text-dark-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
@@ -193,12 +192,12 @@ export default function Home() {
                   ))}
                 </ul>
                 
-                <Link href="/pricing" className="inline-flex items-center gap-2 bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-6 py-3 rounded-xl font-semibold hover:shadow-lg hover:shadow-frim-500/25 transition-all">
+                <div className="inline-flex items-center gap-2 bg-dark-800 text-dark-400 px-6 py-3 rounded-xl font-semibold cursor-not-allowed">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  Unlock with Pro
-                </Link>
+                  Coming Soon
+                </div>
               </div>
               
               {/* Visual */}
@@ -520,9 +519,10 @@ const features = [
   },
   {
     title: 'AI Video Motion Capture',
-    description: 'Upload a video and let AI extract body movements. Auto-generate animations from any footage.',
-    icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 10l4.553-2.276A1 1 0 0121 8.618v6.764a1 1 0 01-1.447.894L15 14M5 18h8a2 2 0 002-2V8a2 2 0 00-2-2H5a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>,
-    highlight: true,
+    description: 'Coming soon! Upload a video and let AI extract body movements automatically.',
+    icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+    highlight: false,
+    comingSoon: true,
   },
   {
     title: 'Bone Controls',

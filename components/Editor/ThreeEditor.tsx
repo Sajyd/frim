@@ -6,7 +6,8 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
-import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+// MediaPipe import disabled - Video Motion Capture coming soon
+// import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import {
   FolderOpen,
   Download,
@@ -499,8 +500,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       resetBonesWithoutKeyframes(currentAnimation)
       // Then apply the animation pose
       if (currentAnimation.keyframes.size > 0) {
-        applyPoseAtFrame(currentFrame)
-      }
+      applyPoseAtFrame(currentFrame)
+    }
     }
   }, [currentAnimationId, currentAnimation, applyPoseAtFrame, currentFrame, isPlaying, resetBonesWithoutKeyframes])
 
@@ -2131,401 +2132,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // MediaPipe Pose Landmark indices (body only, ignoring face and hands)
-  const POSE_LANDMARKS = {
-    LEFT_SHOULDER: 11,
-    RIGHT_SHOULDER: 12,
-    LEFT_ELBOW: 13,
-    RIGHT_ELBOW: 14,
-    LEFT_WRIST: 15,
-    RIGHT_WRIST: 16,
-    LEFT_HIP: 23,
-    RIGHT_HIP: 24,
-    LEFT_KNEE: 25,
-    RIGHT_KNEE: 26,
-    LEFT_ANKLE: 27,
-    RIGHT_ANKLE: 28
-  }
-
-  // Convert MediaPipe WORLD landmark to Three.js coordinate system
-  // MediaPipe World Coordinates (pelvis-centered, in meters):
-  //   X: Positive = person's right
-  //   Y: Positive = down (below)
-  //   Z: Positive = behind the person (away from camera)
-  // Three.js (Y-up, right-handed):
-  //   X: Positive = right
-  //   Y: Positive = up
-  //   Z: Positive = toward viewer (toward camera)
-  const convertWorldLandmark = useCallback((lm: { x: number, y: number, z: number }) => {
-    return new THREE.Vector3(
-      lm.x,       // X stays same: person's right = model's right
-      -lm.y,      // Flip Y: down → up
-      -lm.z       // Flip Z: behind person → toward camera
-    )
-  }, [])
-
-  // Calculate rotation to orient a bone from one point to another
-  // restDir is the direction the bone points in T-pose
-  const calculateBoneRotation = useCallback((
-    from: THREE.Vector3,
-    to: THREE.Vector3,
-    restDir: THREE.Vector3
-  ): THREE.Quaternion => {
-    const currentDir = new THREE.Vector3().subVectors(to, from).normalize()
-    const quaternion = new THREE.Quaternion()
-    quaternion.setFromUnitVectors(restDir.clone().normalize(), currentDir)
-    return quaternion
-  }, [])
-
-  // Convert pose landmarks to bone rotations matching the project's skeleton
-  const landmarksToBoneKeyframes = useCallback((
-    worldLandmarks: Array<{ x: number, y: number, z: number, visibility?: number }>
-  ): Map<string, BoneKeyframe> => {
-    const frameData = new Map<string, BoneKeyframe>()
-    
-    // Helper to get converted world landmark
-    const getLandmark = (idx: number): THREE.Vector3 => {
-      const lm = worldLandmarks[idx]
-      if (!lm) return new THREE.Vector3(0, 0, 0)
-      return convertWorldLandmark(lm)
-    }
-    
-    // Helper to get midpoint between two landmarks
-    const getMidpoint = (idx1: number, idx2: number): THREE.Vector3 => {
-      const a = getLandmark(idx1)
-      const b = getLandmark(idx2)
-      return new THREE.Vector3().addVectors(a, b).multiplyScalar(0.5)
-    }
-
-    // Get key landmarks (converted to Three.js coordinates)
-    const leftShoulder = getLandmark(POSE_LANDMARKS.LEFT_SHOULDER)
-    const rightShoulder = getLandmark(POSE_LANDMARKS.RIGHT_SHOULDER)
-    const leftElbow = getLandmark(POSE_LANDMARKS.LEFT_ELBOW)
-    const rightElbow = getLandmark(POSE_LANDMARKS.RIGHT_ELBOW)
-    const leftWrist = getLandmark(POSE_LANDMARKS.LEFT_WRIST)
-    const rightWrist = getLandmark(POSE_LANDMARKS.RIGHT_WRIST)
-    const leftHip = getLandmark(POSE_LANDMARKS.LEFT_HIP)
-    const rightHip = getLandmark(POSE_LANDMARKS.RIGHT_HIP)
-    const leftKnee = getLandmark(POSE_LANDMARKS.LEFT_KNEE)
-    const rightKnee = getLandmark(POSE_LANDMARKS.RIGHT_KNEE)
-    const leftAnkle = getLandmark(POSE_LANDMARKS.LEFT_ANKLE)
-    const rightAnkle = getLandmark(POSE_LANDMARKS.RIGHT_ANKLE)
-
-    const midShoulder = getMidpoint(POSE_LANDMARKS.LEFT_SHOULDER, POSE_LANDMARKS.RIGHT_SHOULDER)
-    const midHip = getMidpoint(POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.RIGHT_HIP)
-
-    // Try to set keyframes for each bone if it exists in the model
-    const setBoneKeyframe = (boneName: string, rotation: THREE.Quaternion) => {
-      const bone = bones.get(boneName)
-      if (bone) {
-        const original = originalTransformsRef.current.get(boneName)
-        if (original) {
-          frameData.set(boneName, {
-            position: original.position.clone(),
-            rotation: rotation.clone().normalize(),
-            scale: original.scale.clone()
-          })
-        }
-      }
-    }
-
-    // Helper: Calculate rotation angles from limb direction
-    // Returns rotation that moves a bone from pointing along localAxis to pointing toward targetDir
-    const calcLimbRotation = (
-      from: THREE.Vector3,
-      to: THREE.Vector3,
-      boneRestAxis: 'x' | 'y' | 'z' | '-x' | '-y' | '-z'
-    ): THREE.Quaternion => {
-      const dir = new THREE.Vector3().subVectors(to, from).normalize()
-      
-      // Get the rest axis direction
-      let restDir: THREE.Vector3
-      switch (boneRestAxis) {
-        case 'x': restDir = new THREE.Vector3(1, 0, 0); break
-        case '-x': restDir = new THREE.Vector3(-1, 0, 0); break
-        case 'y': restDir = new THREE.Vector3(0, 1, 0); break
-        case '-y': restDir = new THREE.Vector3(0, -1, 0); break
-        case 'z': restDir = new THREE.Vector3(0, 0, 1); break
-        case '-z': restDir = new THREE.Vector3(0, 0, -1); break
-      }
-      
-      return new THREE.Quaternion().setFromUnitVectors(restDir, dir)
-    }
-
-    // === HIPS ===
-    // Calculate hip orientation - hips rotate the entire lower body
-    const hipRight = new THREE.Vector3().subVectors(rightHip, leftHip).normalize()
-    const hipUp = new THREE.Vector3().subVectors(midShoulder, midHip).normalize()
-    
-    // Calculate yaw (rotation around Y) from hip facing direction
-    const hipForward = new THREE.Vector3().crossVectors(hipUp, hipRight).normalize()
-    const yaw = Math.atan2(hipForward.x, hipForward.z)
-    
-    // Calculate pitch (forward/back tilt) and roll (side tilt)
-    const pitch = Math.asin(Math.max(-1, Math.min(1, hipUp.z))) * 0.5
-    const roll = Math.asin(Math.max(-1, Math.min(1, hipRight.y))) * 0.5
-    
-    // Apply as quaternion multiplications to avoid gimbal lock
-    const hipsRotation = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), yaw))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), pitch))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), roll))
-    setBoneKeyframe('Hips', hipsRotation)
-
-    // === SPINE CHAIN ===
-    // Calculate spine bend from hip-to-shoulder direction
-    const spineDir = new THREE.Vector3().subVectors(midShoulder, midHip).normalize()
-    
-    // Forward bend (around X axis)
-    const spinePitch = Math.asin(Math.max(-1, Math.min(1, -spineDir.z)))
-    // Side bend (around Z axis) 
-    const spineRoll = Math.asin(Math.max(-1, Math.min(1, spineDir.x)))
-    
-    // Distribute across spine segments
-    const spineQuat = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), spinePitch * 0.3))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), spineRoll * 0.3))
-    const spine1Quat = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), spinePitch * 0.3))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), spineRoll * 0.3))
-    const spine2Quat = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), spinePitch * 0.4))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), spineRoll * 0.4))
-    
-    setBoneKeyframe('Spine', spineQuat)
-    setBoneKeyframe('Spine1', spine1Quat)
-    setBoneKeyframe('Spine2', spine2Quat)
-
-    // === NECK & HEAD ===
-    setBoneKeyframe('Neck', new THREE.Quaternion())
-    setBoneKeyframe('Head', new THREE.Quaternion())
-
-    // === LEFT ARM ===
-    // Arm direction from shoulder to elbow
-    const leftArmDir = new THREE.Vector3().subVectors(leftElbow, leftShoulder).normalize()
-    
-    // In T-pose, left arm points along -X (to the left)
-    // Calculate elevation (up/down from horizontal) and forward/back swing
-    const leftArmElevation = Math.asin(Math.max(-1, Math.min(1, leftArmDir.y)))
-    const leftArmSwing = Math.atan2(-leftArmDir.z, -leftArmDir.x)
-    
-    const leftArmRot = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), leftArmSwing))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), -leftArmElevation))
-    
-    setBoneKeyframe('LeftShoulder', new THREE.Quaternion())
-    setBoneKeyframe('LeftArm', leftArmRot)
-    
-    // Forearm - calculate elbow bend
-    const leftForearmDir = new THREE.Vector3().subVectors(leftWrist, leftElbow).normalize()
-    const leftElbowAngle = Math.acos(Math.max(-1, Math.min(1, leftArmDir.dot(leftForearmDir))))
-    // Elbow bends around local X axis (toward body)
-    const leftForearmRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), leftElbowAngle)
-    setBoneKeyframe('LeftForeArm', leftForearmRot)
-
-    // === RIGHT ARM ===
-    const rightArmDir = new THREE.Vector3().subVectors(rightElbow, rightShoulder).normalize()
-    
-    // In T-pose, right arm points along +X (to the right)
-    const rightArmElevation = Math.asin(Math.max(-1, Math.min(1, rightArmDir.y)))
-    const rightArmSwing = Math.atan2(-rightArmDir.z, rightArmDir.x)
-    
-    const rightArmRot = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 1, 0), -rightArmSwing))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rightArmElevation))
-    
-    setBoneKeyframe('RightShoulder', new THREE.Quaternion())
-    setBoneKeyframe('RightArm', rightArmRot)
-    
-    // Forearm
-    const rightForearmDir = new THREE.Vector3().subVectors(rightWrist, rightElbow).normalize()
-    const rightElbowAngle = Math.acos(Math.max(-1, Math.min(1, rightArmDir.dot(rightForearmDir))))
-    const rightForearmRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, -1, 0), rightElbowAngle)
-    setBoneKeyframe('RightForeArm', rightForearmRot)
-
-    // === LEFT LEG ===
-    // Thigh direction from hip to knee
-    const leftThighDir = new THREE.Vector3().subVectors(leftKnee, leftHip).normalize()
-    
-    // In T-pose, legs point along -Y (downward)
-    // Calculate hip flexion (forward/back) and abduction (side)
-    const leftLegFlexion = Math.atan2(-leftThighDir.z, -leftThighDir.y)
-    const leftLegAbduction = Math.atan2(leftThighDir.x, -leftThighDir.y)
-    
-    const leftUpLegRot = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), leftLegFlexion))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), leftLegAbduction))
-    
-    setBoneKeyframe('LeftUpLeg', leftUpLegRot)
-    
-    // Shin - knee bend
-    const leftShinDir = new THREE.Vector3().subVectors(leftAnkle, leftKnee).normalize()
-    const leftKneeAngle = Math.acos(Math.max(-1, Math.min(1, leftThighDir.dot(leftShinDir))))
-    // Knee only bends backward (around X axis)
-    const leftLegRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), leftKneeAngle)
-    setBoneKeyframe('LeftLeg', leftLegRot)
-    setBoneKeyframe('LeftFoot', new THREE.Quaternion())
-
-    // === RIGHT LEG ===
-    const rightThighDir = new THREE.Vector3().subVectors(rightKnee, rightHip).normalize()
-    
-    const rightLegFlexion = Math.atan2(-rightThighDir.z, -rightThighDir.y)
-    const rightLegAbduction = Math.atan2(rightThighDir.x, -rightThighDir.y)
-    
-    const rightUpLegRot = new THREE.Quaternion()
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), rightLegFlexion))
-      .multiply(new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(0, 0, 1), rightLegAbduction))
-    
-    setBoneKeyframe('RightUpLeg', rightUpLegRot)
-    
-    // Shin
-    const rightShinDir = new THREE.Vector3().subVectors(rightAnkle, rightKnee).normalize()
-    const rightKneeAngle = Math.acos(Math.max(-1, Math.min(1, rightThighDir.dot(rightShinDir))))
-    const rightLegRot = new THREE.Quaternion().setFromAxisAngle(new THREE.Vector3(1, 0, 0), rightKneeAngle)
-    setBoneKeyframe('RightLeg', rightLegRot)
-    setBoneKeyframe('RightFoot', new THREE.Quaternion())
-
-    return frameData
-  }, [bones, convertWorldLandmark, calculateBoneRotation])
-
-  // Handle video analysis with real MediaPipe pose detection
-  const handleVideoAnalysis = useCallback(async () => {
-    if (!videoFile || !modelLoaded) {
-      showToast('Please load a model first', 'warning')
-      return
-    }
-
-    setVideoAnalyzing(true)
-    setVideoProgress(0)
-
-    try {
-      // Initialize MediaPipe Pose Landmarker
-      setVideoProgress(5)
-      showToast('Initializing pose detection AI...', 'info')
-      
-      const vision = await FilesetResolver.forVisionTasks(
-        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
-      )
-      
-      const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
-        baseOptions: {
-          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_full/float16/1/pose_landmarker_full.task',
-          delegate: 'GPU'
-        },
-        runningMode: 'VIDEO',
-        numPoses: 1, // Detect first humanoid only
-        minPoseDetectionConfidence: 0.5,
-        minPosePresenceConfidence: 0.5,
-        minTrackingConfidence: 0.5,
-        outputSegmentationMasks: false
-      })
-
-      setVideoProgress(15)
-      showToast('Processing video frames...', 'info')
-
-      // Create video element for processing
-      const video = document.createElement('video')
-      video.src = URL.createObjectURL(videoFile)
-      video.muted = true
-      video.playsInline = true
-      
-      await new Promise<void>((resolve, reject) => {
-        video.onloadedmetadata = () => resolve()
-        video.onerror = () => reject(new Error('Failed to load video'))
-      })
-
-      const videoDuration = video.duration
-      const videoFps = 30 // Standard processing FPS
-      const totalVideoFrames = Math.floor(videoDuration * videoFps)
-      const sampleRate = 2 // Process every 2nd frame for performance
-      const outputFrameCount = Math.floor(totalVideoFrames / sampleRate)
-
-      // Create canvas for frame extraction
-      const canvas = document.createElement('canvas')
-      canvas.width = video.videoWidth
-      canvas.height = video.videoHeight
-      const ctx = canvas.getContext('2d')!
-
-      const keyframesMap = new Map<number, Map<string, BoneKeyframe>>()
-      let processedFrames = 0
-      let lastTimestamp = -1
-
-      // Process video frames
-      for (let frameIdx = 0; frameIdx < totalVideoFrames; frameIdx += sampleRate) {
-        const time = frameIdx / videoFps
-        video.currentTime = time
-        
-        await new Promise<void>(resolve => {
-          video.onseeked = () => resolve()
-        })
-
-        // Draw current frame to canvas
-        ctx.drawImage(video, 0, 0)
-
-        // Detect pose in current frame
-        const timestamp = frameIdx * (1000 / videoFps)
-        if (timestamp > lastTimestamp) {
-          const results = poseLandmarker.detectForVideo(canvas, timestamp)
-          lastTimestamp = timestamp
-
-          // Must use WORLD landmarks for proper 3D coordinates
-          // World landmarks are in meters, centered at hip, with real depth
-          if (results.worldLandmarks && results.worldLandmarks.length > 0) {
-            // Use first detected person's world landmarks
-            const worldLandmarks = results.worldLandmarks[0]
-            
-            // Convert world landmarks to bone keyframes
-            const outputFrame = Math.floor(processedFrames)
-            const boneKeyframes = landmarksToBoneKeyframes(worldLandmarks)
-            
-            if (boneKeyframes.size > 0) {
-              keyframesMap.set(outputFrame, boneKeyframes)
-            }
-          }
-        }
-
-        processedFrames++
-        const progress = 15 + Math.floor((processedFrames / (totalVideoFrames / sampleRate)) * 80)
-        setVideoProgress(Math.min(progress, 95))
-      }
-
-      // Clean up
-      poseLandmarker.close()
-      URL.revokeObjectURL(video.src)
-
-      // Create animation from extracted keyframes
-      if (keyframesMap.size === 0) {
-        throw new Error('No poses detected in video. Make sure a person is visible.')
-      }
-
-      setVideoProgress(98)
-
-      const newId = `anim_${animationCounterRef.current++}`
-      const newAnim: Animation = {
-        name: `Video: ${videoFile.name.replace(/\.[^.]+$/, '')}`,
-        fps: videoFps / sampleRate,
-        totalFrames: processedFrames,
-        speed: 1,
-        loop: true,
-        keyframes: keyframesMap
-      }
-
-      setAnimations(prev => new Map(prev).set(newId, newAnim))
-      setCurrentAnimationId(newId)
-      setCurrentFrame(0)
-      
-      setVideoProgress(100)
-      showToast(`Extracted ${keyframesMap.size} keyframes from video!`, 'success')
-      setShowVideoModal(false)
-      setVideoFile(null)
-    } catch (error) {
-      console.error('Video analysis error:', error)
-      showToast(`Failed to analyze video: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
-    } finally {
-      setVideoAnalyzing(false)
-      setVideoProgress(0)
-    }
-  }, [videoFile, modelLoaded, bones, showToast, landmarksToBoneKeyframes])
+  // Video Motion Capture - Coming Soon
+  // This feature will be implemented with a cloud-based AI solution (e.g., DeepMotion API)
+  // For now, the button shows "Coming Soon" and is disabled
 
   return (
     <div 
@@ -2712,30 +2321,16 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
-        {/* Video Analysis (Pro feature) */}
+        {/* Video Analysis (Coming Soon) */}
         <button
           onClick={() => {
-            if (canUseVideoAnalysis) {
-              setShowVideoModal(true)
-            } else {
-              setUpgradeModalReason('video_analysis')
-              setShowUpgradeModal(true)
-            }
+            showToast('AI Video Motion Capture is coming soon!', 'info')
           }}
-          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
-            canUseVideoAnalysis 
-              ? 'text-[#a1a1aa] hover:bg-[#1c2130] hover:text-[#22c55e]' 
-              : 'text-[#71717a] hover:bg-[#1c2130]'
-          }`}
-          title={canUseVideoAnalysis ? "AI Video Motion Capture" : "Upgrade to Pro for Video Analysis"}
+          className="w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative text-[#71717a] hover:bg-[#1c2130] cursor-not-allowed opacity-60"
+          title="AI Video Motion Capture - Coming Soon"
         >
           <Video className="w-5 h-5" />
-          {canUseVideoAnalysis && (
-            <Sparkles className="w-2.5 h-2.5 text-[#22c55e] absolute -top-0.5 -right-0.5" />
-          )}
-          {!canUseVideoAnalysis && (
-            <Lock className="w-2.5 h-2.5 text-[#71717a] absolute -top-0.5 -right-0.5" />
-          )}
+          <span className="absolute -top-1 -right-1 text-[8px] bg-amber-500/20 text-amber-400 px-1 rounded font-bold">SOON</span>
         </button>
       </div>
 
@@ -3246,8 +2841,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                   onClick={(e) => {
                     e.stopPropagation()
                     if (!draggingKeyframe) {
-                      goToFrame(frame)
-                      handleBoneSelect(boneName)
+                    goToFrame(frame)
+                    handleBoneSelect(boneName)
                     }
                   }}
                   onMouseDown={(e) => {
@@ -3363,131 +2958,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         </div>
       )}
 
-      {/* Video Analysis Modal */}
-      {showVideoModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
-          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg p-6">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
-                  <Video className="w-5 h-5 text-[#22c55e]" />
-                </div>
-                <div>
-                  <h2 className="text-lg font-semibold">AI Video Motion Capture</h2>
-                  <p className="text-xs text-[#71717a]">Extract bone animations from video</p>
-                </div>
-              </div>
-              <button
-                onClick={() => {
-                  setShowVideoModal(false)
-                  setVideoFile(null)
-                }}
-                className="text-[#71717a] hover:text-[#a1a1aa] p-2"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {!modelLoaded && (
-              <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 px-4 py-3 rounded-xl mb-6 text-sm flex items-center gap-2">
-                <AlertTriangle className="w-4 h-4" />
-                Please load a 3D model first before analyzing video.
-              </div>
-            )}
-
-            {/* Video upload area */}
-            <div
-              onClick={() => !videoAnalyzing && videoInputRef.current?.click()}
-              className={`border-2 border-dashed rounded-xl p-8 text-center mb-6 transition-colors ${
-                videoFile 
-                  ? 'border-[#22c55e]/50 bg-[#22c55e]/5' 
-                  : 'border-[#252b3d] hover:border-[#3f3f46] cursor-pointer'
-              } ${videoAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}`}
-            >
-              {videoFile ? (
-                <div className="flex items-center justify-center gap-3">
-                  <Video className="w-8 h-8 text-[#22c55e]" />
-                  <div className="text-left">
-                    <p className="text-sm font-medium text-[#f4f4f5]">{videoFile.name}</p>
-                    <p className="text-xs text-[#71717a]">
-                      {(videoFile.size / (1024 * 1024)).toFixed(2)} MB
-                    </p>
-                  </div>
-                </div>
-              ) : (
-                <>
-                  <Upload className="w-10 h-10 text-[#71717a] mx-auto mb-3" />
-                  <p className="text-sm text-[#a1a1aa] mb-1">Click to upload video</p>
-                  <p className="text-xs text-[#71717a]">MP4, MOV, WebM supported</p>
-                </>
-              )}
-            </div>
-
-            {/* Progress bar */}
-            {videoAnalyzing && (
-              <div className="mb-6">
-                <div className="flex items-center justify-between text-xs text-[#a1a1aa] mb-2">
-                  <span className="flex items-center gap-2">
-                    <Loader2 className="w-3 h-3 animate-spin" />
-                    Analyzing video...
-                  </span>
-                  <span>{videoProgress}%</span>
-                </div>
-                <div className="h-2 bg-[#252b3d] rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-gradient-to-r from-[#22c55e] to-[#4ade80] transition-all duration-300"
-                    style={{ width: `${videoProgress}%` }}
-                  />
-                </div>
-              </div>
-            )}
-
-            {/* Info box */}
-            <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6">
-              <h4 className="text-xs font-semibold text-[#a1a1aa] mb-2 flex items-center gap-2">
-                <Sparkles className="w-3.5 h-3.5 text-[#22c55e]" />
-                How it works
-              </h4>
-              <ul className="text-xs text-[#71717a] space-y-1">
-                <li>• AI analyzes body movements in your video</li>
-                <li>• Pose data is extracted frame by frame</li>
-                <li>• Motion is mapped to your model's bones</li>
-                <li>• Animation keyframes are auto-generated</li>
-              </ul>
-            </div>
-
-            {/* Actions */}
-            <div className="flex gap-3">
-              <button
-                onClick={() => {
-                  setShowVideoModal(false)
-                  setVideoFile(null)
-                }}
-                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={handleVideoAnalysis}
-                disabled={!videoFile || !modelLoaded || videoAnalyzing}
-                className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
-              >
-                {videoAnalyzing ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    Analyzing...
-                  </>
-                ) : (
-                  <>
-                    <Sparkles className="w-4 h-4" />
-                    Extract Animation
-                  </>
-                )}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+      {/* Video Analysis Modal - Coming Soon (disabled) */}
 
       {/* GLB Export Modal */}
       {showExportModal && (

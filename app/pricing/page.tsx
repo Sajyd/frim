@@ -21,7 +21,7 @@ const plans = [
       'Community support',
     ],
     notIncluded: [
-      'AI Video Motion Capture',
+      'AI Video Motion Capture (Coming Soon)',
       'Priority cloud saves',
       'Priority support',
     ],
@@ -39,8 +39,7 @@ const plans = [
       'Unlimited animations per project',
       'GLB/GLTF import & export',
       'Advanced animation tools',
-      'AI Video Motion Capture',
-      'Extract animations from videos',
+      'AI Video Motion Capture (Coming Soon)',
       'Priority cloud saves',
       'Priority support',
     ],
