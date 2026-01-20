@@ -1,8 +1,53 @@
 'use client'
 
-import { Suspense } from 'react'
+import { Suspense, useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
+import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+
+const plans = [
+  {
+    id: 'free',
+    name: 'Free',
+    description: 'Perfect for getting started',
+    price: 0,
+    period: '',
+    features: [
+      'Up to 3 projects',
+      'Up to 2 animations per project',
+      'GLB/GLTF import & export',
+      'Basic animation tools',
+      'JSON & GLB export',
+      'Community support',
+    ],
+    notIncluded: [
+      'AI Video Motion Capture (Coming Soon)',
+      'Priority cloud saves',
+      'Priority support',
+    ],
+    cta: 'Get Started',
+    popular: false,
+  },
+  {
+    id: 'pro',
+    name: 'Pro',
+    description: 'For professional animators',
+    price: 12,
+    period: '/month',
+    features: [
+      'Unlimited projects',
+      'Unlimited animations per project',
+      'GLB/GLTF import & export',
+      'Advanced animation tools',
+      'AI Video Motion Capture (Coming Soon)',
+      'Priority cloud saves',
+      'Priority support',
+    ],
+    notIncluded: [],
+    cta: 'Upgrade to Pro',
+    popular: true,
+  },
+]
 
 export default function PricingPage() {
   return (
@@ -17,20 +62,94 @@ export default function PricingPage() {
 }
 
 function PricingContent() {
-  const { data: session } = useSession()
+  const { data: session, status } = useSession()
+  const router = useRouter()
+  const searchParams = useSearchParams()
+  const [loading, setLoading] = useState<string | null>(null)
+  const [currentPlan, setCurrentPlan] = useState<string>('free')
+  const [showCanceled, setShowCanceled] = useState(false)
 
-  const features = [
-    'Unlimited projects',
-    'Unlimited animations per project',
-    'GLB/GLTF import & export',
-    'Advanced animation tools',
-    'Bone hierarchy editing',
-    'Keyframe animation',
-    'Animation timeline',
-    'JSON & GLB export',
-    'Cloud saves',
-    'AI Video Motion Capture (Coming Soon)',
-  ]
+  useEffect(() => {
+    if (searchParams.get('canceled') === 'true') {
+      setShowCanceled(true)
+      setTimeout(() => setShowCanceled(false), 5000)
+    }
+  }, [searchParams])
+
+  useEffect(() => {
+    if (session) {
+      fetchSubscription()
+    }
+  }, [session])
+
+  const fetchSubscription = async () => {
+    try {
+      const res = await fetch('/api/user/subscription')
+      if (res.ok) {
+        const data = await res.json()
+        setCurrentPlan(data.plan)
+      }
+    } catch (error) {
+      console.error('Failed to fetch subscription:', error)
+    }
+  }
+
+  const handleUpgrade = async (planId: string) => {
+    if (!session) {
+      router.push('/auth/signin?callbackUrl=/pricing')
+      return
+    }
+
+    if (planId === 'free') {
+      router.push('/dashboard')
+      return
+    }
+
+    setLoading(planId)
+
+    try {
+      const res = await fetch('/api/stripe/checkout', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+      })
+
+      const data = await res.json()
+
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        throw new Error(data.error || 'Failed to create checkout session')
+      }
+    } catch (error) {
+      console.error('Upgrade error:', error)
+      alert('Failed to start checkout. Please try again.')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const handleManageBilling = async () => {
+    setLoading('portal')
+
+    try {
+      const res = await fetch('/api/stripe/portal', {
+        method: 'POST',
+      })
+
+      const data = await res.json()
+
+      if (data.url) {
+        window.location.href = data.url
+      } else {
+        throw new Error(data.error || 'Failed to open billing portal')
+      }
+    } catch (error) {
+      console.error('Portal error:', error)
+      alert('Failed to open billing portal. Please try again.')
+    } finally {
+      setLoading(null)
+    }
+  }
 
   return (
     <div className="min-h-screen bg-dark-950 relative overflow-hidden">
@@ -75,89 +194,149 @@ function PricingContent() {
         </div>
       </nav>
 
+      {/* Canceled Notice */}
+      {showCanceled && (
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 px-6 py-3 rounded-xl z-50 animate-slide-down">
+          Checkout was canceled. No charges were made.
+        </div>
+      )}
+
       {/* Header */}
       <section className="relative pt-20 pb-16 px-6">
         <div className="max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/20 px-4 py-2 rounded-full text-sm text-frim-400 mb-6">
             <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
-            🎉 Everything is FREE!
+            Simple, transparent pricing
           </div>
           <h1 className="font-display text-4xl md:text-5xl font-bold mb-6">
-            <span className="gradient-text">100% Free</span> — No Limits
+            Choose your <span className="gradient-text">plan</span>
           </h1>
           <p className="text-lg text-dark-400 max-w-2xl mx-auto">
-            We&apos;ve made all features completely free. Create unlimited projects, 
-            unlimited animations, and access all tools — no credit card required.
+            Start free and upgrade when you need more. No hidden fees, cancel anytime.
           </p>
         </div>
       </section>
 
-      {/* Single Free Plan Card */}
+      {/* Pricing Cards */}
       <section className="relative pb-24 px-6">
-        <div className="max-w-xl mx-auto">
-          <div className="relative bg-dark-900 border border-frim-500 shadow-xl shadow-frim-500/10 rounded-2xl p-8">
-            <div className="absolute -top-4 left-1/2 -translate-x-1/2">
-              <span className="bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-4 py-1.5 rounded-full text-sm font-semibold">
-                ✨ All Features Included
-              </span>
-            </div>
-
-            <div className="text-center mb-8 pt-4">
-              <h3 className="font-display text-3xl font-bold mb-2">Free Forever</h3>
-              <p className="text-dark-500">No subscriptions, no limits, no catch.</p>
-            </div>
-
-            <div className="text-center mb-8">
-              <span className="font-display text-6xl font-bold text-frim-400">$0</span>
-              <span className="text-dark-500 ml-2">forever</span>
-            </div>
-
-            <Link
-              href={session ? "/dashboard" : "/auth/register"}
-              className="block w-full py-4 rounded-xl font-semibold mb-8 text-center bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 hover:shadow-lg hover:shadow-frim-500/25 transition-all"
-            >
-              {session ? "Go to Dashboard" : "Get Started Free"}
-            </Link>
-
-            <div className="space-y-4">
-              {features.map((feature, i) => (
-                <div key={i} className="flex items-center gap-3">
-                  <div className="w-5 h-5 rounded-full bg-frim-500/20 flex items-center justify-center shrink-0">
-                    <svg className="w-3 h-3 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
-                    </svg>
+        <div className="max-w-5xl mx-auto">
+          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+            {plans.map((plan) => (
+              <div
+                key={plan.id}
+                className={`relative bg-dark-900 border rounded-2xl p-8 ${
+                  plan.popular
+                    ? 'border-frim-500 shadow-xl shadow-frim-500/10'
+                    : 'border-dark-800'
+                }`}
+              >
+                {plan.popular && (
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+                    <span className="bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-4 py-1.5 rounded-full text-sm font-semibold">
+                      Most Popular
+                    </span>
                   </div>
-                  <span className="text-dark-300">{feature}</span>
+                )}
+
+                <div className="mb-6">
+                  <h3 className="font-display text-2xl font-bold mb-2">{plan.name}</h3>
+                  <p className="text-dark-500">{plan.description}</p>
                 </div>
-              ))}
-            </div>
+
+                <div className="mb-8">
+                  <span className="font-display text-5xl font-bold">
+                    ${plan.price}
+                  </span>
+                  <span className="text-dark-500">{plan.period}</span>
+                </div>
+
+                {currentPlan === plan.id ? (
+                  <div className="mb-8">
+                    <div className="bg-frim-500/10 border border-frim-500/30 text-frim-400 px-4 py-3 rounded-xl text-center font-medium">
+                      ✓ Current Plan
+                    </div>
+                    {plan.id === 'pro' && (
+                      <button
+                        onClick={handleManageBilling}
+                        disabled={loading === 'portal'}
+                        className="w-full mt-3 text-sm text-dark-400 hover:text-dark-200 py-2 transition-colors"
+                      >
+                        {loading === 'portal' ? 'Loading...' : 'Manage Billing →'}
+                      </button>
+                    )}
+                  </div>
+                ) : (
+                  <button
+                    onClick={() => handleUpgrade(plan.id)}
+                    disabled={loading === plan.id}
+                    className={`w-full py-3.5 rounded-xl font-semibold mb-8 transition-all ${
+                      plan.popular
+                        ? 'bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 hover:shadow-lg hover:shadow-frim-500/25'
+                        : 'bg-dark-800 text-dark-200 hover:bg-dark-700'
+                    } disabled:opacity-50`}
+                  >
+                    {loading === plan.id ? (
+                      <span className="flex items-center justify-center gap-2">
+                        <span className="spinner w-4 h-4" />
+                        Processing...
+                      </span>
+                    ) : (
+                      plan.cta
+                    )}
+                  </button>
+                )}
+
+                <div className="space-y-4">
+                  {plan.features.map((feature, i) => (
+                    <div key={i} className="flex items-center gap-3">
+                      <div className="w-5 h-5 rounded-full bg-frim-500/20 flex items-center justify-center shrink-0">
+                        <svg className="w-3 h-3 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
+                        </svg>
+                      </div>
+                      <span className="text-dark-300">{feature}</span>
+                    </div>
+                  ))}
+                  {plan.notIncluded.map((feature, i) => (
+                    <div key={i} className="flex items-center gap-3 opacity-50">
+                      <div className="w-5 h-5 rounded-full bg-dark-800 flex items-center justify-center shrink-0">
+                        <svg className="w-3 h-3 text-dark-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+                        </svg>
+                      </div>
+                      <span className="text-dark-600">{feature}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ))}
           </div>
         </div>
       </section>
 
-      {/* Why Free Section */}
+      {/* FAQ */}
       <section className="relative pb-24 px-6">
         <div className="max-w-3xl mx-auto">
           <h2 className="font-display text-3xl font-bold text-center mb-12">
-            Why is it free?
+            Frequently Asked Questions
           </h2>
           <div className="space-y-6">
             {[
               {
-                q: 'Is this really free?',
-                a: 'Yes! All features are completely free with no hidden costs. We want everyone to have access to professional animation tools.',
+                q: 'Can I cancel anytime?',
+                a: 'Yes! You can cancel your subscription at any time. You\'ll continue to have access to Pro features until the end of your billing period.',
               },
               {
-                q: 'Will it stay free?',
-                a: 'We plan to keep the core features free. If we introduce premium features in the future, existing functionality will remain free.',
+                q: 'What happens to my projects if I downgrade?',
+                a: 'Your projects are safe! If you exceed the free plan limit after downgrading, you can still access all your projects but won\'t be able to create new ones until you\'re within the limit.',
               },
               {
-                q: 'What\'s the catch?',
-                a: 'There\'s no catch! We\'re building this for the community. We may introduce optional paid features later, but the current features will always be free.',
+                q: 'Is there a free trial?',
+                a: 'The free plan lets you explore all basic features with up to 3 projects. This is essentially a forever-free tier, not a limited trial.',
               },
               {
-                q: 'Is my data safe?',
-                a: 'Absolutely. Your projects are stored securely in the cloud. We don\'t sell your data or use it for anything other than providing the service.',
+                q: 'How secure is my payment?',
+                a: 'We use Stripe for all payments. Your card details never touch our servers and are processed securely by Stripe, trusted by millions of businesses worldwide.',
               },
             ].map((faq, i) => (
               <div key={i} className="bg-dark-900 border border-dark-800 rounded-xl p-6">
@@ -184,9 +363,26 @@ function PricingContent() {
             </svg>
             <span className="font-display text-lg font-semibold">frim</span>
           </div>
-          <p className="text-sm text-dark-600">© 2026 Frim. Free web-based GLB animation editor.</p>
+          <p className="text-sm text-dark-600">© 2026 Frim. Web-based GLB animation editor.</p>
+          <a 
+            href="mailto:support@frim.app"
+            className="text-sm text-dark-500 hover:text-frim-400 transition-colors flex items-center gap-2"
+          >
+            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
+            </svg>
+            Need help? Contact support@frim.app
+          </a>
         </div>
       </footer>
+
+      <style jsx>{`
+        @keyframes slide-down {
+          from { opacity: 0; transform: translate(-50%, -20px); }
+          to { opacity: 1; transform: translate(-50%, 0); }
+        }
+        .animate-slide-down { animation: slide-down 0.3s ease-out; }
+      `}</style>
     </div>
   )
 }

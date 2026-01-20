@@ -35,6 +35,8 @@ import {
   Clipboard,
   ClipboardPaste,
   FlipHorizontal,
+  Zap,
+  Lock,
   Package,
   Bot,
   Check,
@@ -55,6 +57,9 @@ interface EditorProps {
     modelData?: string
     modelName?: string
   }
+  animationLimit?: number
+  isPro?: boolean
+  canUseVideoAnalysis?: boolean
 }
 
 interface ProjectData {
@@ -83,7 +88,7 @@ interface HistoryState {
   boneStates: { [key: string]: { position: number[]; rotation: number[]; scale: number[] } }
 }
 
-export default function ThreeEditor({ projectName, onChange, saving, initialData }: EditorProps) {
+export default function ThreeEditor({ projectName, onChange, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -131,6 +136,10 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // Clipboard
   const clipboardRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null)
 
+  // Upgrade modal
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis'>('animation_limit')
+
   // Video analysis modal
   const [showVideoModal, setShowVideoModal] = useState(false)
   const [videoFile, setVideoFile] = useState<File | null>(null)
@@ -152,20 +161,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [draggingKeyframe, setDraggingKeyframe] = useState<{boneName: string, fromFrame: number} | null>(null)
   const [exportIncludeModel, setExportIncludeModel] = useState(true)
   const [exportingGLB, setExportingGLB] = useState(false)
-  
-  // Keyframe selection state
-  const [selectedKeyframes, setSelectedKeyframes] = useState<Set<string>>(new Set()) // Set of "frame:boneName" strings
-  const [boxSelection, setBoxSelection] = useState<{active: boolean, startX: number, startY: number, currentX: number, currentY: number} | null>(null)
-  const timelineTracksRef = useRef<HTMLDivElement>(null)
-  
-  // Bone mapping modal state for animation import
-  const [boneMappingModal, setBoneMappingModal] = useState<{
-    show: boolean
-    data: any
-    matched: Array<{source: string, target: string, fuzzy?: boolean}>
-    unmatched: string[]
-    mapping: Map<string, string>
-  } | null>(null)
 
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
@@ -1032,246 +1027,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     showToast(`Keyframe moved from frame ${fromFrame} to ${toFrame}`, 'info')
   }, [currentAnimationId, showToast])
 
-  // Select/toggle keyframe selection
-  const selectKeyframe = useCallback((frame: number, boneName: string, addToSelection = false) => {
-    const key = `${frame}:${boneName}`
-    
-    setSelectedKeyframes(prev => {
-      const newSelection = addToSelection ? new Set(prev) : new Set<string>()
-      
-      if (prev.has(key) && addToSelection) {
-        newSelection.delete(key)
-      } else {
-        newSelection.add(key)
-      }
-      
-      return newSelection
-    })
-  }, [])
-
-  // Clear keyframe selection
-  const clearKeyframeSelection = useCallback(() => {
-    setSelectedKeyframes(new Set())
-  }, [])
-
-  // Duplicate selected keyframes (or current bone's keyframe)
-  const duplicateKeyframes = useCallback(() => {
-    if (!currentAnimationId) {
-      showToast('No animation selected', 'error')
-      return
-    }
-
-    setAnimations(prev => {
-      const newAnimations = new Map(prev)
-      const anim = newAnimations.get(currentAnimationId)
-      if (!anim) return prev
-
-      const newKeyframes = new Map(anim.keyframes)
-      let duplicatedCount = 0
-      const newSelection = new Set<string>()
-
-      // If we have selected keyframes, duplicate those
-      if (selectedKeyframes.size > 0) {
-        const keyframesToDuplicate: {frame: number, boneName: string, data: BoneKeyframe}[] = []
-        
-        selectedKeyframes.forEach(key => {
-          const [frameStr, boneName] = key.split(':')
-          const frame = parseInt(frameStr, 10)
-          const frameData = newKeyframes.get(frame)
-          if (frameData?.has(boneName)) {
-            keyframesToDuplicate.push({
-              frame,
-              boneName,
-              data: frameData.get(boneName)!
-            })
-          }
-        })
-
-        if (keyframesToDuplicate.length === 0) {
-          showToast('No valid keyframes selected', 'warning')
-          return prev
-        }
-
-        // Duplicate each keyframe to next frame
-        const offset = 1
-        keyframesToDuplicate.forEach(({ frame, boneName, data }) => {
-          const newFrame = frame + offset
-          if (newFrame <= anim.totalFrames) {
-            if (!newKeyframes.has(newFrame)) {
-              newKeyframes.set(newFrame, new Map())
-            }
-            
-            newKeyframes.get(newFrame)!.set(boneName, {
-              position: data.position.clone(),
-              rotation: data.rotation.clone(),
-              scale: data.scale.clone()
-            })
-            
-            newSelection.add(`${newFrame}:${boneName}`)
-            duplicatedCount++
-          }
-        })
-      } else if (selectedBone) {
-        // No selection, duplicate current bone's keyframe at current frame
-        const frameData = newKeyframes.get(currentFrame)
-        if (frameData?.has(selectedBone.name)) {
-          const data = frameData.get(selectedBone.name)!
-          const newFrame = currentFrame + 1
-          
-          if (newFrame <= anim.totalFrames) {
-            if (!newKeyframes.has(newFrame)) {
-              newKeyframes.set(newFrame, new Map())
-            }
-            
-            newKeyframes.get(newFrame)!.set(selectedBone.name, {
-              position: data.position.clone(),
-              rotation: data.rotation.clone(),
-              scale: data.scale.clone()
-            })
-            
-            newSelection.add(`${newFrame}:${selectedBone.name}`)
-            duplicatedCount++
-          }
-        } else {
-          showToast('No keyframe at current frame for selected bone', 'warning')
-          return prev
-        }
-      } else {
-        showToast('Select keyframes or a bone first', 'warning')
-        return prev
-      }
-
-      // Update selection to new keyframes
-      setSelectedKeyframes(newSelection)
-
-      if (duplicatedCount > 0) {
-        showToast(`Duplicated ${duplicatedCount} keyframe(s)`, 'success')
-      }
-
-      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
-      return newAnimations
-    })
-  }, [currentAnimationId, selectedKeyframes, selectedBone, currentFrame, showToast])
-
-  // Delete all selected keyframes
-  const deleteSelectedKeyframes = useCallback(() => {
-    if (!currentAnimationId) return
-
-    if (selectedKeyframes.size === 0) {
-      // Fall back to deleting current bone's keyframe
-      if (selectedBone) {
-        setAnimations(prev => {
-          const newAnimations = new Map(prev)
-          const anim = newAnimations.get(currentAnimationId)
-          if (!anim) return prev
-
-          const newKeyframes = new Map(anim.keyframes)
-          const frameData = newKeyframes.get(currentFrame)
-          if (frameData?.has(selectedBone.name)) {
-            frameData.delete(selectedBone.name)
-            if (frameData.size === 0) {
-              newKeyframes.delete(currentFrame)
-            }
-            showToast('Keyframe deleted', 'info')
-          }
-
-          newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
-          return newAnimations
-        })
-      }
-      return
-    }
-
-    setAnimations(prev => {
-      const newAnimations = new Map(prev)
-      const anim = newAnimations.get(currentAnimationId)
-      if (!anim) return prev
-
-      const newKeyframes = new Map(anim.keyframes)
-      let deletedCount = 0
-
-      selectedKeyframes.forEach(key => {
-        const [frameStr, boneName] = key.split(':')
-        const frame = parseInt(frameStr, 10)
-        const frameData = newKeyframes.get(frame)
-        
-        if (frameData?.has(boneName)) {
-          frameData.delete(boneName)
-          if (frameData.size === 0) {
-            newKeyframes.delete(frame)
-          }
-          deletedCount++
-        }
-      })
-
-      if (deletedCount > 0) {
-        showToast(`Deleted ${deletedCount} keyframe(s)`, 'info')
-      }
-
-      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
-      return newAnimations
-    })
-
-    setSelectedKeyframes(new Set())
-  }, [currentAnimationId, selectedKeyframes, selectedBone, currentFrame, showToast])
-
-  // Move all selected keyframes by a frame offset
-  const moveSelectedKeyframes = useCallback((deltaFrames: number) => {
-    if (!currentAnimationId || selectedKeyframes.size === 0) return
-
-    setAnimations(prev => {
-      const newAnimations = new Map(prev)
-      const anim = newAnimations.get(currentAnimationId)
-      if (!anim) return prev
-
-      const newKeyframes = new Map(anim.keyframes)
-      const keyframesToMove: {oldFrame: number, newFrame: number, boneName: string, data: BoneKeyframe}[] = []
-
-      // Collect keyframes to move
-      selectedKeyframes.forEach(key => {
-        const [frameStr, boneName] = key.split(':')
-        const frame = parseInt(frameStr, 10)
-        const frameData = newKeyframes.get(frame)
-        
-        if (frameData?.has(boneName)) {
-          keyframesToMove.push({
-            oldFrame: frame,
-            newFrame: Math.max(0, Math.min(anim.totalFrames, frame + deltaFrames)),
-            boneName,
-            data: frameData.get(boneName)!
-          })
-        }
-      })
-
-      // Remove old keyframes
-      keyframesToMove.forEach(({ oldFrame, boneName }) => {
-        const frameData = newKeyframes.get(oldFrame)
-        if (frameData) {
-          frameData.delete(boneName)
-          if (frameData.size === 0) {
-            newKeyframes.delete(oldFrame)
-          }
-        }
-      })
-
-      // Update selection and add new keyframes
-      const newSelection = new Set<string>()
-      keyframesToMove.forEach(({ newFrame, boneName, data }) => {
-        if (!newKeyframes.has(newFrame)) {
-          newKeyframes.set(newFrame, new Map())
-        }
-        newKeyframes.get(newFrame)!.set(boneName, data)
-        newSelection.add(`${newFrame}:${boneName}`)
-      })
-
-      setSelectedKeyframes(newSelection)
-      showToast(`Moved ${keyframesToMove.length} keyframe(s)`, 'info')
-
-      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
-      return newAnimations
-    })
-  }, [currentAnimationId, selectedKeyframes, showToast])
-
   const resetBone = useCallback(() => {
     if (!selectedBone) return
     const original = originalTransformsRef.current.get(selectedBone.name)
@@ -1337,6 +1092,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   }, [selectedBone, bones, showToast])
 
   const createNewAnimation = useCallback(() => {
+    // Check animation limit for free users
+    if (!isPro && animations.size >= animationLimit) {
+      setUpgradeModalReason('animation_limit')
+      setShowUpgradeModal(true)
+      return
+    }
+
     const id = `anim_${animationCounterRef.current++}`
     const newAnim: Animation = {
       name: `Animation ${animations.size + 1}`,
@@ -1352,7 +1114,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setCurrentFrame(0)
     resetAllBones()
     showToast('New animation created', 'success')
-  }, [animations.size, resetAllBones, showToast])
+  }, [animations.size, resetAllBones, showToast, isPro, animationLimit])
 
   const deleteAnimation = useCallback((animId: string) => {
     if (animations.size <= 1) {
@@ -2095,189 +1857,53 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setSelectedExportAnimations(new Set())
   }, [])
 
-  // Get animation bone names from JSON data
-  const getAnimationBoneNames = useCallback((data: any): string[] => {
-    const bonesSet = new Set<string>()
-    Object.values(data.keyframes || {}).forEach((frameData: any) => {
-      Object.keys(frameData).forEach(boneName => bonesSet.add(boneName))
-    })
-    return Array.from(bonesSet)
-  }, [])
-
-  // Get model bone names
-  const getModelBoneNames = useCallback((): string[] => {
-    return Array.from(bones.keys())
-  }, [bones])
-
-  // Find similar bone using common patterns
-  const findSimilarBone = useCallback((sourceBone: string, modelBones: string[]): string | null => {
-    const normalized = sourceBone.toLowerCase()
-      .replace(/^mixamorig[:\d]*/, '')
-      .replace(/^mixamorig_/, '')
-      .replace(/^bip01_?/i, '')
-      .replace(/^bone_?/i, '')
-      .replace(/_/g, '')
-      .replace(/\./g, '')
-    
-    for (const modelBone of modelBones) {
-      const modelNormalized = modelBone.toLowerCase()
-        .replace(/^mixamorig[:\d]*/, '')
-        .replace(/^mixamorig_/, '')
-        .replace(/^bip01_?/i, '')
-        .replace(/^bone_?/i, '')
-        .replace(/_/g, '')
-        .replace(/\./g, '')
-      
-      if (normalized === modelNormalized) return modelBone
-      
-      if (normalized.includes(modelNormalized) || modelNormalized.includes(normalized)) {
-        if (Math.abs(normalized.length - modelNormalized.length) <= 5) return modelBone
-      }
-    }
-    return null
-  }, [])
-
-  // Compare bone names and find matches/mismatches
-  const compareBoneNames = useCallback((animationBones: string[], modelBones: string[]) => {
-    const matched: Array<{source: string, target: string, fuzzy?: boolean}> = []
-    const unmatched: string[] = []
-    
-    animationBones.forEach(bone => {
-      const exactMatch = modelBones.find(mb => mb === bone)
-      const caseMatch = modelBones.find(mb => mb.toLowerCase() === bone.toLowerCase())
-      
-      if (exactMatch) {
-        matched.push({ source: bone, target: exactMatch })
-      } else if (caseMatch) {
-        matched.push({ source: bone, target: caseMatch })
-      } else {
-        const similar = findSimilarBone(bone, modelBones)
-        if (similar) {
-          matched.push({ source: bone, target: similar, fuzzy: true })
-        } else {
-          unmatched.push(bone)
-        }
-      }
-    })
-    
-    return { matched, unmatched }
-  }, [findSimilarBone])
-
-  // Import animation with bone mapping
-  const importAnimationWithMapping = useCallback((data: any, boneMapping: Map<string, string>) => {
-    const newId = `anim_${animationCounterRef.current++}`
-    const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
-    
-    Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
-      const frame = parseInt(frameStr)
-      const boneMap = new Map<string, BoneKeyframe>()
-      
-      Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
-        const mappedBone = boneMapping.get(boneName)
-        if (mappedBone) {
-          boneMap.set(mappedBone, {
-            position: new THREE.Vector3(...boneData.position),
-            rotation: new THREE.Quaternion(...boneData.rotation),
-            scale: new THREE.Vector3(...boneData.scale)
-          })
-        }
-      })
-      
-      if (boneMap.size > 0) {
-        newKeyframes.set(frame, boneMap)
-      }
-    })
-    
-    const newAnim: Animation = {
-      name: data.name || 'Imported Animation',
-      fps: data.fps || 24,
-      totalFrames: data.totalFrames || 30,
-      speed: data.speed || 1,
-      loop: data.loop !== false,
-      keyframes: newKeyframes
-    }
-    
-    setAnimations(prev => new Map(prev).set(newId, newAnim))
-    setCurrentAnimationId(newId)
-    setCurrentFrame(0)
-    setBoneMappingModal(null)
-    
-    showToast(`Imported "${newAnim.name}" - ${boneMapping.size} bones mapped`, 'success')
-  }, [showToast])
-
   // Import JSON animation
   const importJSON = useCallback((file: File) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
         const data = JSON.parse(e.target?.result as string)
-        const animationBones = getAnimationBoneNames(data)
-        const modelBones = getModelBoneNames()
         
-        if (modelBones.length === 0) {
-          // No model loaded - import directly
-          const newId = `anim_${animationCounterRef.current++}`
-          const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
+        // Create new animation from JSON
+        const newId = `anim_${animationCounterRef.current++}`
+        const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
+        
+        Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
+          const frame = parseInt(frameStr)
+          const boneMap = new Map<string, BoneKeyframe>()
           
-          Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
-            const frame = parseInt(frameStr)
-            const boneMap = new Map<string, BoneKeyframe>()
-            
-            Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
-              boneMap.set(boneName, {
-                position: new THREE.Vector3(...boneData.position),
-                rotation: new THREE.Quaternion(...boneData.rotation),
-                scale: new THREE.Vector3(...boneData.scale)
-              })
+          Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
+            boneMap.set(boneName, {
+              position: new THREE.Vector3(...boneData.position),
+              rotation: new THREE.Quaternion(...boneData.rotation),
+              scale: new THREE.Vector3(...boneData.scale)
             })
-            
-            newKeyframes.set(frame, boneMap)
           })
           
-          const newAnim: Animation = {
-            name: data.name || 'Imported Animation',
-            fps: data.fps || 24,
-            totalFrames: data.totalFrames || 30,
-            speed: data.speed || 1,
-            loop: data.loop !== false,
-            keyframes: newKeyframes
-          }
-          
-          setAnimations(prev => new Map(prev).set(newId, newAnim))
-          setCurrentAnimationId(newId)
-          setCurrentFrame(0)
-          showToast(`Imported "${newAnim.name}"`, 'success')
-          return
+          newKeyframes.set(frame, boneMap)
+        })
+        
+        const newAnim: Animation = {
+          name: data.name || 'Imported Animation',
+          fps: data.fps || 24,
+          totalFrames: data.totalFrames || 30,
+          speed: data.speed || 1,
+          loop: data.loop !== false,
+          keyframes: newKeyframes
         }
         
-        // Check for bone mismatches
-        const { matched, unmatched } = compareBoneNames(animationBones, modelBones)
+        setAnimations(prev => new Map(prev).set(newId, newAnim))
+        setCurrentAnimationId(newId)
+        setCurrentFrame(0)
         
-        if (unmatched.length > 0) {
-          // Show bone mapping modal
-          const initialMapping = new Map<string, string>()
-          matched.forEach(({ source, target }) => initialMapping.set(source, target))
-          
-          setBoneMappingModal({
-            show: true,
-            data,
-            matched,
-            unmatched,
-            mapping: initialMapping
-          })
-        } else {
-          // All bones match - import directly with mapping
-          const mapping = new Map<string, string>()
-          matched.forEach(({ source, target }) => mapping.set(source, target))
-          importAnimationWithMapping(data, mapping)
-        }
+        showToast(`Imported "${newAnim.name}"`, 'success')
       } catch (err) {
         console.error('JSON import error:', err)
         showToast('Failed to import animation', 'error')
       }
     }
     reader.readAsText(file)
-  }, [showToast, getAnimationBoneNames, getModelBoneNames, compareBoneNames, importAnimationWithMapping])
+  }, [showToast])
 
   // Undo function
   const undo = useCallback(() => {
@@ -2432,43 +2058,18 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           break
         case 'Delete':
         case 'Backspace':
-          deleteSelectedKeyframes()
+          deleteKeyframe()
           break
         case 'ArrowLeft': goToFrame(currentFrame - 1); break
         case 'ArrowRight': goToFrame(currentFrame + 1); break
         case 'Home': goToFrame(0); break
         case 'End': goToFrame(totalFrames); break
-        case 'KeyD':
-          if (e.ctrlKey || e.metaKey) {
-            e.preventDefault()
-            duplicateKeyframes()
-          }
-          break
-        case 'Escape':
-          clearKeyframeSelection()
-          break
-        case 'KeyA':
-          if (e.ctrlKey || e.metaKey) {
-            e.preventDefault()
-            // Select all keyframes
-            if (currentAnimation) {
-              const allKeys = new Set<string>()
-              currentAnimation.keyframes.forEach((frameData, frame) => {
-                frameData.forEach((_, boneName) => {
-                  allKeys.add(`${frame}:${boneName}`)
-                })
-              })
-              setSelectedKeyframes(allKeys)
-              showToast(`Selected ${allKeys.size} keyframe(s)`, 'info')
-            }
-          }
-          break
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, deleteSelectedKeyframes, duplicateKeyframes, clearKeyframeSelection, undo, redo, copyPose, resetBone, totalFrames, currentAnimation, showToast])
+  }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, undo, redo, copyPose, resetBone, totalFrames])
 
   // Canvas click for bone selection
   useEffect(() => {
@@ -2900,29 +2501,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 Keyframe
               </button>
               <button
-                onClick={duplicateKeyframes}
-                className="py-2 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
-                title="Duplicate selected keyframes (Ctrl+D)"
-              >
-                <Copy className="w-3.5 h-3.5" />
-                Duplicate
-              </button>
-            </div>
-            <div className="grid grid-cols-2 gap-2">
-              <button
                 onClick={resetBone}
                 className="py-2 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Reset
-              </button>
-              <button
-                onClick={deleteSelectedKeyframes}
-                className="py-2 bg-[#27272a] text-[#dc2626] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
-                title="Delete selected keyframes"
-              >
-                <Trash2 className="w-3.5 h-3.5" />
-                Delete Key
               </button>
             </div>
             <button
@@ -2975,14 +2558,22 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         <div className="p-3 border-b border-[#252b3d] flex items-center justify-between">
           <div className="flex items-center gap-2">
             <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">ANIMATIONS</h3>
-            <span className="text-[10px] text-[#22c55e] font-mono">unlimited</span>
+            {!isPro && (
+              <span className="text-[10px] text-[#71717a] font-mono">
+                {animations.size}/{animationLimit}
+              </span>
+            )}
           </div>
           <button
             onClick={createNewAnimation}
-            className="w-6 h-6 rounded flex items-center justify-center transition-colors bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]"
-            title="Create new animation"
+            className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
+              !isPro && animations.size >= animationLimit
+                ? 'bg-[#252b3d] text-[#71717a] hover:bg-[#3f3f46]'
+                : 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]'
+            }`}
+            title={!isPro && animations.size >= animationLimit ? 'Upgrade to Pro for more animations' : 'Create new animation'}
           >
-            <Plus className="w-4 h-4" />
+            {!isPro && animations.size >= animationLimit ? <Lock className="w-3.5 h-3.5" /> : <Plus className="w-4 h-4" />}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
@@ -3203,130 +2794,55 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
           {/* Track */}
           <div
-            ref={timelineTracksRef}
             className="h-[calc(100%-24px)] relative cursor-pointer select-none"
             style={{ 
               width: `${totalFrames * 20}px`,
               background: 'repeating-linear-gradient(90deg, #252b3d 0px, #252b3d 1px, transparent 1px, transparent 20px)'
             }}
             onMouseDown={(e) => {
-              // Only start box selection if clicking on empty area (not on a keyframe marker)
-              if ((e.target as HTMLElement).classList.contains('keyframe-marker')) return
-              
+              // Start scrubbing
+              e.preventDefault()
               const track = e.currentTarget
-              const rect = track.getBoundingClientRect()
-              const startX = e.clientX - rect.left + track.parentElement!.scrollLeft
-              const startY = e.clientY - rect.top
+              const updateFrame = (clientX: number) => {
+                const rect = track.getBoundingClientRect()
+                const x = clientX - rect.left + track.parentElement!.scrollLeft
+                const frame = Math.max(0, Math.min(totalFrames, Math.round(x / 20)))
+                goToFrame(frame)
+              }
               
-              // Start box selection
-              setBoxSelection({
-                active: true,
-                startX,
-                startY,
-                currentX: startX,
-                currentY: startY
-              })
+              updateFrame(e.clientX)
               
               const handleMouseMove = (moveEvent: MouseEvent) => {
-                const currentX = moveEvent.clientX - rect.left + track.parentElement!.scrollLeft
-                const currentY = moveEvent.clientY - rect.top
-                setBoxSelection(prev => prev ? { ...prev, currentX, currentY } : null)
+                updateFrame(moveEvent.clientX)
               }
               
-              const handleMouseUp = (upEvent: MouseEvent) => {
+              const handleMouseUp = () => {
                 document.removeEventListener('mousemove', handleMouseMove)
                 document.removeEventListener('mouseup', handleMouseUp)
-                
-                const endX = upEvent.clientX - rect.left + track.parentElement!.scrollLeft
-                const endY = upEvent.clientY - rect.top
-                
-                const left = Math.min(startX, endX)
-                const right = Math.max(startX, endX)
-                const top = Math.min(startY, endY)
-                const bottom = Math.max(startY, endY)
-                
-                // Only select if box has meaningful size
-                if (right - left > 5 || bottom - top > 5) {
-                  // Select keyframes within box
-                  if (!upEvent.shiftKey) {
-                    setSelectedKeyframes(new Set())
-                  }
-                  
-                  const newSelection = upEvent.shiftKey ? new Set(selectedKeyframes) : new Set<string>()
-                  
-                  if (currentAnimation) {
-                    currentAnimation.keyframes.forEach((frameData, frame) => {
-                      const markerX = frame * 20
-                      let idx = 0
-                      frameData.forEach((_, boneName) => {
-                        const markerY = 20 + idx * 16
-                        if (markerX >= left && markerX <= right && markerY >= top && markerY <= bottom) {
-                          newSelection.add(`${frame}:${boneName}`)
-                        }
-                        idx++
-                      })
-                    })
-                  }
-                  
-                  setSelectedKeyframes(newSelection)
-                } else {
-                  // Small movement = click to go to frame
-                  const frame = Math.max(0, Math.min(totalFrames, Math.round(startX / 20)))
-                  if (!upEvent.shiftKey) {
-                    clearKeyframeSelection()
-                  }
-                  goToFrame(frame)
-                }
-                
-                setBoxSelection(null)
               }
               
-              e.preventDefault()
               document.addEventListener('mousemove', handleMouseMove)
               document.addEventListener('mouseup', handleMouseUp)
             }}
           >
-            {/* Box selection overlay */}
-            {boxSelection && (
-              <div
-                className="absolute bg-[#22c55e]/20 border border-[#22c55e] pointer-events-none z-20"
-                style={{
-                  left: `${Math.min(boxSelection.startX, boxSelection.currentX)}px`,
-                  top: `${Math.min(boxSelection.startY, boxSelection.currentY)}px`,
-                  width: `${Math.abs(boxSelection.currentX - boxSelection.startX)}px`,
-                  height: `${Math.abs(boxSelection.currentY - boxSelection.startY)}px`
-                }}
-              />
-            )}
-            
             {/* Keyframe markers */}
             {currentAnimation?.keyframes && Array.from(currentAnimation.keyframes.entries()).map(([frame, frameData]) => (
-              Array.from(frameData.keys()).map((boneName, idx) => {
-                const keyId = `${frame}:${boneName}`
-                const isSelected = selectedKeyframes.has(keyId)
-                
-                return (
+              Array.from(frameData.keys()).map((boneName, idx) => (
                 <div
-                  key={keyId}
-                  className={`keyframe-marker absolute w-3 h-3 rounded-sm rotate-45 -translate-x-1/2 cursor-grab hover:scale-125 transition-all ${
-                    isSelected 
-                      ? 'bg-[#06b6d4] border-2 border-[#151821] scale-110 shadow-[0_0_10px_#06b6d4]' 
-                      : selectedBone?.name === boneName 
-                        ? 'bg-[#fbbf24] border-2 border-[#151821]' 
-                        : 'bg-[#22c55e] border-2 border-[#151821]'
+                  key={`${frame}-${boneName}`}
+                  className={`absolute w-3 h-3 rounded-sm rotate-45 -translate-x-1/2 cursor-grab hover:scale-125 transition-transform ${
+                    selectedBone?.name === boneName ? 'bg-[#fbbf24] border-2 border-[#151821]' : 'bg-[#22c55e] border-2 border-[#151821]'
                   } ${draggingKeyframe?.boneName === boneName && draggingKeyframe?.fromFrame === frame ? 'scale-150 opacity-80 cursor-grabbing' : ''}`}
                   style={{ 
                     left: `${frame * 20}px`, 
                     top: `${20 + idx * 16}px`
                   }}
-                  title={`${boneName} @ frame ${frame}${isSelected ? ' (selected)' : ''}`}
+                  title={`${boneName} @ frame ${frame} (drag to move)`}
                   onClick={(e) => {
                     e.stopPropagation()
                     if (!draggingKeyframe) {
-                      // Shift+click to add/toggle selection
-                      selectKeyframe(frame, boneName, e.shiftKey)
-                      goToFrame(frame)
-                      handleBoneSelect(boneName)
+                    goToFrame(frame)
+                    handleBoneSelect(boneName)
                     }
                   }}
                   onMouseDown={(e) => {
@@ -3338,9 +2854,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     const startFrame = frame
                     let currentNewFrame = startFrame
                     let hasMoved = false
-                    
-                    // If this keyframe is selected and there are multiple selections, move all
-                    const movingMultiple = isSelected && selectedKeyframes.size > 1
                     
                     setDraggingKeyframe({ boneName, fromFrame: frame })
                     
@@ -3361,12 +2874,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                       setDraggingKeyframe(null)
                       
                       if (hasMoved && currentNewFrame !== startFrame) {
-                        const deltaFrames = currentNewFrame - startFrame
-                        if (movingMultiple) {
-                          moveSelectedKeyframes(deltaFrames)
-                        } else {
-                          moveKeyframe(boneName, startFrame, currentNewFrame)
-                        }
+                        moveKeyframe(boneName, startFrame, currentNewFrame)
                       }
                     }
                     
@@ -3374,7 +2882,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     document.addEventListener('mouseup', handleMouseUp)
                   }}
                 />
-              )})
+              ))
             ))}
 
             {/* Playhead */}
@@ -3390,6 +2898,65 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
       {/* Toast container */}
       <div id="toast-container" className="fixed bottom-[180px] right-4 flex flex-col-reverse gap-2 z-50" />
+
+      {/* Upgrade Modal */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
+            <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
+              {upgradeModalReason === 'video_analysis' ? (
+                <Video className="w-8 h-8 text-[#22c55e]" />
+              ) : (
+                <Zap className="w-8 h-8 text-[#22c55e]" />
+              )}
+            </div>
+            <h2 className="text-xl font-semibold mb-2">
+              {upgradeModalReason === 'video_analysis' 
+                ? 'AI Video Motion Capture' 
+                : 'Animation Limit Reached'}
+            </h2>
+            <p className="text-[#a1a1aa] mb-6">
+              {upgradeModalReason === 'video_analysis' 
+                ? 'Extract animations from videos with AI pose detection. Upgrade to Pro to unlock this powerful feature.'
+                : `You've reached the limit of ${animationLimit} animation${animationLimit !== 1 ? 's' : ''} on the Free plan. Upgrade to Pro for unlimited animations.`}
+            </p>
+            
+            {/* Feature highlights */}
+            <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6 text-left">
+              <p className="text-xs font-semibold text-[#71717a] mb-3">PRO INCLUDES:</p>
+              <ul className="space-y-2">
+                {[
+                  'Unlimited animations per project',
+                  'AI Video Motion Capture',
+                  'Unlimited projects',
+                  'Priority support'
+                ].map((feature, i) => (
+                  <li key={i} className="flex items-center gap-2 text-sm text-[#a1a1aa]">
+                    <Check className="w-4 h-4 text-[#22c55e] shrink-0" />
+                    {feature}
+                  </li>
+                ))}
+              </ul>
+            </div>
+            
+            <div className="flex flex-col gap-3">
+              <a
+                href="/pricing"
+                className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
+              >
+                <Zap className="w-5 h-5" />
+                Upgrade to Pro - $12/month
+              </a>
+              <button
+                onClick={() => setShowUpgradeModal(false)}
+                className="w-full py-2 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
+              >
+                Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Video Analysis Modal - Coming Soon (disabled) */}
 
@@ -3735,139 +3302,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
               >
                 <RefreshCw className="w-4 h-4" />
                 Reset Selected
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Bone Mapping Modal */}
-      {boneMappingModal?.show && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
-          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-2xl p-6 animate-slide-up max-h-[85vh] flex flex-col">
-            <div className="flex items-center justify-between mb-6">
-              <h2 className="text-xl font-semibold text-white flex items-center gap-2">
-                🦴 Bone Mapping
-              </h2>
-              <button
-                onClick={() => setBoneMappingModal(null)}
-                className="p-1 rounded-lg hover:bg-[#252b3d] transition-colors"
-              >
-                <X className="w-5 h-5 text-[#71717a]" />
-              </button>
-            </div>
-            
-            <div className="bg-[#1c2130] rounded-xl p-4 mb-4">
-              <p className="text-sm text-[#a1a1aa] mb-3">
-                Some bones in the animation don't match your model. Map them below or skip unmatched bones.
-              </p>
-              <div className="flex gap-4 text-sm">
-                <span className="text-[#22c55e] flex items-center gap-1">
-                  <span>✓</span> {boneMappingModal.matched.length} matched
-                </span>
-                <span className="text-[#f59e0b] flex items-center gap-1">
-                  <span>⚠</span> {boneMappingModal.unmatched.length} unmatched
-                </span>
-              </div>
-            </div>
-            
-            <div className="flex-1 overflow-y-auto bg-[#1c2130] rounded-xl p-4 mb-4">
-              {/* Matched bones */}
-              {boneMappingModal.matched.length > 0 && (
-                <div className="mb-4">
-                  <div className="text-sm font-medium text-[#22c55e] mb-2">
-                    ✓ Matched Bones ({boneMappingModal.matched.length})
-                  </div>
-                  <div className="space-y-2">
-                    {boneMappingModal.matched.map(({ source, target, fuzzy }) => (
-                      <div key={source} className="flex items-center gap-3 px-3 py-2 bg-[#22c55e]/5 rounded-lg">
-                        <span className="flex-1 font-mono text-xs text-white">
-                          {source} {fuzzy && <span className="text-[#71717a]">(auto)</span>}
-                        </span>
-                        <span className="text-[#71717a]">→</span>
-                        <select
-                          className="flex-1 bg-[#252b3d] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-white"
-                          value={boneMappingModal.mapping.get(source) || ''}
-                          onChange={(e) => {
-                            const newMapping = new Map(boneMappingModal.mapping)
-                            if (e.target.value) {
-                              newMapping.set(source, e.target.value)
-                            } else {
-                              newMapping.delete(source)
-                            }
-                            setBoneMappingModal(prev => prev ? {...prev, mapping: newMapping} : null)
-                          }}
-                        >
-                          <option value="">-- Skip --</option>
-                          {Array.from(bones.keys()).map(b => (
-                            <option key={b} value={b}>{b}</option>
-                          ))}
-                        </select>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-              
-              {/* Unmatched bones */}
-              {boneMappingModal.unmatched.length > 0 && (
-                <div>
-                  <div className="text-sm font-medium text-[#f59e0b] mb-2">
-                    ⚠ Unmatched Bones ({boneMappingModal.unmatched.length})
-                  </div>
-                  <div className="space-y-2">
-                    {boneMappingModal.unmatched.map(source => (
-                      <div key={source} className="flex items-center gap-3 px-3 py-2 bg-[#f59e0b]/5 rounded-lg">
-                        <span className="flex-1 font-mono text-xs text-white">{source}</span>
-                        <span className="text-[#71717a]">→</span>
-                        <select
-                          className="flex-1 bg-[#252b3d] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-white"
-                          value={boneMappingModal.mapping.get(source) || ''}
-                          onChange={(e) => {
-                            const newMapping = new Map(boneMappingModal.mapping)
-                            if (e.target.value) {
-                              newMapping.set(source, e.target.value)
-                            } else {
-                              newMapping.delete(source)
-                            }
-                            setBoneMappingModal(prev => prev ? {...prev, mapping: newMapping} : null)
-                          }}
-                        >
-                          <option value="">-- Skip --</option>
-                          {Array.from(bones.keys()).map(b => (
-                            <option key={b} value={b}>{b}</option>
-                          ))}
-                        </select>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-              )}
-            </div>
-            
-            <div className="flex gap-3">
-              <button
-                onClick={() => setBoneMappingModal(null)}
-                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => {
-                  // Use only matched bones
-                  const mapping = new Map<string, string>()
-                  boneMappingModal.matched.forEach(({ source, target }) => mapping.set(source, target))
-                  importAnimationWithMapping(boneMappingModal.data, mapping)
-                }}
-                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
-              >
-                Skip Unmatched
-              </button>
-              <button
-                onClick={() => importAnimationWithMapping(boneMappingModal.data, boneMappingModal.mapping)}
-                className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors"
-              >
-                Apply & Import
               </button>
             </div>
           </div>
