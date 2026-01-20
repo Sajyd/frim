@@ -722,6 +722,7 @@ class GLBAnimationEditor {
         }
         
         // Reset only bones that don't have keyframes to T-pose
+        let resetCount = 0;
         this.originalBoneTransforms.forEach((transforms, boneName) => {
             if (!bonesWithKeyframes.has(boneName)) {
                 const bone = this.bones.get(boneName);
@@ -729,9 +730,14 @@ class GLBAnimationEditor {
                     bone.position.copy(transforms.position);
                     bone.rotation.copy(transforms.rotation);
                     bone.scale.copy(transforms.scale);
+                    resetCount++;
                 }
             }
         });
+        
+        if (resetCount > 0) {
+            console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`);
+        }
     }
     
     deleteAnimation(animId) {
