@@ -61,21 +61,6 @@ export async function PUT(
 
     const { name, description, animations, modelData, modelName, thumbnail } = await req.json()
 
-    // Debug: log what's being saved
-    console.log('Saving project:', params.id, {
-      name,
-      animationsCount: animations?.length,
-      animationsSummary: animations?.map((a: any) => ({
-        name: a.name,
-        keyframeCount: a.keyframes ? Object.keys(a.keyframes).length : 0,
-        keyframeFrames: a.keyframes ? Object.keys(a.keyframes) : []
-      })),
-      hasModelData: !!modelData,
-      modelDataLength: modelData?.length,
-      modelName,
-      hasThumbnail: !!thumbnail
-    })
-
     const project = await prisma.project.update({
       where: { id: params.id },
       data: {

@@ -2747,8 +2747,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         {/* Timeline */}
         <div className="relative h-[calc(100%-44px)] overflow-x-auto">
           {/* Ruler */}
-          <div className="h-6 bg-[#0f1117] border-b border-[#252b3d] relative min-w-full" style={{ width: `${totalFrames * 20 + 100}px` }}>
-            {Array.from({ length: Math.ceil(totalFrames / 5) + 1 }).map((_, i) => (
+          <div className="h-6 bg-[#0f1117] border-b border-[#252b3d] relative min-w-full" style={{ width: `${totalFrames * 20}px` }}>
+            {Array.from({ length: Math.floor(totalFrames / 5) + 1 }).map((_, i) => (
               <span
                 key={i}
                 className="absolute text-[10px] text-[#71717a] font-mono top-1"
@@ -2757,13 +2757,22 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 {i * 5}
               </span>
             ))}
+            {/* Show the final frame marker if not on a multiple of 5 */}
+            {totalFrames % 5 !== 0 && (
+              <span
+                className="absolute text-[10px] text-[#22c55e] font-mono top-1"
+                style={{ left: `${totalFrames * 20}px` }}
+              >
+                {totalFrames}
+              </span>
+            )}
           </div>
 
           {/* Track */}
           <div
             className="h-[calc(100%-24px)] relative cursor-pointer select-none"
             style={{ 
-              width: `${totalFrames * 20 + 100}px`,
+              width: `${totalFrames * 20}px`,
               background: 'repeating-linear-gradient(90deg, #252b3d 0px, #252b3d 1px, transparent 1px, transparent 20px)'
             }}
             onMouseDown={(e) => {
