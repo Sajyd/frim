@@ -157,6 +157,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [selectedKeyframes, setSelectedKeyframes] = useState<Set<string>>(new Set()) // Set of "frame:boneName" strings
   const [boxSelection, setBoxSelection] = useState<{active: boolean, startX: number, startY: number, currentX: number, currentY: number} | null>(null)
   const timelineTracksRef = useRef<HTMLDivElement>(null)
+  
+  // Bone mapping modal state for animation import
+  const [boneMappingModal, setBoneMappingModal] = useState<{
+    show: boolean
+    data: any
+    matched: Array<{source: string, target: string, fuzzy?: boolean}>
+    unmatched: string[]
+    mapping: Map<string, string>
+  } | null>(null)
 
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
@@ -2086,53 +2095,189 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setSelectedExportAnimations(new Set())
   }, [])
 
+  // Get animation bone names from JSON data
+  const getAnimationBoneNames = useCallback((data: any): string[] => {
+    const bonesSet = new Set<string>()
+    Object.values(data.keyframes || {}).forEach((frameData: any) => {
+      Object.keys(frameData).forEach(boneName => bonesSet.add(boneName))
+    })
+    return Array.from(bonesSet)
+  }, [])
+
+  // Get model bone names
+  const getModelBoneNames = useCallback((): string[] => {
+    return Array.from(bones.keys())
+  }, [bones])
+
+  // Find similar bone using common patterns
+  const findSimilarBone = useCallback((sourceBone: string, modelBones: string[]): string | null => {
+    const normalized = sourceBone.toLowerCase()
+      .replace(/^mixamorig[:\d]*/, '')
+      .replace(/^mixamorig_/, '')
+      .replace(/^bip01_?/i, '')
+      .replace(/^bone_?/i, '')
+      .replace(/_/g, '')
+      .replace(/\./g, '')
+    
+    for (const modelBone of modelBones) {
+      const modelNormalized = modelBone.toLowerCase()
+        .replace(/^mixamorig[:\d]*/, '')
+        .replace(/^mixamorig_/, '')
+        .replace(/^bip01_?/i, '')
+        .replace(/^bone_?/i, '')
+        .replace(/_/g, '')
+        .replace(/\./g, '')
+      
+      if (normalized === modelNormalized) return modelBone
+      
+      if (normalized.includes(modelNormalized) || modelNormalized.includes(normalized)) {
+        if (Math.abs(normalized.length - modelNormalized.length) <= 5) return modelBone
+      }
+    }
+    return null
+  }, [])
+
+  // Compare bone names and find matches/mismatches
+  const compareBoneNames = useCallback((animationBones: string[], modelBones: string[]) => {
+    const matched: Array<{source: string, target: string, fuzzy?: boolean}> = []
+    const unmatched: string[] = []
+    
+    animationBones.forEach(bone => {
+      const exactMatch = modelBones.find(mb => mb === bone)
+      const caseMatch = modelBones.find(mb => mb.toLowerCase() === bone.toLowerCase())
+      
+      if (exactMatch) {
+        matched.push({ source: bone, target: exactMatch })
+      } else if (caseMatch) {
+        matched.push({ source: bone, target: caseMatch })
+      } else {
+        const similar = findSimilarBone(bone, modelBones)
+        if (similar) {
+          matched.push({ source: bone, target: similar, fuzzy: true })
+        } else {
+          unmatched.push(bone)
+        }
+      }
+    })
+    
+    return { matched, unmatched }
+  }, [findSimilarBone])
+
+  // Import animation with bone mapping
+  const importAnimationWithMapping = useCallback((data: any, boneMapping: Map<string, string>) => {
+    const newId = `anim_${animationCounterRef.current++}`
+    const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
+    
+    Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
+      const frame = parseInt(frameStr)
+      const boneMap = new Map<string, BoneKeyframe>()
+      
+      Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
+        const mappedBone = boneMapping.get(boneName)
+        if (mappedBone) {
+          boneMap.set(mappedBone, {
+            position: new THREE.Vector3(...boneData.position),
+            rotation: new THREE.Quaternion(...boneData.rotation),
+            scale: new THREE.Vector3(...boneData.scale)
+          })
+        }
+      })
+      
+      if (boneMap.size > 0) {
+        newKeyframes.set(frame, boneMap)
+      }
+    })
+    
+    const newAnim: Animation = {
+      name: data.name || 'Imported Animation',
+      fps: data.fps || 24,
+      totalFrames: data.totalFrames || 30,
+      speed: data.speed || 1,
+      loop: data.loop !== false,
+      keyframes: newKeyframes
+    }
+    
+    setAnimations(prev => new Map(prev).set(newId, newAnim))
+    setCurrentAnimationId(newId)
+    setCurrentFrame(0)
+    setBoneMappingModal(null)
+    
+    showToast(`Imported "${newAnim.name}" - ${boneMapping.size} bones mapped`, 'success')
+  }, [showToast])
+
   // Import JSON animation
   const importJSON = useCallback((file: File) => {
     const reader = new FileReader()
     reader.onload = (e) => {
       try {
         const data = JSON.parse(e.target?.result as string)
+        const animationBones = getAnimationBoneNames(data)
+        const modelBones = getModelBoneNames()
         
-        // Create new animation from JSON
-        const newId = `anim_${animationCounterRef.current++}`
-        const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
-        
-        Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
-          const frame = parseInt(frameStr)
-          const boneMap = new Map<string, BoneKeyframe>()
+        if (modelBones.length === 0) {
+          // No model loaded - import directly
+          const newId = `anim_${animationCounterRef.current++}`
+          const newKeyframes = new Map<number, Map<string, BoneKeyframe>>()
           
-          Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
-            boneMap.set(boneName, {
-              position: new THREE.Vector3(...boneData.position),
-              rotation: new THREE.Quaternion(...boneData.rotation),
-              scale: new THREE.Vector3(...boneData.scale)
+          Object.entries(data.keyframes || {}).forEach(([frameStr, frameData]: [string, any]) => {
+            const frame = parseInt(frameStr)
+            const boneMap = new Map<string, BoneKeyframe>()
+            
+            Object.entries(frameData).forEach(([boneName, boneData]: [string, any]) => {
+              boneMap.set(boneName, {
+                position: new THREE.Vector3(...boneData.position),
+                rotation: new THREE.Quaternion(...boneData.rotation),
+                scale: new THREE.Vector3(...boneData.scale)
+              })
             })
+            
+            newKeyframes.set(frame, boneMap)
           })
           
-          newKeyframes.set(frame, boneMap)
-        })
-        
-        const newAnim: Animation = {
-          name: data.name || 'Imported Animation',
-          fps: data.fps || 24,
-          totalFrames: data.totalFrames || 30,
-          speed: data.speed || 1,
-          loop: data.loop !== false,
-          keyframes: newKeyframes
+          const newAnim: Animation = {
+            name: data.name || 'Imported Animation',
+            fps: data.fps || 24,
+            totalFrames: data.totalFrames || 30,
+            speed: data.speed || 1,
+            loop: data.loop !== false,
+            keyframes: newKeyframes
+          }
+          
+          setAnimations(prev => new Map(prev).set(newId, newAnim))
+          setCurrentAnimationId(newId)
+          setCurrentFrame(0)
+          showToast(`Imported "${newAnim.name}"`, 'success')
+          return
         }
         
-        setAnimations(prev => new Map(prev).set(newId, newAnim))
-        setCurrentAnimationId(newId)
-        setCurrentFrame(0)
+        // Check for bone mismatches
+        const { matched, unmatched } = compareBoneNames(animationBones, modelBones)
         
-        showToast(`Imported "${newAnim.name}"`, 'success')
+        if (unmatched.length > 0) {
+          // Show bone mapping modal
+          const initialMapping = new Map<string, string>()
+          matched.forEach(({ source, target }) => initialMapping.set(source, target))
+          
+          setBoneMappingModal({
+            show: true,
+            data,
+            matched,
+            unmatched,
+            mapping: initialMapping
+          })
+        } else {
+          // All bones match - import directly with mapping
+          const mapping = new Map<string, string>()
+          matched.forEach(({ source, target }) => mapping.set(source, target))
+          importAnimationWithMapping(data, mapping)
+        }
       } catch (err) {
         console.error('JSON import error:', err)
         showToast('Failed to import animation', 'error')
       }
     }
     reader.readAsText(file)
-  }, [showToast])
+  }, [showToast, getAnimationBoneNames, getModelBoneNames, compareBoneNames, importAnimationWithMapping])
 
   // Undo function
   const undo = useCallback(() => {
@@ -3590,6 +3735,139 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
               >
                 <RefreshCw className="w-4 h-4" />
                 Reset Selected
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Bone Mapping Modal */}
+      {boneMappingModal?.show && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-2xl p-6 animate-slide-up max-h-[85vh] flex flex-col">
+            <div className="flex items-center justify-between mb-6">
+              <h2 className="text-xl font-semibold text-white flex items-center gap-2">
+                🦴 Bone Mapping
+              </h2>
+              <button
+                onClick={() => setBoneMappingModal(null)}
+                className="p-1 rounded-lg hover:bg-[#252b3d] transition-colors"
+              >
+                <X className="w-5 h-5 text-[#71717a]" />
+              </button>
+            </div>
+            
+            <div className="bg-[#1c2130] rounded-xl p-4 mb-4">
+              <p className="text-sm text-[#a1a1aa] mb-3">
+                Some bones in the animation don't match your model. Map them below or skip unmatched bones.
+              </p>
+              <div className="flex gap-4 text-sm">
+                <span className="text-[#22c55e] flex items-center gap-1">
+                  <span>✓</span> {boneMappingModal.matched.length} matched
+                </span>
+                <span className="text-[#f59e0b] flex items-center gap-1">
+                  <span>⚠</span> {boneMappingModal.unmatched.length} unmatched
+                </span>
+              </div>
+            </div>
+            
+            <div className="flex-1 overflow-y-auto bg-[#1c2130] rounded-xl p-4 mb-4">
+              {/* Matched bones */}
+              {boneMappingModal.matched.length > 0 && (
+                <div className="mb-4">
+                  <div className="text-sm font-medium text-[#22c55e] mb-2">
+                    ✓ Matched Bones ({boneMappingModal.matched.length})
+                  </div>
+                  <div className="space-y-2">
+                    {boneMappingModal.matched.map(({ source, target, fuzzy }) => (
+                      <div key={source} className="flex items-center gap-3 px-3 py-2 bg-[#22c55e]/5 rounded-lg">
+                        <span className="flex-1 font-mono text-xs text-white">
+                          {source} {fuzzy && <span className="text-[#71717a]">(auto)</span>}
+                        </span>
+                        <span className="text-[#71717a]">→</span>
+                        <select
+                          className="flex-1 bg-[#252b3d] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-white"
+                          value={boneMappingModal.mapping.get(source) || ''}
+                          onChange={(e) => {
+                            const newMapping = new Map(boneMappingModal.mapping)
+                            if (e.target.value) {
+                              newMapping.set(source, e.target.value)
+                            } else {
+                              newMapping.delete(source)
+                            }
+                            setBoneMappingModal(prev => prev ? {...prev, mapping: newMapping} : null)
+                          }}
+                        >
+                          <option value="">-- Skip --</option>
+                          {Array.from(bones.keys()).map(b => (
+                            <option key={b} value={b}>{b}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+              
+              {/* Unmatched bones */}
+              {boneMappingModal.unmatched.length > 0 && (
+                <div>
+                  <div className="text-sm font-medium text-[#f59e0b] mb-2">
+                    ⚠ Unmatched Bones ({boneMappingModal.unmatched.length})
+                  </div>
+                  <div className="space-y-2">
+                    {boneMappingModal.unmatched.map(source => (
+                      <div key={source} className="flex items-center gap-3 px-3 py-2 bg-[#f59e0b]/5 rounded-lg">
+                        <span className="flex-1 font-mono text-xs text-white">{source}</span>
+                        <span className="text-[#71717a]">→</span>
+                        <select
+                          className="flex-1 bg-[#252b3d] border border-[#3f3f46] rounded-lg px-3 py-1.5 text-xs font-mono text-white"
+                          value={boneMappingModal.mapping.get(source) || ''}
+                          onChange={(e) => {
+                            const newMapping = new Map(boneMappingModal.mapping)
+                            if (e.target.value) {
+                              newMapping.set(source, e.target.value)
+                            } else {
+                              newMapping.delete(source)
+                            }
+                            setBoneMappingModal(prev => prev ? {...prev, mapping: newMapping} : null)
+                          }}
+                        >
+                          <option value="">-- Skip --</option>
+                          {Array.from(bones.keys()).map(b => (
+                            <option key={b} value={b}>{b}</option>
+                          ))}
+                        </select>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+            
+            <div className="flex gap-3">
+              <button
+                onClick={() => setBoneMappingModal(null)}
+                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  // Use only matched bones
+                  const mapping = new Map<string, string>()
+                  boneMappingModal.matched.forEach(({ source, target }) => mapping.set(source, target))
+                  importAnimationWithMapping(boneMappingModal.data, mapping)
+                }}
+                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
+              >
+                Skip Unmatched
+              </button>
+              <button
+                onClick={() => importAnimationWithMapping(boneMappingModal.data, boneMappingModal.mapping)}
+                className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors"
+              >
+                Apply & Import
               </button>
             </div>
           </div>

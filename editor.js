@@ -78,6 +78,10 @@ class GLBAnimationEditor {
         // Pending GLB import
         this.pendingGLBImport = null;
         
+        // Pending animation import with bone mapping
+        this.pendingAnimationImport = null;
+        this.boneMapping = new Map(); // Maps source bone name -> target bone name
+        
         this.init();
     }
     
@@ -1707,8 +1711,13 @@ class GLBAnimationEditor {
         });
         document.getElementById('import-animation')?.addEventListener('change', (e) => {
             this.importAnimationFile(e.target.files[0]);
+            e.target.value = ''; // Reset so same file can be imported again
         });
         document.getElementById('btn-load-selected')?.addEventListener('click', () => this.loadSelectedAnimation());
+        
+        // Bone mapping modal
+        document.getElementById('btn-apply-mapping')?.addEventListener('click', () => this.applyBoneMappingAndImport());
+        document.getElementById('btn-skip-unmatched')?.addEventListener('click', () => this.skipUnmatchedAndImport());
         
         // GLB Import
         document.getElementById('btn-import-glb')?.addEventListener('click', () => {
@@ -2789,6 +2798,21 @@ class GLBAnimationEditor {
     showExportJSONModal() {
         document.getElementById('export-json-modal').classList.remove('hidden');
         document.getElementById('export-json-filename').value = this.animationName.toLowerCase().replace(/\s+/g, '_');
+        
+        // Populate preview stats
+        const animNameEl = document.getElementById('export-anim-name');
+        const frameCountEl = document.getElementById('export-frame-count');
+        const boneCountEl = document.getElementById('export-bone-count');
+        
+        if (animNameEl) animNameEl.textContent = this.animationName || 'Untitled';
+        if (frameCountEl) frameCountEl.textContent = `${this.totalFrames} @ ${this.fps}fps`;
+        
+        // Count unique bones with keyframes
+        const bones = new Set();
+        this.keyframes.forEach((frameData) => {
+            frameData.forEach((_, boneName) => bones.add(boneName));
+        });
+        if (boneCountEl) boneCountEl.textContent = `${bones.size} animated`;
     }
     
     showExportGLBModal() {
@@ -2980,13 +3004,284 @@ class GLBAnimationEditor {
         reader.onload = (e) => {
             try {
                 const data = JSON.parse(e.target.result);
-                this.loadAnimationData(data);
-                document.getElementById('load-modal').classList.add('hidden');
+                
+                // Check for bone name mismatches
+                const animationBones = this.getAnimationBoneNames(data);
+                const modelBones = this.getModelBoneNames();
+                
+                const { matched, unmatched } = this.compareBoneNames(animationBones, modelBones);
+                
+                if (unmatched.length > 0 && modelBones.length > 0) {
+                    // Show bone mapping modal
+                    this.pendingAnimationImport = { data, matched, unmatched, modelBones };
+                    this.showBoneMappingModal();
+                } else {
+                    // All bones match or no model loaded - import directly
+                    this.loadAnimationData(data);
+                    document.getElementById('load-modal').classList.add('hidden');
+                    
+                    const infoEl = document.getElementById('import-bone-info');
+                    if (infoEl) {
+                        infoEl.classList.add('success');
+                        infoEl.classList.remove('hidden');
+                        infoEl.innerHTML = `✓ Imported "${data.name}" - ${matched.length} bones matched`;
+                        setTimeout(() => infoEl.classList.add('hidden'), 3000);
+                    }
+                }
             } catch (err) {
+                console.error('Import error:', err);
                 this.showToast('Invalid animation file', 'error');
             }
         };
         reader.readAsText(file);
+    }
+    
+    // Get bone names from animation data
+    getAnimationBoneNames(data) {
+        const bones = new Set();
+        if (data.keyframes && Array.isArray(data.keyframes)) {
+            data.keyframes.forEach(kf => {
+                if (kf.bones) {
+                    Object.keys(kf.bones).forEach(b => bones.add(b));
+                }
+            });
+        }
+        return Array.from(bones);
+    }
+    
+    // Get bone names from current model
+    getModelBoneNames() {
+        if (!this.skeleton?.bones) return [];
+        return this.skeleton.bones.map(b => b.name).filter(n => n);
+    }
+    
+    // Compare bone names and find matches/mismatches
+    compareBoneNames(animationBones, modelBones) {
+        const modelBoneSet = new Set(modelBones.map(b => b.toLowerCase()));
+        const matched = [];
+        const unmatched = [];
+        
+        animationBones.forEach(bone => {
+            const normalizedBone = bone.toLowerCase();
+            // Check for exact match or common variations
+            const exactMatch = modelBones.find(mb => mb === bone);
+            const caseMatch = modelBones.find(mb => mb.toLowerCase() === normalizedBone);
+            
+            if (exactMatch) {
+                matched.push({ source: bone, target: exactMatch });
+            } else if (caseMatch) {
+                matched.push({ source: bone, target: caseMatch });
+            } else {
+                // Try to find similar bone name (fuzzy match)
+                const similar = this.findSimilarBone(bone, modelBones);
+                if (similar) {
+                    matched.push({ source: bone, target: similar, fuzzy: true });
+                } else {
+                    unmatched.push(bone);
+                }
+            }
+        });
+        
+        return { matched, unmatched };
+    }
+    
+    // Find similar bone name using common patterns
+    findSimilarBone(sourceBone, modelBones) {
+        const normalized = sourceBone.toLowerCase()
+            .replace(/^mixamorig[:\d]*/, '')
+            .replace(/^mixamorig_/, '')
+            .replace(/^bip01_?/i, '')
+            .replace(/^bone_?/i, '')
+            .replace(/_/g, '')
+            .replace(/\./g, '');
+        
+        for (const modelBone of modelBones) {
+            const modelNormalized = modelBone.toLowerCase()
+                .replace(/^mixamorig[:\d]*/, '')
+                .replace(/^mixamorig_/, '')
+                .replace(/^bip01_?/i, '')
+                .replace(/^bone_?/i, '')
+                .replace(/_/g, '')
+                .replace(/\./g, '');
+            
+            if (normalized === modelNormalized) {
+                return modelBone;
+            }
+            
+            // Check if one contains the other
+            if (normalized.includes(modelNormalized) || modelNormalized.includes(normalized)) {
+                if (Math.abs(normalized.length - modelNormalized.length) <= 5) {
+                    return modelBone;
+                }
+            }
+        }
+        
+        return null;
+    }
+    
+    // Show bone mapping modal
+    showBoneMappingModal() {
+        const modal = document.getElementById('bone-mapping-modal');
+        const listEl = document.getElementById('bone-mapping-list');
+        const statsEl = document.getElementById('mapping-stats');
+        
+        if (!modal || !listEl || !this.pendingAnimationImport) return;
+        
+        const { matched, unmatched, modelBones } = this.pendingAnimationImport;
+        
+        // Update stats
+        statsEl.innerHTML = `
+            <span class="stat matched">✓ ${matched.length} matched</span>
+            <span class="stat unmatched">⚠ ${unmatched.length} unmatched</span>
+        `;
+        
+        // Build mapping list
+        listEl.innerHTML = '';
+        
+        // Show matched bones (collapsed by default if many)
+        if (matched.length > 0) {
+            const matchedSection = document.createElement('div');
+            matchedSection.className = 'mapping-section';
+            matchedSection.innerHTML = `<div class="mapping-section-header" onclick="this.nextSibling.classList.toggle('collapsed')">
+                <span>✓ Matched Bones (${matched.length})</span>
+                <span class="collapse-icon">▼</span>
+            </div>`;
+            
+            const matchedList = document.createElement('div');
+            matchedList.className = matched.length > 10 ? 'collapsed' : '';
+            
+            matched.forEach(({ source, target, fuzzy }) => {
+                const row = document.createElement('div');
+                row.className = 'bone-mapping-row matched';
+                row.innerHTML = `
+                    <span class="bone-source">${source}${fuzzy ? ' <small>(auto)</small>' : ''}</span>
+                    <span class="bone-arrow">→</span>
+                    <select class="bone-target-select" data-source="${source}">
+                        ${modelBones.map(b => `<option value="${b}" ${b === target ? 'selected' : ''}>${b}</option>`).join('')}
+                        <option value="">-- Skip --</option>
+                    </select>
+                `;
+                matchedList.appendChild(row);
+            });
+            
+            matchedSection.appendChild(matchedList);
+            listEl.appendChild(matchedSection);
+        }
+        
+        // Show unmatched bones
+        if (unmatched.length > 0) {
+            const unmatchedSection = document.createElement('div');
+            unmatchedSection.className = 'mapping-section';
+            unmatchedSection.innerHTML = `<div class="mapping-section-header">
+                <span>⚠ Unmatched Bones (${unmatched.length})</span>
+            </div>`;
+            
+            const unmatchedList = document.createElement('div');
+            
+            unmatched.forEach(source => {
+                const row = document.createElement('div');
+                row.className = 'bone-mapping-row unmatched';
+                row.innerHTML = `
+                    <span class="bone-source">${source}</span>
+                    <span class="bone-arrow">→</span>
+                    <select class="bone-target-select" data-source="${source}">
+                        <option value="">-- Skip --</option>
+                        ${modelBones.map(b => `<option value="${b}">${b}</option>`).join('')}
+                    </select>
+                `;
+                unmatchedList.appendChild(row);
+            });
+            
+            unmatchedSection.appendChild(unmatchedList);
+            listEl.appendChild(unmatchedSection);
+        }
+        
+        document.getElementById('load-modal').classList.add('hidden');
+        modal.classList.remove('hidden');
+    }
+    
+    // Apply bone mapping and import
+    applyBoneMappingAndImport() {
+        if (!this.pendingAnimationImport) return;
+        
+        const { data } = this.pendingAnimationImport;
+        
+        // Build mapping from selects
+        this.boneMapping.clear();
+        document.querySelectorAll('#bone-mapping-list .bone-target-select').forEach(select => {
+            const source = select.dataset.source;
+            const target = select.value;
+            if (source && target) {
+                this.boneMapping.set(source, target);
+            }
+        });
+        
+        // Remap bone names in animation data
+        const remappedData = this.remapAnimationBones(data);
+        
+        // Import the remapped animation
+        this.loadAnimationData(remappedData);
+        
+        document.getElementById('bone-mapping-modal').classList.add('hidden');
+        this.pendingAnimationImport = null;
+        
+        const skipped = data.keyframes?.length ? 
+            this.getAnimationBoneNames(data).length - this.boneMapping.size : 0;
+        
+        this.showToast(`Imported "${data.name}" - ${this.boneMapping.size} bones mapped${skipped > 0 ? `, ${skipped} skipped` : ''}`, 'success');
+    }
+    
+    // Remap bone names in animation data
+    remapAnimationBones(data) {
+        const remapped = JSON.parse(JSON.stringify(data)); // Deep clone
+        
+        if (remapped.keyframes && Array.isArray(remapped.keyframes)) {
+            remapped.keyframes = remapped.keyframes.map(kf => {
+                if (!kf.bones) return kf;
+                
+                const newBones = {};
+                Object.entries(kf.bones).forEach(([boneName, boneData]) => {
+                    const mappedName = this.boneMapping.get(boneName);
+                    if (mappedName) {
+                        newBones[mappedName] = boneData;
+                    }
+                });
+                
+                return { ...kf, bones: newBones };
+            });
+        }
+        
+        return remapped;
+    }
+    
+    // Skip unmatched bones and import with matched only
+    skipUnmatchedAndImport() {
+        if (!this.pendingAnimationImport) return;
+        
+        const { data, matched } = this.pendingAnimationImport;
+        
+        // Build mapping from matched bones only
+        this.boneMapping.clear();
+        matched.forEach(({ source, target }) => {
+            this.boneMapping.set(source, target);
+        });
+        
+        // Also include any manual selections
+        document.querySelectorAll('#bone-mapping-list .bone-mapping-row.matched .bone-target-select').forEach(select => {
+            const source = select.dataset.source;
+            const target = select.value;
+            if (source && target) {
+                this.boneMapping.set(source, target);
+            }
+        });
+        
+        const remappedData = this.remapAnimationBones(data);
+        this.loadAnimationData(remappedData);
+        
+        document.getElementById('bone-mapping-modal').classList.add('hidden');
+        this.pendingAnimationImport = null;
+        
+        this.showToast(`Imported "${data.name}" - ${this.boneMapping.size} bones mapped`, 'success');
     }
     
     // ==================== GLB ANIMATION IMPORT ====================

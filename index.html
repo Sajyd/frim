@@ -689,23 +689,70 @@
     <div class="modal-overlay hidden" id="load-modal">
         <div class="modal modal-large">
             <div class="modal-header">
-                <h3>Load Animation</h3>
+                <h3>📂 Load Animation</h3>
                 <button class="modal-close" data-close="load-modal">✕</button>
             </div>
             <div class="modal-body">
-                <div class="animation-filter">
-                    <button class="filter-btn active" data-filter="all">All</button>
-                    <button class="filter-btn" data-filter="movement">Movement</button>
-                    <button class="filter-btn" data-filter="combat">Combat</button>
-                    <button class="filter-btn" data-filter="emote">Emote</button>
+                <!-- Import from File Section -->
+                <div class="import-section">
+                    <h4>📥 Import Animation from File</h4>
+                    <p class="import-description">Import animations from another project. Animations will be mapped to matching bone names.</p>
+                    <div class="import-buttons">
+                        <input type="file" id="import-animation" accept=".json" hidden>
+                        <button class="btn-import" id="btn-import-animation">
+                            <span class="icon">📄</span>
+                            <span>Import JSON Animation</span>
+                        </button>
+                        <input type="file" id="import-glb-animation" accept=".glb,.gltf" hidden>
+                        <button class="btn-import" id="btn-import-glb">
+                            <span class="icon">📦</span>
+                            <span>Import from GLB</span>
+                        </button>
+                    </div>
+                    <div class="import-info hidden" id="import-bone-info"></div>
                 </div>
-                <div class="animation-grid" id="animation-list"></div>
+                
+                <div class="section-divider">
+                    <span>or load from saved</span>
+                </div>
+                
+                <!-- Saved Animations Section -->
+                <div class="saved-section">
+                    <h4>💾 Saved Animations</h4>
+                    <div class="animation-filter">
+                        <button class="filter-btn active" data-filter="all">All</button>
+                        <button class="filter-btn" data-filter="movement">Movement</button>
+                        <button class="filter-btn" data-filter="combat">Combat</button>
+                        <button class="filter-btn" data-filter="emote">Emote</button>
+                    </div>
+                    <div class="animation-grid" id="animation-list"></div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn-secondary" data-close="load-modal">Cancel</button>
-                <input type="file" id="import-animation" accept=".json" hidden>
-                <button class="btn-secondary" id="btn-import-animation">📥 Import</button>
-                <button class="btn-primary" id="btn-load-selected" disabled>Load</button>
+                <button class="btn-primary" id="btn-load-selected" disabled>Load Selected</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Bone Mapping Modal -->
+    <div class="modal-overlay hidden" id="bone-mapping-modal">
+        <div class="modal modal-large">
+            <div class="modal-header">
+                <h3>🦴 Bone Mapping</h3>
+                <button class="modal-close" data-close="bone-mapping-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <div class="mapping-info">
+                    <p>Some bones in the animation don't match your model. Map them below or skip unmatched bones.</p>
+                    <div class="mapping-stats" id="mapping-stats"></div>
+                </div>
+                <div class="bone-mapping-list" id="bone-mapping-list"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" data-close="bone-mapping-modal">Cancel</button>
+                <button class="btn-secondary" id="btn-skip-unmatched">Skip Unmatched</button>
+                <button class="btn-primary" id="btn-apply-mapping">Apply & Import</button>
             </div>
         </div>
     </div>
@@ -750,18 +797,27 @@
     <div class="modal-overlay hidden" id="export-json-modal">
         <div class="modal">
             <div class="modal-header">
-                <h3>📤 Export JSON</h3>
+                <h3>📤 Export Animation</h3>
                 <button class="modal-close" data-close="export-json-modal">✕</button>
             </div>
             <div class="modal-body">
+                <div class="export-info-box">
+                    <span class="icon">💡</span>
+                    <span>Export as JSON to reuse this animation on other models. Animations are matched by bone names when importing.</span>
+                </div>
                 <div class="input-group">
                     <label>File Name</label>
                     <input type="text" id="export-json-filename" placeholder="animation_name">
                 </div>
+                <div class="export-preview" id="export-preview">
+                    <div class="preview-stat"><span>Animation:</span> <strong id="export-anim-name">-</strong></div>
+                    <div class="preview-stat"><span>Frames:</span> <strong id="export-frame-count">-</strong></div>
+                    <div class="preview-stat"><span>Bones:</span> <strong id="export-bone-count">-</strong></div>
+                </div>
             </div>
             <div class="modal-footer">
                 <button class="btn-secondary" data-close="export-json-modal">Cancel</button>
-                <button class="btn-primary" id="btn-confirm-export-json">Export</button>
+                <button class="btn-primary" id="btn-confirm-export-json">📥 Export .json</button>
             </div>
         </div>
     </div>
