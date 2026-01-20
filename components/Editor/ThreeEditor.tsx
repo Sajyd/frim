@@ -6,6 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
+import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
 import {
   FolderOpen,
   Download,
@@ -2052,7 +2053,219 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Handle video analysis
+  // MediaPipe Pose Landmark indices
+  const POSE_LANDMARKS = {
+    NOSE: 0,
+    LEFT_SHOULDER: 11,
+    RIGHT_SHOULDER: 12,
+    LEFT_ELBOW: 13,
+    RIGHT_ELBOW: 14,
+    LEFT_WRIST: 15,
+    RIGHT_WRIST: 16,
+    LEFT_HIP: 23,
+    RIGHT_HIP: 24,
+    LEFT_KNEE: 25,
+    RIGHT_KNEE: 26,
+    LEFT_ANKLE: 27,
+    RIGHT_ANKLE: 28
+  }
+
+  // Calculate rotation quaternion from two 3D points (bone direction)
+  const calculateBoneRotation = useCallback((
+    from: { x: number, y: number, z: number },
+    to: { x: number, y: number, z: number },
+    up: THREE.Vector3 = new THREE.Vector3(0, 1, 0)
+  ): THREE.Quaternion => {
+    const direction = new THREE.Vector3(
+      to.x - from.x,
+      -(to.y - from.y), // Flip Y (MediaPipe Y is down, Three.js Y is up)
+      -(to.z - from.z)  // Flip Z for coordinate system alignment
+    ).normalize()
+    
+    const quaternion = new THREE.Quaternion()
+    const matrix = new THREE.Matrix4()
+    matrix.lookAt(new THREE.Vector3(), direction, up)
+    quaternion.setFromRotationMatrix(matrix)
+    
+    return quaternion
+  }, [])
+
+  // Convert pose landmarks to bone rotations matching the project's skeleton
+  const landmarksToBoneKeyframes = useCallback((
+    landmarks: Array<{ x: number, y: number, z: number, visibility?: number }>
+  ): Map<string, BoneKeyframe> => {
+    const frameData = new Map<string, BoneKeyframe>()
+    
+    // Helper to get landmark with fallback
+    const getLandmark = (idx: number) => landmarks[idx] || { x: 0.5, y: 0.5, z: 0, visibility: 0 }
+    
+    // Helper to get midpoint between two landmarks
+    const getMidpoint = (idx1: number, idx2: number) => {
+      const a = getLandmark(idx1)
+      const b = getLandmark(idx2)
+      return {
+        x: (a.x + b.x) / 2,
+        y: (a.y + b.y) / 2,
+        z: ((a.z || 0) + (b.z || 0)) / 2
+      }
+    }
+
+    // Bone mapping: calculate rotations from landmarks for each bone
+    // Using the project's bone names: Hips, Spine, Spine1, Spine2, Neck, Head,
+    // LeftShoulder, LeftArm, LeftForeArm, LeftHand,
+    // RightShoulder, RightArm, RightForeArm, RightHand,
+    // LeftUpLeg, LeftLeg, LeftFoot, RightUpLeg, RightLeg, RightFoot
+
+    const leftShoulder = getLandmark(POSE_LANDMARKS.LEFT_SHOULDER)
+    const rightShoulder = getLandmark(POSE_LANDMARKS.RIGHT_SHOULDER)
+    const leftElbow = getLandmark(POSE_LANDMARKS.LEFT_ELBOW)
+    const rightElbow = getLandmark(POSE_LANDMARKS.RIGHT_ELBOW)
+    const leftWrist = getLandmark(POSE_LANDMARKS.LEFT_WRIST)
+    const rightWrist = getLandmark(POSE_LANDMARKS.RIGHT_WRIST)
+    const leftHip = getLandmark(POSE_LANDMARKS.LEFT_HIP)
+    const rightHip = getLandmark(POSE_LANDMARKS.RIGHT_HIP)
+    const leftKnee = getLandmark(POSE_LANDMARKS.LEFT_KNEE)
+    const rightKnee = getLandmark(POSE_LANDMARKS.RIGHT_KNEE)
+    const leftAnkle = getLandmark(POSE_LANDMARKS.LEFT_ANKLE)
+    const rightAnkle = getLandmark(POSE_LANDMARKS.RIGHT_ANKLE)
+    const nose = getLandmark(POSE_LANDMARKS.NOSE)
+
+    const midShoulder = getMidpoint(POSE_LANDMARKS.LEFT_SHOULDER, POSE_LANDMARKS.RIGHT_SHOULDER)
+    const midHip = getMidpoint(POSE_LANDMARKS.LEFT_HIP, POSE_LANDMARKS.RIGHT_HIP)
+
+    // Try to set keyframes for each bone if it exists in the model
+    const setBoneKeyframe = (boneName: string, rotation: THREE.Quaternion) => {
+          const bone = bones.get(boneName)
+          if (bone) {
+            const original = originalTransformsRef.current.get(boneName)
+            if (original) {
+              frameData.set(boneName, {
+                position: original.position.clone(),
+            rotation: rotation,
+                scale: original.scale.clone()
+              })
+            }
+          }
+    }
+
+    // Hips - rotation based on hip line orientation
+    const hipsRotation = new THREE.Quaternion()
+    const hipDirection = new THREE.Vector3(rightHip.x - leftHip.x, 0, (rightHip.z || 0) - (leftHip.z || 0)).normalize()
+    const hipAngle = Math.atan2(hipDirection.x, hipDirection.z)
+    hipsRotation.setFromEuler(new THREE.Euler(0, hipAngle, 0))
+    setBoneKeyframe('Hips', hipsRotation)
+
+    // Spine bones - from hips to shoulders
+    const spineDirection = new THREE.Vector3(
+      midShoulder.x - midHip.x,
+      -(midShoulder.y - midHip.y),
+      (midShoulder.z || 0) - (midHip.z || 0)
+    ).normalize()
+    
+    const spineAngleX = Math.asin(-spineDirection.y) - Math.PI / 2
+    const spineAngleZ = Math.atan2(spineDirection.x, 1) * 0.5
+    
+    const spineRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(spineAngleX * 0.3, 0, spineAngleZ))
+    const spine1Rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(spineAngleX * 0.3, 0, spineAngleZ * 0.5))
+    const spine2Rotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(spineAngleX * 0.4, 0, spineAngleZ * 0.3))
+    
+    setBoneKeyframe('Spine', spineRotation)
+    setBoneKeyframe('Spine1', spine1Rotation)
+    setBoneKeyframe('Spine2', spine2Rotation)
+
+    // Neck and Head - from shoulders to nose
+    const neckDirection = new THREE.Vector3(
+      nose.x - midShoulder.x,
+      -(nose.y - midShoulder.y),
+      (nose.z || 0) - (midShoulder.z || 0)
+    ).normalize()
+    const neckAngleX = Math.asin(-neckDirection.y) - Math.PI / 2
+    const neckAngleZ = Math.atan2(neckDirection.x, 1) * 0.3
+    
+    const neckRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(neckAngleX * 0.5, 0, neckAngleZ))
+    const headRotation = new THREE.Quaternion().setFromEuler(new THREE.Euler(neckAngleX * 0.5, 0, neckAngleZ * 0.5))
+    
+    setBoneKeyframe('Neck', neckRotation)
+    setBoneKeyframe('Head', headRotation)
+
+    // Left Arm chain
+    const leftArmRot = calculateBoneRotation(leftShoulder, leftElbow)
+    const leftForeArmRot = calculateBoneRotation(leftElbow, leftWrist)
+    
+    // Adjust for T-pose default (arms pointing outward)
+    const leftArmAdjust = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, Math.PI / 2))
+    leftArmRot.multiply(leftArmAdjust)
+    leftForeArmRot.multiply(leftArmAdjust)
+    
+    setBoneKeyframe('LeftShoulder', new THREE.Quaternion())
+    setBoneKeyframe('LeftArm', leftArmRot)
+    setBoneKeyframe('LeftForeArm', leftForeArmRot)
+    setBoneKeyframe('LeftHand', new THREE.Quaternion())
+
+    // Right Arm chain
+    const rightArmRot = calculateBoneRotation(rightShoulder, rightElbow)
+    const rightForeArmRot = calculateBoneRotation(rightElbow, rightWrist)
+    
+    // Adjust for T-pose default
+    const rightArmAdjust = new THREE.Quaternion().setFromEuler(new THREE.Euler(0, 0, -Math.PI / 2))
+    rightArmRot.multiply(rightArmAdjust)
+    rightForeArmRot.multiply(rightArmAdjust)
+    
+    setBoneKeyframe('RightShoulder', new THREE.Quaternion())
+    setBoneKeyframe('RightArm', rightArmRot)
+    setBoneKeyframe('RightForeArm', rightForeArmRot)
+    setBoneKeyframe('RightHand', new THREE.Quaternion())
+
+    // Left Leg chain
+    const leftUpLegDirection = new THREE.Vector3(
+      leftKnee.x - leftHip.x,
+      -(leftKnee.y - leftHip.y),
+      (leftKnee.z || 0) - (leftHip.z || 0)
+    ).normalize()
+    const leftLegDirection = new THREE.Vector3(
+      leftAnkle.x - leftKnee.x,
+      -(leftAnkle.y - leftKnee.y),
+      (leftAnkle.z || 0) - (leftKnee.z || 0)
+    ).normalize()
+    
+    const leftUpLegAngleX = Math.asin(leftUpLegDirection.y) 
+    const leftUpLegAngleZ = Math.atan2(leftUpLegDirection.x, -leftUpLegDirection.y) * 0.3
+    const leftLegAngleX = Math.asin(leftLegDirection.y) - leftUpLegAngleX
+    
+    const leftUpLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(leftUpLegAngleX, 0, leftUpLegAngleZ))
+    const leftLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(leftLegAngleX, 0, 0))
+    
+    setBoneKeyframe('LeftUpLeg', leftUpLegRot)
+    setBoneKeyframe('LeftLeg', leftLegRot)
+    setBoneKeyframe('LeftFoot', new THREE.Quaternion())
+
+    // Right Leg chain  
+    const rightUpLegDirection = new THREE.Vector3(
+      rightKnee.x - rightHip.x,
+      -(rightKnee.y - rightHip.y),
+      (rightKnee.z || 0) - (rightHip.z || 0)
+    ).normalize()
+    const rightLegDirection = new THREE.Vector3(
+      rightAnkle.x - rightKnee.x,
+      -(rightAnkle.y - rightKnee.y),
+      (rightAnkle.z || 0) - (rightKnee.z || 0)
+    ).normalize()
+    
+    const rightUpLegAngleX = Math.asin(rightUpLegDirection.y)
+    const rightUpLegAngleZ = Math.atan2(rightUpLegDirection.x, -rightUpLegDirection.y) * 0.3
+    const rightLegAngleX = Math.asin(rightLegDirection.y) - rightUpLegAngleX
+    
+    const rightUpLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(rightUpLegAngleX, 0, rightUpLegAngleZ))
+    const rightLegRot = new THREE.Quaternion().setFromEuler(new THREE.Euler(rightLegAngleX, 0, 0))
+    
+    setBoneKeyframe('RightUpLeg', rightUpLegRot)
+    setBoneKeyframe('RightLeg', rightLegRot)
+    setBoneKeyframe('RightFoot', new THREE.Quaternion())
+
+    return frameData
+  }, [bones, calculateBoneRotation])
+
+  // Handle video analysis with real MediaPipe pose detection
   const handleVideoAnalysis = useCallback(async () => {
     if (!videoFile || !modelLoaded) {
       showToast('Please load a model first', 'warning')
@@ -2063,74 +2276,131 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setVideoProgress(0)
 
     try {
-      // Simulate video analysis progress
-      // In a real implementation, this would send the video to an AI service
-      // that extracts pose data from each frame
-      for (let i = 0; i <= 100; i += 10) {
-        await new Promise(resolve => setTimeout(resolve, 300))
-        setVideoProgress(i)
-      }
+      // Initialize MediaPipe Pose Landmarker
+      setVideoProgress(5)
+      showToast('Initializing pose detection AI...', 'info')
+      
+      const vision = await FilesetResolver.forVisionTasks(
+        'https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@latest/wasm'
+      )
+      
+      const poseLandmarker = await PoseLandmarker.createFromOptions(vision, {
+        baseOptions: {
+          modelAssetPath: 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_lite/float16/1/pose_landmarker_lite.task',
+          delegate: 'GPU'
+        },
+        runningMode: 'VIDEO',
+        numPoses: 1, // Detect first humanoid only
+        minPoseDetectionConfidence: 0.5,
+        minPosePresenceConfidence: 0.5,
+        minTrackingConfidence: 0.5
+      })
 
-      // Create a sample animation from the "analyzed" video
-      // In production, this would use actual pose estimation data
-      const newId = `anim_${animationCounterRef.current++}`
-      const sampleKeyframes = new Map<number, Map<string, BoneKeyframe>>()
+      setVideoProgress(15)
+      showToast('Processing video frames...', 'info')
+
+      // Create video element for processing
+      const video = document.createElement('video')
+      video.src = URL.createObjectURL(videoFile)
+      video.muted = true
+      video.playsInline = true
       
-      // Generate sample keyframes (placeholder - real implementation would use AI)
-      const boneNames = Array.from(bones.keys())
-      const frameCount = 60 // Assume 2 seconds at 30fps
-      
-      for (let frame = 0; frame <= frameCount; frame += 10) {
-        const frameData = new Map<string, BoneKeyframe>()
-        boneNames.forEach(boneName => {
-          const bone = bones.get(boneName)
-          if (bone) {
-            const original = originalTransformsRef.current.get(boneName)
-            if (original) {
-              // Add slight variation to simulate extracted motion
-              const t = frame / frameCount
-              const wobble = Math.sin(t * Math.PI * 2) * 0.1
-              frameData.set(boneName, {
-                position: original.position.clone(),
-                rotation: new THREE.Quaternion().setFromEuler(
-                  new THREE.Euler(
-                    original.rotation.x + wobble,
-                    original.rotation.y,
-                    original.rotation.z
-                  )
-                ),
-                scale: original.scale.clone()
-              })
+      await new Promise<void>((resolve, reject) => {
+        video.onloadedmetadata = () => resolve()
+        video.onerror = () => reject(new Error('Failed to load video'))
+      })
+
+      const videoDuration = video.duration
+      const videoFps = 30 // Standard processing FPS
+      const totalVideoFrames = Math.floor(videoDuration * videoFps)
+      const sampleRate = 2 // Process every 2nd frame for performance
+      const outputFrameCount = Math.floor(totalVideoFrames / sampleRate)
+
+      // Create canvas for frame extraction
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const ctx = canvas.getContext('2d')!
+
+      const keyframesMap = new Map<number, Map<string, BoneKeyframe>>()
+      let processedFrames = 0
+      let lastTimestamp = -1
+
+      // Process video frames
+      for (let frameIdx = 0; frameIdx < totalVideoFrames; frameIdx += sampleRate) {
+        const time = frameIdx / videoFps
+        video.currentTime = time
+        
+        await new Promise<void>(resolve => {
+          video.onseeked = () => resolve()
+        })
+
+        // Draw current frame to canvas
+        ctx.drawImage(video, 0, 0)
+
+        // Detect pose in current frame
+        const timestamp = frameIdx * (1000 / videoFps)
+        if (timestamp > lastTimestamp) {
+          const results = poseLandmarker.detectForVideo(canvas, timestamp)
+          lastTimestamp = timestamp
+
+          // Use world landmarks for 3D (if available) or normalized landmarks
+          if (results.landmarks && results.landmarks.length > 0) {
+            // Use first detected person's landmarks
+            const landmarks = results.worldLandmarks?.[0] || results.landmarks[0]
+            
+            // Convert landmarks to bone keyframes
+            const outputFrame = Math.floor(processedFrames)
+            const boneKeyframes = landmarksToBoneKeyframes(landmarks)
+            
+            if (boneKeyframes.size > 0) {
+              keyframesMap.set(outputFrame, boneKeyframes)
             }
           }
-        })
-        sampleKeyframes.set(frame, frameData)
+        }
+
+        processedFrames++
+        const progress = 15 + Math.floor((processedFrames / (totalVideoFrames / sampleRate)) * 80)
+        setVideoProgress(Math.min(progress, 95))
       }
 
+      // Clean up
+      poseLandmarker.close()
+      URL.revokeObjectURL(video.src)
+
+      // Create animation from extracted keyframes
+      if (keyframesMap.size === 0) {
+        throw new Error('No poses detected in video. Make sure a person is visible.')
+      }
+
+      setVideoProgress(98)
+
+      const newId = `anim_${animationCounterRef.current++}`
       const newAnim: Animation = {
         name: `Video: ${videoFile.name.replace(/\.[^.]+$/, '')}`,
-        fps: 30,
-        totalFrames: frameCount,
+        fps: videoFps / sampleRate,
+        totalFrames: processedFrames,
         speed: 1,
         loop: true,
-        keyframes: sampleKeyframes
+        keyframes: keyframesMap
       }
 
       setAnimations(prev => new Map(prev).set(newId, newAnim))
       setCurrentAnimationId(newId)
       setCurrentFrame(0)
       
-      showToast('Animation extracted from video!', 'success')
+      setVideoProgress(100)
+      showToast(`Extracted ${keyframesMap.size} keyframes from video!`, 'success')
       setShowVideoModal(false)
       setVideoFile(null)
     } catch (error) {
       console.error('Video analysis error:', error)
-      showToast('Failed to analyze video', 'error')
+      showToast(`Failed to analyze video: ${error instanceof Error ? error.message : 'Unknown error'}`, 'error')
     } finally {
       setVideoAnalyzing(false)
       setVideoProgress(0)
     }
-  }, [videoFile, modelLoaded, bones, showToast])
+  }, [videoFile, modelLoaded, bones, showToast, landmarksToBoneKeyframes])
 
   return (
     <div 
