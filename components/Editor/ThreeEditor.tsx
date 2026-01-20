@@ -352,6 +352,52 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     }
   }, [])
 
+  // Apply pose interpolation at a specific frame
+  const applyPoseAtFrame = useCallback((frame: number) => {
+    if (!currentAnimation || currentAnimation.keyframes.size === 0) return
+
+    const sortedFrames = Array.from(currentAnimation.keyframes.keys()).sort((a, b) => a - b)
+
+    bones.forEach((bone, boneName) => {
+      let prevFrame: number | null = null
+      let nextFrame: number | null = null
+
+      for (const f of sortedFrames) {
+        if (currentAnimation.keyframes.get(f)?.has(boneName)) {
+          if (f <= frame) prevFrame = f
+          if (f >= frame && nextFrame === null) nextFrame = f
+        }
+      }
+
+      if (prevFrame === null && nextFrame === null) return
+      if (prevFrame === null) prevFrame = nextFrame!
+      if (nextFrame === null) nextFrame = prevFrame!
+
+      const prevData = currentAnimation.keyframes.get(prevFrame)?.get(boneName)
+      const nextData = currentAnimation.keyframes.get(nextFrame)?.get(boneName)
+
+      if (!prevData || !nextData) return
+
+      let t = 0
+      if (prevFrame !== nextFrame) {
+        t = (frame - prevFrame) / (nextFrame - prevFrame)
+      }
+
+      bone.position.lerpVectors(prevData.position, nextData.position, t)
+      const quat = new THREE.Quaternion()
+      quat.slerpQuaternions(prevData.rotation, nextData.rotation, t)
+      bone.rotation.setFromQuaternion(quat)
+      bone.scale.lerpVectors(prevData.scale, nextData.scale, t)
+    })
+  }, [currentAnimation, bones])
+
+  // Navigate to a specific frame
+  const goToFrame = useCallback((frame: number) => {
+    const clampedFrame = Math.max(0, Math.min(frame, totalFrames))
+    setCurrentFrame(clampedFrame)
+    applyPoseAtFrame(clampedFrame)
+  }, [totalFrames, applyPoseAtFrame])
+
   // Animation loop
   useEffect(() => {
     if (!sceneRef.current || !cameraRef.current || !rendererRef.current) return
@@ -762,50 +808,6 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
 
     setSelectedBone(bone)
   }, [bones])
-
-  const goToFrame = useCallback((frame: number) => {
-    const clampedFrame = Math.max(0, Math.min(frame, totalFrames))
-    setCurrentFrame(clampedFrame)
-    applyPoseAtFrame(clampedFrame)
-  }, [totalFrames, applyPoseAtFrame])
-
-  const applyPoseAtFrame = useCallback((frame: number) => {
-    if (!currentAnimation || currentAnimation.keyframes.size === 0) return
-
-    const sortedFrames = Array.from(currentAnimation.keyframes.keys()).sort((a, b) => a - b)
-
-    bones.forEach((bone, boneName) => {
-      let prevFrame: number | null = null
-      let nextFrame: number | null = null
-
-      for (const f of sortedFrames) {
-        if (currentAnimation.keyframes.get(f)?.has(boneName)) {
-          if (f <= frame) prevFrame = f
-          if (f >= frame && nextFrame === null) nextFrame = f
-        }
-      }
-
-      if (prevFrame === null && nextFrame === null) return
-      if (prevFrame === null) prevFrame = nextFrame!
-      if (nextFrame === null) nextFrame = prevFrame!
-
-      const prevData = currentAnimation.keyframes.get(prevFrame)?.get(boneName)
-      const nextData = currentAnimation.keyframes.get(nextFrame)?.get(boneName)
-
-      if (!prevData || !nextData) return
-
-      let t = 0
-      if (prevFrame !== nextFrame) {
-        t = (frame - prevFrame) / (nextFrame - prevFrame)
-      }
-
-      bone.position.lerpVectors(prevData.position, nextData.position, t)
-      const quat = new THREE.Quaternion()
-      quat.slerpQuaternions(prevData.rotation, nextData.rotation, t)
-      bone.rotation.setFromQuaternion(quat)
-      bone.scale.lerpVectors(prevData.scale, nextData.scale, t)
-    })
-  }, [currentAnimation, bones])
 
   const addKeyframe = useCallback(() => {
     if (!selectedBone || !currentAnimationId) {
