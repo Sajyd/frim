@@ -124,6 +124,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
   const [history, setHistory] = useState<string[]>([])
   const [historyIndex, setHistoryIndex] = useState(-1)
   const maxHistory = 50
+  const saveToHistoryRef = useRef<(() => void) | null>(null)
 
   // Clipboard
   const clipboardRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null)
@@ -138,6 +139,13 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
   const [videoAnalyzing, setVideoAnalyzing] = useState(false)
   const [videoProgress, setVideoProgress] = useState(0)
   const videoInputRef = useRef<HTMLInputElement>(null)
+
+  // GLB export modal
+  const [showExportModal, setShowExportModal] = useState(false)
+  const [selectedExportAnimations, setSelectedExportAnimations] = useState<Set<string>>(new Set())
+  const [exportFilename, setExportFilename] = useState('model_animated')
+  const [exportIncludeModel, setExportIncludeModel] = useState(true)
+  const [exportingGLB, setExportingGLB] = useState(false)
 
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
@@ -267,6 +275,10 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     transformControls.setSpace('local')
     transformControls.addEventListener('dragging-changed', (event) => {
       controls.enabled = !event.value
+      // Save to history when dragging ends
+      if (!event.value && saveToHistoryRef.current) {
+        saveToHistoryRef.current()
+      }
     })
     scene.add(transformControls)
     transformControlsRef.current = transformControls
@@ -295,7 +307,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     scene.add(hemiLight)
 
     // Grid
-    const gridHelper = new THREE.GridHelper(20, 20, 0x22c55e, 0x252b3d)
+    const gridHelper = new THREE.GridHelper(20, 40, 0x22c55e, 0x252b3d)
     scene.add(gridHelper)
     gridHelperRef.current = gridHelper
 
@@ -502,6 +514,10 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           boneVisualizerGroupRef.current.clear()
         }
         boneHelpersRef.current = []
+        
+        // Clear history for new model
+        setHistory([])
+        setHistoryIndex(-1)
 
         // Add new model
         const model = gltf.scene
@@ -1137,6 +1153,10 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
             if (helper.parent) helper.parent.remove(helper)
           })
           boneHelpersRef.current = []
+          
+          // Clear history for new model
+          setHistory([])
+          setHistoryIndex(-1)
 
           // Add new model
           const model = gltf.scene
@@ -1325,56 +1345,110 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     showToast('Animation exported as JSON', 'success')
   }, [currentAnimation, showToast])
 
-  // Export GLB with animation
-  const exportGLB = useCallback(() => {
-    if (!currentAnimation || !modelRef.current) {
-      showToast('No model or animation to export', 'warning')
-      return
-    }
+  // Create animation clip from a specific animation
+  const createAnimationClipFromAnimation = useCallback((animId: string): THREE.AnimationClip | null => {
+    const anim = animations.get(animId)
+    if (!anim || anim.keyframes.size === 0) return null
 
-    showToast('Generating GLB...', 'info')
+    const tracks: THREE.KeyframeTrack[] = []
+    const duration = anim.totalFrames / anim.fps
 
-    try {
-      // Create animation clip from keyframes
-      const tracks: THREE.KeyframeTrack[] = []
-      const duration = totalFrames / fps
+    // Collect all bones with keyframes
+    const bonesWithKeyframes = new Set<string>()
+    anim.keyframes.forEach((frameData) => {
+      frameData.forEach((_, boneName) => bonesWithKeyframes.add(boneName))
+    })
 
-      // Collect all bones with keyframes
-      const bonesWithKeyframes = new Set<string>()
-      currentAnimation.keyframes.forEach((frameData) => {
-        frameData.forEach((_, boneName) => bonesWithKeyframes.add(boneName))
-      })
+    bonesWithKeyframes.forEach(boneName => {
+      const times: number[] = []
+      const positions: number[] = []
+      const quaternions: number[] = []
+      const scales: number[] = []
 
-      bonesWithKeyframes.forEach(boneName => {
-        const times: number[] = []
-        const positions: number[] = []
-        const quaternions: number[] = []
-        const scales: number[] = []
+      const sortedFrames = Array.from(anim.keyframes.keys()).sort((a, b) => a - b)
 
-        const sortedFrames = Array.from(currentAnimation.keyframes.keys()).sort((a, b) => a - b)
-
-        sortedFrames.forEach(frame => {
-          const boneData = currentAnimation.keyframes.get(frame)?.get(boneName)
-          if (boneData) {
-            times.push(frame / fps)
-            positions.push(boneData.position.x, boneData.position.y, boneData.position.z)
-            quaternions.push(boneData.rotation.x, boneData.rotation.y, boneData.rotation.z, boneData.rotation.w)
-            scales.push(boneData.scale.x, boneData.scale.y, boneData.scale.z)
-          }
-        })
-
-        if (times.length > 0) {
-          tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, times, positions))
-          tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, times, quaternions))
-          tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.scale`, times, scales))
+      sortedFrames.forEach(frame => {
+        const boneData = anim.keyframes.get(frame)?.get(boneName)
+        if (boneData) {
+          times.push(frame / anim.fps)
+          positions.push(boneData.position.x, boneData.position.y, boneData.position.z)
+          quaternions.push(boneData.rotation.x, boneData.rotation.y, boneData.rotation.z, boneData.rotation.w)
+          scales.push(boneData.scale.x, boneData.scale.y, boneData.scale.z)
         }
       })
 
-      const clip = new THREE.AnimationClip(currentAnimation.name, duration, tracks)
+      if (times.length > 0) {
+        tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.position`, times, positions))
+        tracks.push(new THREE.QuaternionKeyframeTrack(`${boneName}.quaternion`, times, quaternions))
+        tracks.push(new THREE.VectorKeyframeTrack(`${boneName}.scale`, times, scales))
+      }
+    })
+
+    if (tracks.length === 0) return null
+    return new THREE.AnimationClip(anim.name, duration, tracks)
+  }, [animations])
+
+  // Open GLB export modal
+  const openExportModal = useCallback(() => {
+    if (!modelRef.current) {
+      showToast('No model to export', 'warning')
+      return
+    }
+    // Pre-select all animations with keyframes
+    const animsWithKeyframes = new Set<string>()
+    animations.forEach((anim, id) => {
+      if (anim.keyframes.size > 0) {
+        animsWithKeyframes.add(id)
+      }
+    })
+    setSelectedExportAnimations(animsWithKeyframes)
+    setExportFilename(loadedFilename.replace(/\.(glb|gltf)$/i, '') || 'model_animated')
+    setShowExportModal(true)
+  }, [animations, loadedFilename, showToast])
+
+  // Export GLB with selected animations
+  const exportGLB = useCallback(() => {
+    if (!modelRef.current) {
+      showToast('No model to export', 'warning')
+      return
+    }
+
+    if (selectedExportAnimations.size === 0) {
+      showToast('Please select at least one animation to export', 'warning')
+      return
+    }
+
+    setExportingGLB(true)
+    showToast('Generating GLB...', 'info')
+
+    try {
+      // Create animation clips for all selected animations
+      const animationClips: THREE.AnimationClip[] = []
+      selectedExportAnimations.forEach(animId => {
+        const clip = createAnimationClipFromAnimation(animId)
+        if (clip) {
+          animationClips.push(clip)
+        }
+      })
+
+      if (animationClips.length === 0) {
+        showToast('Selected animations have no keyframes', 'warning')
+        setExportingGLB(false)
+        return
+      }
 
       // Clone model for export
       const exportScene = modelRef.current.clone(true)
-      exportScene.animations = [clip]
+      
+      // Update skeleton in cloned model
+      exportScene.traverse(child => {
+        if ((child as THREE.SkinnedMesh).isSkinnedMesh && (child as THREE.SkinnedMesh).skeleton) {
+          ;(child as THREE.SkinnedMesh).skeleton.update()
+        }
+      })
+
+      // Add all animation clips to scene
+      exportScene.animations = animationClips
 
       // Export using GLTFExporter
       const exporter = new GLTFExporter()
@@ -1385,22 +1459,54 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
           a.href = url
-          a.download = `${currentAnimation.name.toLowerCase().replace(/\s+/g, '_')}.glb`
+          a.download = `${exportFilename}.glb`
           a.click()
           URL.revokeObjectURL(url)
-          showToast('GLB exported successfully', 'success')
+          showToast(`GLB exported with ${animationClips.length} animation(s)`, 'success')
+          setShowExportModal(false)
+          setExportingGLB(false)
         },
         (error) => {
           console.error('GLB export error:', error)
           showToast('Failed to export GLB', 'error')
+          setExportingGLB(false)
         },
-        { binary: true, animations: [clip] }
+        { binary: true, animations: animationClips }
       )
     } catch (err) {
       console.error('Export error:', err)
       showToast('Failed to export GLB', 'error')
+      setExportingGLB(false)
     }
-  }, [currentAnimation, totalFrames, fps, showToast])
+  }, [selectedExportAnimations, exportFilename, createAnimationClipFromAnimation, showToast])
+
+  // Toggle animation selection for export
+  const toggleExportAnimation = useCallback((animId: string) => {
+    setSelectedExportAnimations(prev => {
+      const newSet = new Set(prev)
+      if (newSet.has(animId)) {
+        newSet.delete(animId)
+      } else {
+        newSet.add(animId)
+      }
+      return newSet
+    })
+  }, [])
+
+  // Select/deselect all animations for export
+  const selectAllExportAnimations = useCallback(() => {
+    const allIds = new Set<string>()
+    animations.forEach((anim, id) => {
+      if (anim.keyframes.size > 0) {
+        allIds.add(id)
+      }
+    })
+    setSelectedExportAnimations(allIds)
+  }, [animations])
+
+  const deselectAllExportAnimations = useCallback(() => {
+    setSelectedExportAnimations(new Set())
+  }, [])
 
   // Import JSON animation
   const importJSON = useCallback((file: File) => {
@@ -1492,6 +1598,8 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
 
   // Save to history
   const saveToHistory = useCallback(() => {
+    if (bones.size === 0) return
+    
     const state: Record<string, any> = {}
     bones.forEach((bone, name) => {
       state[name] = {
@@ -1503,7 +1611,11 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     
     const stateStr = JSON.stringify(state)
     
+    // Don't save duplicate states
     setHistory(prev => {
+      if (prev.length > 0 && prev[prev.length - 1] === stateStr) {
+        return prev
+      }
       const newHistory = prev.slice(0, historyIndex + 1)
       newHistory.push(stateStr)
       if (newHistory.length > maxHistory) newHistory.shift()
@@ -1511,6 +1623,18 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
     })
     setHistoryIndex(prev => Math.min(prev + 1, maxHistory - 1))
   }, [bones, historyIndex])
+
+  // Keep ref updated with latest saveToHistory
+  useEffect(() => {
+    saveToHistoryRef.current = saveToHistory
+  }, [saveToHistory])
+
+  // Save initial state to history when model loads
+  useEffect(() => {
+    if (bones.size > 0 && history.length === 0) {
+      saveToHistory()
+    }
+  }, [bones.size, history.length, saveToHistory])
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1813,9 +1937,9 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           <FileJson className="w-5 h-5" />
         </button>
         <button
-          onClick={exportGLB}
+          onClick={openExportModal}
           className="w-10 h-10 rounded-lg flex items-center justify-center text-[#a1a1aa] hover:bg-[#1c2130] transition-colors"
-          title="Export GLB with Animation"
+          title="Export GLB with Animations"
         >
           <Download className="w-5 h-5" />
         </button>
@@ -2027,8 +2151,8 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                         onChange={(e) => {
                           const val = parseFloat(e.target.value) * (Math.PI / 180)
                           selectedBone.rotation[axis as 'x' | 'y' | 'z'] = val
-                          saveToHistory()
                         }}
+                        onBlur={saveToHistory}
                         className="w-full bg-[#0f1117] border border-[#252b3d] rounded px-1 pl-4 py-1 text-[10px] text-[#f4f4f5] text-right"
                       />
                     </div>
@@ -2051,8 +2175,8 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                         value={selectedBone.position[axis as 'x' | 'y' | 'z'].toFixed(3)}
                         onChange={(e) => {
                           selectedBone.position[axis as 'x' | 'y' | 'z'] = parseFloat(e.target.value)
-                          saveToHistory()
                         }}
+                        onBlur={saveToHistory}
                         className="w-full bg-[#0f1117] border border-[#252b3d] rounded px-1 pl-4 py-1 text-[10px] text-[#f4f4f5] text-right"
                       />
                     </div>
@@ -2075,8 +2199,8 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                         value={selectedBone.scale[axis as 'x' | 'y' | 'z'].toFixed(2)}
                         onChange={(e) => {
                           selectedBone.scale[axis as 'x' | 'y' | 'z'] = parseFloat(e.target.value)
-                          saveToHistory()
                         }}
+                        onBlur={saveToHistory}
                         className="w-full bg-[#0f1117] border border-[#252b3d] rounded px-1 pl-4 py-1 text-[10px] text-[#f4f4f5] text-right"
                       />
                     </div>
@@ -2578,6 +2702,146 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                   <>
                     <Sparkles className="w-4 h-4" />
                     Extract Animation
+                  </>
+                )}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* GLB Export Modal */}
+      {showExportModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
+                  <Package className="w-5 h-5 text-[#22c55e]" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold">Export GLB</h2>
+                  <p className="text-xs text-[#71717a]">Export model with animations</p>
+                </div>
+              </div>
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="text-[#71717a] hover:text-[#a1a1aa] p-2"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {/* Filename input */}
+            <div className="mb-4">
+              <label className="block text-xs text-[#71717a] mb-2">File Name</label>
+              <div className="flex items-center gap-2">
+                <input
+                  type="text"
+                  value={exportFilename}
+                  onChange={(e) => setExportFilename(e.target.value)}
+                  className="flex-1 bg-[#0f1117] border border-[#252b3d] rounded-lg px-3 py-2 text-sm text-[#f4f4f5] focus:outline-none focus:border-[#22c55e]"
+                  placeholder="model_animated"
+                />
+                <span className="text-sm text-[#71717a]">.glb</span>
+              </div>
+            </div>
+
+            {/* Animation selection */}
+            <div className="mb-4">
+              <div className="flex items-center justify-between mb-2">
+                <label className="text-xs text-[#71717a]">Select Animations to Export</label>
+                <div className="flex gap-2">
+                  <button
+                    onClick={selectAllExportAnimations}
+                    className="text-[10px] px-2 py-1 bg-[#252b3d] text-[#a1a1aa] rounded hover:bg-[#2f3649] transition-colors"
+                  >
+                    Select All
+                  </button>
+                  <button
+                    onClick={deselectAllExportAnimations}
+                    className="text-[10px] px-2 py-1 bg-[#252b3d] text-[#a1a1aa] rounded hover:bg-[#2f3649] transition-colors"
+                  >
+                    Deselect All
+                  </button>
+                </div>
+              </div>
+              <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl max-h-[200px] overflow-y-auto">
+                {Array.from(animations.entries()).map(([id, anim]) => {
+                  const hasKeyframes = anim.keyframes.size > 0
+                  return (
+                    <label
+                      key={id}
+                      className={`flex items-center gap-3 p-3 border-b border-[#252b3d] last:border-b-0 cursor-pointer hover:bg-[#151821] transition-colors ${
+                        !hasKeyframes ? 'opacity-50' : ''
+                      }`}
+                    >
+                      <input
+                        type="checkbox"
+                        checked={selectedExportAnimations.has(id)}
+                        onChange={() => toggleExportAnimation(id)}
+                        disabled={!hasKeyframes}
+                        className="w-4 h-4 rounded border-[#252b3d] bg-[#0f1117] text-[#22c55e] focus:ring-[#22c55e] focus:ring-offset-0"
+                      />
+                      <div className="flex-1">
+                        <p className="text-sm text-[#f4f4f5]">{anim.name}</p>
+                        <p className="text-[10px] text-[#71717a]">
+                          {anim.totalFrames}f @ {anim.fps}fps · {anim.keyframes.size} keyframes
+                          {!hasKeyframes && ' (no keyframes)'}
+                        </p>
+                      </div>
+                      {selectedExportAnimations.has(id) && (
+                        <Check className="w-4 h-4 text-[#22c55e]" />
+                      )}
+                    </label>
+                  )
+                })}
+              </div>
+              {selectedExportAnimations.size > 0 && (
+                <p className="text-[10px] text-[#22c55e] mt-2">
+                  {selectedExportAnimations.size} animation(s) selected
+                </p>
+              )}
+            </div>
+
+            {/* Export options */}
+            <div className="mb-6">
+              <label className="flex items-center gap-3 p-3 bg-[#0f1117] border border-[#252b3d] rounded-xl cursor-pointer hover:border-[#3f3f46] transition-colors">
+                <input
+                  type="checkbox"
+                  checked={exportIncludeModel}
+                  onChange={(e) => setExportIncludeModel(e.target.checked)}
+                  className="w-4 h-4 rounded border-[#252b3d] bg-[#0f1117] text-[#22c55e] focus:ring-[#22c55e] focus:ring-offset-0"
+                />
+                <div>
+                  <p className="text-sm text-[#f4f4f5]">Include model mesh</p>
+                  <p className="text-[10px] text-[#71717a]">Include the 3D model geometry in the export</p>
+                </div>
+              </label>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => setShowExportModal(false)}
+                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={exportGLB}
+                disabled={selectedExportAnimations.size === 0 || exportingGLB}
+                className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {exportingGLB ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Exporting...
+                  </>
+                ) : (
+                  <>
+                    <Download className="w-4 h-4" />
+                    Export GLB
                   </>
                 )}
               </button>
