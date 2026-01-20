@@ -1637,7 +1637,7 @@ class GLBAnimationEditor {
         document.getElementById('btn-paste-pose')?.addEventListener('click', () => this.pastePose());
         document.getElementById('btn-mirror-pose')?.addEventListener('click', () => this.mirrorPose());
         document.getElementById('btn-reset-bone')?.addEventListener('click', () => this.resetBone());
-        document.getElementById('btn-reset-pose')?.addEventListener('click', () => this.resetAllBones());
+        document.getElementById('btn-reset-bones-modal')?.addEventListener('click', () => this.showResetBonesModal());
         
         // Save modal
         document.getElementById('btn-confirm-save')?.addEventListener('click', () => this.saveAnimation());
@@ -2110,6 +2110,101 @@ class GLBAnimationEditor {
         
         this.saveToHistory();
         this.showToast('All bones reset', 'info');
+    }
+    
+    showResetBonesModal() {
+        const modal = document.getElementById('reset-bones-modal');
+        const boneList = document.getElementById('reset-bones-list');
+        if (!modal || !boneList) return;
+        
+        // Populate bone list
+        boneList.innerHTML = '';
+        const sortedBones = Array.from(this.bones.keys()).sort();
+        
+        sortedBones.forEach(boneName => {
+            const item = document.createElement('label');
+            item.className = 'bone-list-item';
+            item.style.cssText = 'display: flex; align-items: center; gap: 8px; padding: 6px 8px; cursor: pointer; border-radius: 4px; transition: background 0.15s;';
+            item.innerHTML = `
+                <input type="checkbox" class="bone-checkbox" data-bone="${boneName}" checked>
+                <span style="color: var(--text-primary);">${boneName}</span>
+            `;
+            item.addEventListener('mouseenter', () => item.style.background = 'var(--bg-hover)');
+            item.addEventListener('mouseleave', () => item.style.background = 'transparent');
+            boneList.appendChild(item);
+        });
+        
+        // Setup select/deselect all buttons
+        document.getElementById('btn-select-all-bones')?.addEventListener('click', () => {
+            boneList.querySelectorAll('.bone-checkbox').forEach(cb => cb.checked = true);
+        });
+        
+        document.getElementById('btn-deselect-all-bones')?.addEventListener('click', () => {
+            boneList.querySelectorAll('.bone-checkbox').forEach(cb => cb.checked = false);
+        });
+        
+        // Setup confirm button
+        const confirmBtn = document.getElementById('btn-confirm-reset-bones');
+        const newConfirmBtn = confirmBtn.cloneNode(true);
+        confirmBtn.parentNode.replaceChild(newConfirmBtn, confirmBtn);
+        
+        newConfirmBtn.addEventListener('click', () => {
+            this.resetSelectedBones();
+            modal.classList.add('hidden');
+        });
+        
+        modal.classList.remove('hidden');
+    }
+    
+    resetSelectedBones() {
+        const boneList = document.getElementById('reset-bones-list');
+        const addKeyframe = document.getElementById('reset-add-keyframe')?.checked;
+        const selectedBones = [];
+        
+        boneList.querySelectorAll('.bone-checkbox:checked').forEach(cb => {
+            selectedBones.push(cb.dataset.bone);
+        });
+        
+        if (selectedBones.length === 0) {
+            this.showToast('No bones selected', 'warning');
+            return;
+        }
+        
+        // Reset selected bones
+        selectedBones.forEach(boneName => {
+            const bone = this.bones.get(boneName);
+            const original = this.originalBoneTransforms.get(boneName);
+            
+            if (bone && original) {
+                bone.position.copy(original.position);
+                bone.rotation.copy(original.rotation);
+                bone.scale.copy(original.scale);
+                
+                // Add keyframe if checkbox is checked
+                if (addKeyframe) {
+                    if (!this.keyframes.has(this.currentFrame)) {
+                        this.keyframes.set(this.currentFrame, new Map());
+                    }
+                    
+                    this.keyframes.get(this.currentFrame).set(boneName, {
+                        position: new THREE.Vector3().copy(original.position),
+                        rotation: new THREE.Quaternion().setFromEuler(original.rotation),
+                        scale: new THREE.Vector3().copy(original.scale)
+                    });
+                }
+            }
+        });
+        
+        if (this.selectedBone) {
+            this.updateTransformInputs();
+        }
+        
+        if (addKeyframe) {
+            this.updateKeyframeMarkers();
+        }
+        
+        this.saveToHistory();
+        this.showToast(`${selectedBones.length} bone(s) reset${addKeyframe ? ' with keyframes' : ''}`, 'success');
     }
     
     // ==================== TOOLS ====================

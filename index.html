@@ -599,8 +599,8 @@
                         <button class="btn-action" id="btn-reset-bone">
                             <span>↺</span> Reset Bone
                         </button>
-                        <button class="btn-action btn-danger" id="btn-reset-pose">
-                            <span>🗑</span> Reset All
+                        <button class="btn-action" id="btn-reset-bones-modal">
+                            <span>↺</span> Reset Multiple
                         </button>
                     </div>
                 </div>
@@ -756,6 +756,33 @@
             <div class="modal-footer">
                 <button class="btn-secondary" data-close="export-json-modal">Cancel</button>
                 <button class="btn-primary" id="btn-confirm-export-json">Export</button>
+            </div>
+        </div>
+    </div>
+    
+    <div class="modal-overlay hidden" id="reset-bones-modal">
+        <div class="modal modal-large">
+            <div class="modal-header">
+                <h3>↺ Reset Bones</h3>
+                <button class="modal-close" data-close="reset-bones-modal">✕</button>
+            </div>
+            <div class="modal-body">
+                <p style="color: var(--text-secondary); margin-bottom: 12px;">Select bones to reset to their original position:</p>
+                <div class="bone-selection-controls" style="display: flex; gap: 8px; margin-bottom: 12px;">
+                    <button class="btn-secondary btn-small" id="btn-select-all-bones">Select All</button>
+                    <button class="btn-secondary btn-small" id="btn-deselect-all-bones">Deselect All</button>
+                </div>
+                <div class="bone-list-container" id="reset-bones-list" style="max-height: 300px; overflow-y: auto; border: 1px solid var(--border-subtle); border-radius: 8px; padding: 8px;"></div>
+                <div style="margin-top: 12px;">
+                    <label style="display: flex; align-items: center; gap: 8px; color: var(--text-secondary);">
+                        <input type="checkbox" id="reset-add-keyframe" checked>
+                        <span>Add keyframe after reset</span>
+                    </label>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-secondary" data-close="reset-bones-modal">Cancel</button>
+                <button class="btn-primary" id="btn-confirm-reset-bones">Reset Selected</button>
             </div>
         </div>
     </div>
