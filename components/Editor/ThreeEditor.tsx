@@ -2258,10 +2258,9 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           </div>
           <button
             onClick={createNewAnimation}
-            disabled={!isPro && animations.size >= animationLimit}
             className={`w-6 h-6 rounded flex items-center justify-center transition-colors ${
               !isPro && animations.size >= animationLimit
-                ? 'bg-[#252b3d] text-[#71717a] cursor-not-allowed'
+                ? 'bg-[#252b3d] text-[#71717a] hover:bg-[#3f3f46]'
                 : 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]'
             }`}
             title={!isPro && animations.size >= animationLimit ? 'Upgrade to Pro for more animations' : 'Create new animation'}

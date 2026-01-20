@@ -284,18 +284,27 @@ export default function EditorPage() {
           )}
           <button
             onClick={() => pendingDataRef.current && saveProject(pendingDataRef.current)}
-            disabled={saving || !hasUnsavedChanges}
-            className="flex items-center gap-2 px-4 py-2 bg-[#22c55e] text-[#09090b] rounded-lg text-sm font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={saving}
+            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+              hasUnsavedChanges 
+                ? 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]' 
+                : 'bg-[#252b3d] text-[#a1a1aa] hover:bg-[#3f3f46]'
+            }`}
           >
             {saving ? (
               <>
-                <span className="w-4 h-4 border-2 border-[#09090b]/30 border-t-[#09090b] rounded-full animate-spin" />
+                <span className="w-4 h-4 border-2 border-current/30 border-t-current rounded-full animate-spin" />
                 Saving...
               </>
-            ) : (
+            ) : hasUnsavedChanges ? (
               <>
                 <Save className="w-4 h-4" />
                 Save
+              </>
+            ) : (
+              <>
+                <Check className="w-4 h-4" />
+                Saved
               </>
             )}
           </button>
