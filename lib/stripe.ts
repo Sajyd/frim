@@ -13,6 +13,7 @@ export const PLANS = {
     priceId: null,
     features: [
       'Up to 3 projects',
+      'Up to 2 animations per project',
       'GLB/GLTF import',
       'Basic animation tools',
       'JSON export',
@@ -20,6 +21,7 @@ export const PLANS = {
     ],
     limits: {
       projects: 3,
+      animationsPerProject: 2,
     },
   },
   pro: {
@@ -29,6 +31,7 @@ export const PLANS = {
     priceId: process.env.STRIPE_PRO_PRICE_ID,
     features: [
       'Unlimited projects',
+      'Unlimited animations per project',
       'GLB/GLTF import & export',
       'Advanced animation tools',
       'Priority cloud saves',
@@ -37,6 +40,7 @@ export const PLANS = {
     ],
     limits: {
       projects: Infinity,
+      animationsPerProject: Infinity,
     },
   },
 } as const

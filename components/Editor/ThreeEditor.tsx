@@ -16,6 +16,8 @@ interface EditorProps {
     modelData?: string
     modelName?: string
   }
+  animationLimit?: number
+  isPro?: boolean
 }
 
 interface Animation {
@@ -37,7 +39,7 @@ interface HistoryState {
   boneStates: { [key: string]: { position: number[]; rotation: number[]; scale: number[] } }
 }
 
-export default function ThreeEditor({ projectName, onSave, saving, initialData }: EditorProps) {
+export default function ThreeEditor({ projectName, onSave, saving, initialData, animationLimit = 2, isPro = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -80,6 +82,9 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
 
   // Clipboard
   const clipboardRef = useRef<{ position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 } | null>(null)
+
+  // Upgrade modal
+  const [showUpgradeModal, setShowUpgradeModal] = useState(false)
 
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
@@ -815,6 +820,12 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
   }, [selectedBone, bones, showToast])
 
   const createNewAnimation = useCallback(() => {
+    // Check animation limit for free users
+    if (!isPro && animations.size >= animationLimit) {
+      setShowUpgradeModal(true)
+      return
+    }
+
     const id = `anim_${animationCounterRef.current++}`
     const newAnim: Animation = {
       name: `Animation ${animations.size + 1}`,
@@ -830,7 +841,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     setCurrentFrame(0)
     resetAllBones()
     showToast('New animation created', 'success')
-  }, [animations.size, resetAllBones, showToast])
+  }, [animations.size, resetAllBones, showToast, isPro, animationLimit])
 
   const deleteAnimation = useCallback((animId: string) => {
     if (animations.size <= 1) {
@@ -1850,12 +1861,25 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
 
         {/* Animations Section */}
         <div className="p-3 border-b border-[#252b3d] flex items-center justify-between">
-          <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">ANIMATIONS</h3>
+          <div className="flex items-center gap-2">
+            <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">ANIMATIONS</h3>
+            {!isPro && (
+              <span className="text-[10px] text-[#71717a] font-mono">
+                {animations.size}/{animationLimit}
+              </span>
+            )}
+          </div>
           <button
             onClick={createNewAnimation}
-            className="w-6 h-6 rounded bg-[#22c55e] text-[#09090b] text-xs font-bold hover:bg-[#4ade80]"
+            disabled={!isPro && animations.size >= animationLimit}
+            className={`w-6 h-6 rounded text-xs font-bold transition-colors ${
+              !isPro && animations.size >= animationLimit
+                ? 'bg-[#252b3d] text-[#71717a] cursor-not-allowed'
+                : 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]'
+            }`}
+            title={!isPro && animations.size >= animationLimit ? 'Upgrade to Pro for more animations' : 'Create new animation'}
           >
-            +
+            {!isPro && animations.size >= animationLimit ? '🔒' : '+'}
           </button>
         </div>
         <div className="flex-1 overflow-y-auto p-2">
@@ -2113,6 +2137,41 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
 
       {/* Toast container */}
       <div id="toast-container" className="fixed bottom-[180px] right-4 flex flex-col-reverse gap-2 z-50" />
+
+      {/* Upgrade Modal */}
+      {showUpgradeModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
+            <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
+              <svg className="w-8 h-8 text-[#22c55e]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+              </svg>
+            </div>
+            <h2 className="text-xl font-semibold mb-2">Animation Limit Reached</h2>
+            <p className="text-[#a1a1aa] mb-6">
+              You've reached the limit of {animationLimit} animation{animationLimit !== 1 ? 's' : ''} on the Free plan.
+              Upgrade to Pro for unlimited animations.
+            </p>
+            <div className="flex flex-col gap-3">
+              <a
+                href="/pricing"
+                className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
+              >
+                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                Upgrade to Pro - $12/month
+              </a>
+              <button
+                onClick={() => setShowUpgradeModal(false)}
+                className="w-full py-2 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
+              >
+                Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
 
       <style jsx global>{`
         @keyframes slide-up {

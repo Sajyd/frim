@@ -30,6 +30,7 @@ export async function GET() {
     const plan = PLANS[user.plan as keyof typeof PLANS] || PLANS.free
     const projectCount = user._count.projects
     const projectLimit = plan.limits.projects
+    const animationLimit = plan.limits.animationsPerProject
     const canCreateProject = projectCount < projectLimit
 
     return NextResponse.json({
@@ -40,6 +41,9 @@ export async function GET() {
         projects: projectCount,
         projectLimit: projectLimit === Infinity ? 'unlimited' : projectLimit,
         canCreateProject,
+      },
+      limits: {
+        animationsPerProject: animationLimit === Infinity ? 'unlimited' : animationLimit,
       },
     })
   } catch (error) {

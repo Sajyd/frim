@@ -14,6 +14,7 @@ const plans = [
     period: '',
     features: [
       'Up to 3 projects',
+      'Up to 2 animations per project',
       'GLB/GLTF import',
       'Basic animation tools',
       'JSON export',
@@ -35,6 +36,7 @@ const plans = [
     period: '/month',
     features: [
       'Unlimited projects',
+      'Unlimited animations per project',
       'GLB/GLTF import & export',
       'Advanced animation tools',
       'Priority cloud saves',

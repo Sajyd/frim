@@ -29,6 +29,13 @@ interface Project {
   modelName?: string
 }
 
+interface Subscription {
+  plan: string
+  limits: {
+    animationsPerProject: number | 'unlimited'
+  }
+}
+
 export default function EditorPage() {
   const { data: session, status } = useSession()
   const router = useRouter()
@@ -39,6 +46,7 @@ export default function EditorPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [lastSaved, setLastSaved] = useState<Date | null>(null)
+  const [subscription, setSubscription] = useState<Subscription | null>(null)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
 
   useEffect(() => {
@@ -50,6 +58,7 @@ export default function EditorPage() {
   useEffect(() => {
     if (session && projectId) {
       fetchProject()
+      fetchSubscription()
     }
   }, [session, projectId])
 
@@ -67,6 +76,18 @@ export default function EditorPage() {
       router.push('/dashboard')
     } finally {
       setLoading(false)
+    }
+  }
+
+  const fetchSubscription = async () => {
+    try {
+      const res = await fetch('/api/user/subscription')
+      if (res.ok) {
+        const data = await res.json()
+        setSubscription(data)
+      }
+    } catch (error) {
+      console.error('Failed to fetch subscription:', error)
     }
   }
 
@@ -159,6 +180,11 @@ export default function EditorPage() {
     )
   }
 
+  const isPro = subscription?.plan === 'pro'
+  const animationLimit = subscription?.limits?.animationsPerProject === 'unlimited' 
+    ? Infinity 
+    : (subscription?.limits?.animationsPerProject || 2)
+
   return (
     <div className="min-h-screen bg-[#0f1117] text-[#f4f4f5]">
       {/* Top Bar */}
@@ -188,8 +214,16 @@ export default function EditorPage() {
           </div>
         </div>
 
-        <div className="flex-1 flex justify-center">
+        <div className="flex-1 flex justify-center items-center gap-3">
           <span className="text-sm font-medium">{project?.name || 'Untitled Project'}</span>
+          {!isPro && (
+            <Link
+              href="/pricing"
+              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors"
+            >
+              Free Plan
+            </Link>
+          )}
         </div>
 
         <div className="flex items-center gap-3">
@@ -226,6 +260,8 @@ export default function EditorPage() {
           projectName={project?.name || 'Untitled'} 
           onSave={saveProject}
           saving={saving}
+          animationLimit={animationLimit}
+          isPro={isPro}
         />
       </div>
 
