@@ -167,7 +167,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Serialize animations for saving
   const serializeAnimations = useCallback(() => {
-    console.log('serializeAnimations called, animations count:', animations.size)
     const serialized: any[] = []
     animations.forEach((anim, id) => {
       const keyframesObj: Record<number, Record<string, any>> = {}
@@ -181,7 +180,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           }
         })
       })
-      console.log(`Animation "${anim.name}" has ${anim.keyframes.size} keyframe(s), frames:`, Array.from(anim.keyframes.keys()))
       serialized.push({
         id,
         name: anim.name,
@@ -1380,13 +1378,10 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   }, [showToast])
 
   // Load model from base64 data (for restoring saved projects)
-  // skipAnimationProcessing: true when restoring a project (animations come from saved data)
-  const loadModelFromBase64 = useCallback((base64: string, filename: string, skipAnimationProcessing: boolean = false) => {
-    console.log('loadModelFromBase64 called with filename:', filename, 'base64 length:', base64.length, 'skipAnimationProcessing:', skipAnimationProcessing)
+  const loadModelFromBase64 = useCallback((base64: string, filename: string) => {
     try {
       // Convert base64 to ArrayBuffer
       const binaryString = atob(base64)
-      console.log('Converted base64 to binary string, length:', binaryString.length)
       const bytes = new Uint8Array(binaryString.length)
       for (let i = 0; i < binaryString.length; i++) {
         bytes[i] = binaryString.charCodeAt(i)
@@ -1485,7 +1480,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         originalTransformsRef.current = originalTransforms
         setModelLoaded(true)
         setShowWelcome(false)
-        console.log('Model restored successfully, showWelcome set to false')
 
         showToast(`Project restored! Found ${boneMap.size} bones.`, 'success')
       }, (error) => {
@@ -1508,29 +1502,18 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     if (!sceneReady) return  // Wait for scene to be ready
 
     initialDataLoadedRef.current = true
-    console.log('Loading initial project data:', {
-      hasModelData: !!initialData.modelData,
-      modelDataLength: initialData.modelData?.length,
-      modelName: initialData.modelName,
-      animationsCount: initialData.animations?.length
-    })
 
     // Load model if we have model data
     if (initialData.modelData && initialData.modelName) {
-      console.log('Calling loadModelFromBase64...')
       loadModelFromBase64(initialData.modelData, initialData.modelName)
 
       // Load animations after a small delay to ensure model is loaded
       if (initialData.animations && initialData.animations.length > 0) {
-        console.log('Restoring animations from saved data, count:', initialData.animations.length)
         setTimeout(() => {
           const newAnimations = new Map<string, Animation>()
           initialData.animations!.forEach((animData: any, index: number) => {
             const animId = `anim_${animationCounterRef.current++}`
             const keyframes = new Map<number, Map<string, BoneKeyframe>>()
-            
-            const keyframeFrames = animData.keyframes ? Object.keys(animData.keyframes) : []
-            console.log(`Restoring animation "${animData.name}" with keyframes at frames:`, keyframeFrames)
             
             if (animData.keyframes) {
               Object.entries(animData.keyframes).forEach(([frameStr, bonesData]: [string, any]) => {
@@ -1557,7 +1540,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             })
           })
 
-          console.log('Setting animations state with', newAnimations.size, 'animations')
           if (newAnimations.size > 0) {
             setAnimations(newAnimations)
             const firstAnimId = newAnimations.keys().next().value
@@ -2779,16 +2761,35 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
           {/* Track */}
           <div
-            className="h-[calc(100%-24px)] relative cursor-pointer"
+            className="h-[calc(100%-24px)] relative cursor-pointer select-none"
             style={{ 
               width: `${totalFrames * 20 + 100}px`,
               background: 'repeating-linear-gradient(90deg, #252b3d 0px, #252b3d 1px, transparent 1px, transparent 20px)'
             }}
-            onClick={(e) => {
-              const rect = e.currentTarget.getBoundingClientRect()
-              const x = e.clientX - rect.left + e.currentTarget.parentElement!.scrollLeft
-              const frame = Math.round(x / 20)
-              goToFrame(frame)
+            onMouseDown={(e) => {
+              // Start scrubbing
+              e.preventDefault()
+              const track = e.currentTarget
+              const updateFrame = (clientX: number) => {
+                const rect = track.getBoundingClientRect()
+                const x = clientX - rect.left + track.parentElement!.scrollLeft
+                const frame = Math.max(0, Math.min(totalFrames, Math.round(x / 20)))
+                goToFrame(frame)
+              }
+              
+              updateFrame(e.clientX)
+              
+              const handleMouseMove = (moveEvent: MouseEvent) => {
+                updateFrame(moveEvent.clientX)
+              }
+              
+              const handleMouseUp = () => {
+                document.removeEventListener('mousemove', handleMouseMove)
+                document.removeEventListener('mouseup', handleMouseUp)
+              }
+              
+              document.addEventListener('mousemove', handleMouseMove)
+              document.addEventListener('mouseup', handleMouseUp)
             }}
           >
             {/* Keyframe markers */}

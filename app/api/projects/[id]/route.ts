@@ -27,26 +27,6 @@ export async function GET(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Debug: log what's being loaded
-    // Prisma returns Json type as parsed object, but might be string in some cases
-    let animationsData = project.animations
-    if (typeof animationsData === 'string') {
-      animationsData = JSON.parse(animationsData)
-    }
-    console.log('Loading project:', params.id, {
-      name: project.name,
-      animationsType: typeof project.animations,
-      animationsCount: Array.isArray(animationsData) ? animationsData.length : 0,
-      animationsSummary: Array.isArray(animationsData) ? animationsData.map((a: any) => ({
-        name: a.name,
-        keyframeCount: a.keyframes ? Object.keys(a.keyframes).length : 0,
-        keyframeFrames: a.keyframes ? Object.keys(a.keyframes) : []
-      })) : [],
-      hasModelData: !!project.modelData,
-      modelDataLength: (project.modelData as string)?.length,
-      modelName: project.modelName
-    })
-
     return NextResponse.json(project)
   } catch (error) {
     console.error("Error fetching project:", error)

@@ -124,13 +124,6 @@ export default function EditorPage() {
     }
 
     setSaving(true)
-    console.log('Saving project with data:', {
-      animationsCount: dataToSave.animations?.length,
-      firstAnimName: dataToSave.animations?.[0]?.name,
-      hasModelData: !!dataToSave.modelData,
-      modelName: dataToSave.modelName,
-      hasThumbnail: !!dataToSave.thumbnail
-    })
     try {
       const res = await fetch(`/api/projects/${projectId}`, {
         method: 'PUT',
@@ -162,17 +155,6 @@ export default function EditorPage() {
 
   // Handle data change from editor (just mark as changed, don't auto-save)
   const handleEditorChange = useCallback((data: ProjectData) => {
-    console.log('handleEditorChange received data:', {
-      animationsCount: data.animations?.length,
-      animationsSummary: data.animations?.map((a: any) => ({
-        name: a.name,
-        keyframeCount: a.keyframes ? Object.keys(a.keyframes).length : 0,
-        keyframeFrames: a.keyframes ? Object.keys(a.keyframes) : []
-      })),
-      hasModelData: !!data.modelData,
-      modelName: data.modelName,
-      hasThumbnail: !!data.thumbnail
-    })
     pendingDataRef.current = data
     setHasUnsavedChanges(true)
   }, [])
@@ -253,20 +235,6 @@ export default function EditorPage() {
   const animationLimit = subscription?.limits?.animationsPerProject === 'unlimited' 
     ? Infinity 
     : (subscription?.limits?.animationsPerProject || 2)
-
-  // Debug: log project data
-  console.log('Editor page - project data:', {
-    hasProject: !!project,
-    hasModelData: !!project?.modelData,
-    modelDataLength: project?.modelData?.length,
-    modelName: project?.modelName,
-    animationsCount: Array.isArray(project?.animations) ? project.animations.length : 0,
-    animationsType: typeof project?.animations,
-    animationsSummary: Array.isArray(project?.animations) ? project.animations.map((a: any) => ({
-      name: a.name,
-      keyframeCount: a.keyframes ? Object.keys(a.keyframes).length : 0
-    })) : []
-  })
 
   return (
     <div className="min-h-screen bg-[#0f1117] text-[#f4f4f5]">
