@@ -2070,20 +2070,19 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   }
 
   // Convert MediaPipe WORLD landmark to Three.js coordinate system
-  // MediaPipe World Coordinates (hip-centered, in meters):
-  //   X: Positive toward person's left (from camera view: screen right)
-  //   Y: Positive downward
-  //   Z: Positive toward camera
+  // MediaPipe World Coordinates (pelvis-centered, in meters):
+  //   X: Positive = person's right
+  //   Y: Positive = down (below)
+  //   Z: Positive = behind the person (away from camera)
   // Three.js (Y-up, right-handed):
-  //   X: Positive right
-  //   Y: Positive up
-  //   Z: Positive toward viewer
-  // Model faces -Z (toward camera), so person's left = -X in Three.js
+  //   X: Positive = right
+  //   Y: Positive = up
+  //   Z: Positive = toward viewer (toward camera)
   const convertWorldLandmark = useCallback((lm: { x: number, y: number, z: number }) => {
     return new THREE.Vector3(
-      -lm.x,      // Flip X: person's left → model's left (mirror for camera view)
+      lm.x,       // X stays same: person's right = model's right
       -lm.y,      // Flip Y: down → up
-      -lm.z       // Flip Z: toward camera → toward viewer (model faces camera)
+      -lm.z       // Flip Z: behind person → toward camera
     )
   }, [])
 
