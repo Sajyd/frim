@@ -64,6 +64,7 @@ interface ProjectData {
   animations: any[]
   modelName: string
   modelData?: string
+  thumbnail?: string
 }
 
 interface Animation {
@@ -113,6 +114,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [isPlaying, setIsPlaying] = useState(false)
   const [modelLoaded, setModelLoaded] = useState(false)
   const [showWelcome, setShowWelcome] = useState(true)
+  const [sceneReady, setSceneReady] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
   const [showBoneView, setShowBoneView] = useState(true)
   const [loadedFilename, setLoadedFilename] = useState('')
@@ -191,14 +193,49 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     return serialized
   }, [animations])
 
+  // Capture thumbnail from the scene
+  const captureThumbnail = useCallback((): string | undefined => {
+    if (!rendererRef.current || !sceneRef.current || !cameraRef.current || !modelLoaded) {
+      return undefined
+    }
+
+    try {
+      // Render the scene
+      rendererRef.current.render(sceneRef.current, cameraRef.current)
+      
+      // Get the canvas data as base64
+      const canvas = rendererRef.current.domElement
+      
+      // Create a smaller canvas for thumbnail (400x300)
+      const thumbCanvas = document.createElement('canvas')
+      const thumbWidth = 400
+      const thumbHeight = 300
+      thumbCanvas.width = thumbWidth
+      thumbCanvas.height = thumbHeight
+      
+      const ctx = thumbCanvas.getContext('2d')
+      if (!ctx) return undefined
+      
+      // Draw the main canvas scaled down to thumbnail size
+      ctx.drawImage(canvas, 0, 0, canvas.width, canvas.height, 0, 0, thumbWidth, thumbHeight)
+      
+      // Return as base64 JPEG (smaller file size)
+      return thumbCanvas.toDataURL('image/jpeg', 0.8)
+    } catch (err) {
+      console.error('Failed to capture thumbnail:', err)
+      return undefined
+    }
+  }, [modelLoaded])
+
   // Get current project data for saving
   const getProjectData = useCallback((): ProjectData => {
     return {
       animations: serializeAnimations(),
       modelName: loadedFilename,
-      modelData: modelDataRef.current || undefined
+      modelData: modelDataRef.current || undefined,
+      thumbnail: captureThumbnail()
     }
-  }, [serializeAnimations, loadedFilename])
+  }, [serializeAnimations, loadedFilename, captureThumbnail])
 
   // Notify parent of changes
   const notifyChange = useCallback(() => {
@@ -366,6 +403,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setCurrentAnimationId(animId)
 
     // Don't auto-load - show welcome screen instead
+    // Mark scene as ready for initial data loading
+    setSceneReady(true)
 
     return () => {
       cancelAnimationFrame(animationIdRef.current)
@@ -1439,14 +1478,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     }
   }, [showToast])
 
-  // Load initial data when component mounts
+  // Load initial data when component mounts and scene is ready
   const initialDataLoadedRef = useRef(false)
   useEffect(() => {
     if (initialDataLoadedRef.current) return
     if (!initialData) return
-    if (!sceneRef.current) return  // Wait for scene to be ready
+    if (!sceneReady) return  // Wait for scene to be ready
 
     initialDataLoadedRef.current = true
+    console.log('Loading initial project data:', initialData.modelName)
 
     // Load model if we have model data
     if (initialData.modelData && initialData.modelName) {
@@ -1498,7 +1538,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // We have animations but no model - just load animations and show welcome
       // (user will need to load a model)
     }
-  }, [initialData, loadModelFromBase64])
+  }, [initialData, loadModelFromBase64, sceneReady])
 
   // Export JSON
   const exportJSON = useCallback(() => {

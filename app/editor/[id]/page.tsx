@@ -33,6 +33,8 @@ interface Project {
 interface ProjectData {
   animations: any[]
   modelName: string
+  modelData?: string
+  thumbnail?: string
 }
 
 interface Subscription {
@@ -130,6 +132,8 @@ export default function EditorPage() {
           name: project.name,
           animations: dataToSave.animations,
           modelName: dataToSave.modelName,
+          modelData: dataToSave.modelData,
+          thumbnail: dataToSave.thumbnail,
         }),
       })
 
