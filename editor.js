@@ -672,9 +672,9 @@ class GLBAnimationEditor {
         this.currentAnimationId = animId;
         this.currentFrame = 0;
         
-        // Reset bones to original pose first
+        // Reset bones without keyframes to T-pose, then apply animation
         if (this.bones.size > 0) {
-            this.resetAllBonesToOriginal();
+            this.resetBonesWithoutKeyframes();
             
             // Apply first frame of new animation
             this.applyPoseAtFrame(0);
@@ -706,6 +706,30 @@ class GLBAnimationEditor {
                 bone.position.copy(transforms.position);
                 bone.rotation.copy(transforms.rotation);
                 bone.scale.copy(transforms.scale);
+            }
+        });
+    }
+    
+    resetBonesWithoutKeyframes() {
+        // Get all bones that have keyframes in current animation
+        const bonesWithKeyframes = new Set();
+        if (this.currentAnimation && this.currentAnimation.keyframes) {
+            this.currentAnimation.keyframes.forEach((frameData) => {
+                frameData.forEach((_, boneName) => {
+                    bonesWithKeyframes.add(boneName);
+                });
+            });
+        }
+        
+        // Reset only bones that don't have keyframes to T-pose
+        this.originalBoneTransforms.forEach((transforms, boneName) => {
+            if (!bonesWithKeyframes.has(boneName)) {
+                const bone = this.bones.get(boneName);
+                if (bone) {
+                    bone.position.copy(transforms.position);
+                    bone.rotation.copy(transforms.rotation);
+                    bone.scale.copy(transforms.scale);
+                }
             }
         });
     }
