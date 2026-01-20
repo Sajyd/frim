@@ -1582,6 +1582,7 @@ class GLBAnimationEditor {
                 const action = item.dataset.action;
                 switch (action) {
                     case 'add-keyframe': this.addKeyframe(); break;
+                    case 'add-keyframe-reset': this.addKeyframeReset(); break;
                     case 'delete-keyframe': this.deleteKeyframe(); break;
                     case 'copy': this.copyPose(); break;
                     case 'paste': this.pastePose(); break;
@@ -1631,6 +1632,7 @@ class GLBAnimationEditor {
         
         // Keyframe actions
         document.getElementById('btn-add-keyframe')?.addEventListener('click', () => this.addKeyframe());
+        document.getElementById('btn-add-keyframe-reset')?.addEventListener('click', () => this.addKeyframeReset());
         document.getElementById('btn-copy-pose')?.addEventListener('click', () => this.copyPose());
         document.getElementById('btn-paste-pose')?.addEventListener('click', () => this.pastePose());
         document.getElementById('btn-mirror-pose')?.addEventListener('click', () => this.mirrorPose());
@@ -1854,6 +1856,40 @@ class GLBAnimationEditor {
         
         this.updateKeyframeMarkers();
         this.showToast(`Keyframe added for ${this.selectedBone.name} at frame ${this.currentFrame}`, 'success');
+    }
+    
+    addKeyframeReset() {
+        if (!this.selectedBone) {
+            this.showToast('Select a bone first', 'warning');
+            return;
+        }
+        
+        const original = this.originalBoneTransforms.get(this.selectedBone.name);
+        if (!original) {
+            this.showToast('No original transform found', 'error');
+            return;
+        }
+        
+        if (!this.keyframes.has(this.currentFrame)) {
+            this.keyframes.set(this.currentFrame, new Map());
+        }
+        
+        // Add keyframe with original bone transform values
+        this.keyframes.get(this.currentFrame).set(this.selectedBone.name, {
+            position: original.position.clone(),
+            rotation: new THREE.Quaternion().setFromEuler(original.rotation),
+            scale: original.scale.clone()
+        });
+        
+        // Also reset the bone visually to match
+        this.selectedBone.position.copy(original.position);
+        this.selectedBone.rotation.copy(original.rotation);
+        this.selectedBone.scale.copy(original.scale);
+        
+        this.updateTransformInputs();
+        this.updateKeyframeMarkers();
+        this.saveToHistory();
+        this.showToast(`Reset keyframe added for ${this.selectedBone.name} at frame ${this.currentFrame}`, 'success');
     }
     
     deleteKeyframe() {
@@ -2787,7 +2823,11 @@ class GLBAnimationEditor {
                 this.toggleBoneView();
                 break;
             case 'KeyK':
-                this.addKeyframe();
+                if (e.shiftKey) {
+                    this.addKeyframeReset();
+                } else {
+                    this.addKeyframe();
+                }
                 break;
             case 'Delete':
             case 'Backspace':
