@@ -1797,16 +1797,91 @@ class GLBAnimationEditor {
                 marker.title = `${boneName} @ frame ${frame}`;
                 marker.dataset.frame = frame;
                 marker.dataset.bone = boneName;
+                marker.style.cursor = 'grab';
                 
+                // Click to select
                 marker.addEventListener('click', (e) => {
+                    if (marker.dataset.dragged === 'true') {
+                        marker.dataset.dragged = 'false';
+                        return;
+                    }
                     e.stopPropagation();
                     this.goToFrame(frame);
                     this.selectBone(boneName);
                 });
                 
+                // Drag to move keyframe
+                marker.addEventListener('mousedown', (e) => {
+                    e.stopPropagation();
+                    e.preventDefault();
+                    
+                    const startX = e.clientX;
+                    const startFrame = parseInt(marker.dataset.frame);
+                    const boneName = marker.dataset.bone;
+                    let hasMoved = false;
+                    
+                    marker.style.cursor = 'grabbing';
+                    marker.classList.add('dragging');
+                    
+                    const onMouseMove = (moveEvent) => {
+                        const deltaX = moveEvent.clientX - startX;
+                        const deltaFrames = Math.round(deltaX / 20);
+                        const newFrame = Math.max(0, Math.min(this.totalFrames, startFrame + deltaFrames));
+                        
+                        if (newFrame !== startFrame) {
+                            hasMoved = true;
+                        }
+                        
+                        marker.style.left = `${newFrame * 20}px`;
+                        marker.dataset.tempFrame = newFrame;
+                        marker.title = `${boneName} @ frame ${newFrame}`;
+                    };
+                    
+                    const onMouseUp = (upEvent) => {
+                        document.removeEventListener('mousemove', onMouseMove);
+                        document.removeEventListener('mouseup', onMouseUp);
+                        
+                        marker.style.cursor = 'grab';
+                        marker.classList.remove('dragging');
+                        
+                        const newFrame = parseInt(marker.dataset.tempFrame || startFrame);
+                        
+                        if (hasMoved && newFrame !== startFrame) {
+                            marker.dataset.dragged = 'true';
+                            this.moveKeyframe(boneName, startFrame, newFrame);
+                        }
+                    };
+                    
+                    document.addEventListener('mousemove', onMouseMove);
+                    document.addEventListener('mouseup', onMouseUp);
+                });
+                
                 tracks.appendChild(marker);
             });
         });
+    }
+    
+    moveKeyframe(boneName, fromFrame, toFrame) {
+        const frameData = this.keyframes.get(fromFrame);
+        if (!frameData || !frameData.has(boneName)) return;
+        
+        const boneData = frameData.get(boneName);
+        
+        // Remove from old frame
+        frameData.delete(boneName);
+        if (frameData.size === 0) {
+            this.keyframes.delete(fromFrame);
+        }
+        
+        // Add to new frame
+        if (!this.keyframes.has(toFrame)) {
+            this.keyframes.set(toFrame, new Map());
+        }
+        this.keyframes.get(toFrame).set(boneName, boneData);
+        
+        this.updateKeyframeMarkers();
+        this.saveToHistory();
+        this.showToast(`Keyframe moved from frame ${fromFrame} to ${toFrame}`, 'info');
     }
     
     goToFrame(frame) {
