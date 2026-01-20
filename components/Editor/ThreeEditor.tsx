@@ -452,6 +452,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     })
   }, [currentAnimation, bones])
 
+  // Apply pose when animation changes or is loaded
+  useEffect(() => {
+    if (currentAnimation && currentAnimation.keyframes.size > 0 && !isPlaying) {
+      applyPoseAtFrame(currentFrame)
+    }
+  }, [currentAnimationId, currentAnimation, applyPoseAtFrame, currentFrame, isPlaying])
+
   // Navigate to a specific frame
   const goToFrame = useCallback((frame: number) => {
     const clampedFrame = Math.max(0, Math.min(frame, totalFrames))
@@ -1545,6 +1552,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             const firstAnimId = newAnimations.keys().next().value
             if (firstAnimId) {
               setCurrentAnimationId(firstAnimId)
+              setCurrentFrame(0)
             }
           }
         }, 100)
