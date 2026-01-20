@@ -1413,11 +1413,6 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
       return
     }
 
-    if (selectedExportAnimations.size === 0) {
-      showToast('Please select at least one animation to export', 'warning')
-      return
-    }
-
     setExportingGLB(true)
     showToast('Generating GLB...', 'info')
 
@@ -1431,30 +1426,40 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
         }
       })
 
-      if (animationClips.length === 0) {
-        showToast('Selected animations have no keyframes', 'warning')
-        setExportingGLB(false)
-        return
-      }
-
-      // Clone model for export
-      const exportScene = modelRef.current.clone(true)
+      // Save original animations to restore later
+      const originalAnimations = modelRef.current.animations ? [...modelRef.current.animations] : []
       
-      // Update skeleton in cloned model
-      exportScene.traverse(child => {
+      // Use the original model directly (don't clone - cloning breaks glTF internal data)
+      // Temporarily set our animations on the model (or empty array if none selected)
+      modelRef.current.animations = animationClips
+      
+      // Update skeleton pose
+      modelRef.current.traverse(child => {
         if ((child as THREE.SkinnedMesh).isSkinnedMesh && (child as THREE.SkinnedMesh).skeleton) {
           ;(child as THREE.SkinnedMesh).skeleton.update()
         }
       })
 
-      // Add all animation clips to scene
-      exportScene.animations = animationClips
-
       // Export using GLTFExporter
       const exporter = new GLTFExporter()
+      const exportOptions: { binary: boolean; includeCustomExtensions: boolean; animations?: THREE.AnimationClip[] } = { 
+        binary: true,
+        includeCustomExtensions: true
+      }
+      
+      // Only include animations in options if we have any
+      if (animationClips.length > 0) {
+        exportOptions.animations = animationClips
+      }
+
       exporter.parse(
-        exportScene,
+        modelRef.current,
         (result) => {
+          // Restore original animations
+          if (modelRef.current) {
+            modelRef.current.animations = originalAnimations
+          }
+          
           const blob = new Blob([result as ArrayBuffer], { type: 'application/octet-stream' })
           const url = URL.createObjectURL(blob)
           const a = document.createElement('a')
@@ -1462,16 +1467,25 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           a.download = `${exportFilename}.glb`
           a.click()
           URL.revokeObjectURL(url)
-          showToast(`GLB exported with ${animationClips.length} animation(s)`, 'success')
+          
+          if (animationClips.length > 0) {
+            showToast(`GLB exported with ${animationClips.length} animation(s)`, 'success')
+          } else {
+            showToast('GLB exported (model only, no animations)', 'success')
+          }
           setShowExportModal(false)
           setExportingGLB(false)
         },
         (error) => {
+          // Restore original animations on error too
+          if (modelRef.current) {
+            modelRef.current.animations = originalAnimations
+          }
           console.error('GLB export error:', error)
           showToast('Failed to export GLB', 'error')
           setExportingGLB(false)
         },
-        { binary: true, animations: animationClips }
+        exportOptions
       )
     } catch (err) {
       console.error('Export error:', err)
@@ -2796,11 +2810,13 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                   )
                 })}
               </div>
-              {selectedExportAnimations.size > 0 && (
-                <p className="text-[10px] text-[#22c55e] mt-2">
-                  {selectedExportAnimations.size} animation(s) selected
-                </p>
-              )}
+              <p className="text-[10px] mt-2">
+                {selectedExportAnimations.size > 0 ? (
+                  <span className="text-[#22c55e]">{selectedExportAnimations.size} animation(s) selected</span>
+                ) : (
+                  <span className="text-[#71717a]">No animations selected - will export model only</span>
+                )}
+              </p>
             </div>
 
             {/* Export options */}
@@ -2829,7 +2845,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
               </button>
               <button
                 onClick={exportGLB}
-                disabled={selectedExportAnimations.size === 0 || exportingGLB}
+                disabled={exportingGLB}
                 className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
               >
                 {exportingGLB ? (
