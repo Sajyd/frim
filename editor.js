@@ -1673,6 +1673,9 @@ class GLBAnimationEditor {
             document.getElementById('btn-grid')?.classList.toggle('active', this.showGrid);
         });
         
+        // Help/shortcuts modal
+        document.getElementById('btn-help')?.addEventListener('click', () => this.showShortcutsModal());
+        
         // Transform tools
         ['select', 'rotate', 'translate', 'scale'].forEach(tool => {
             document.getElementById(`tool-${tool}`)?.addEventListener('click', () => {
@@ -2779,6 +2782,10 @@ class GLBAnimationEditor {
         this.populateAnimationList();
     }
     
+    showShortcutsModal() {
+        document.getElementById('shortcuts-modal')?.classList.remove('hidden');
+    }
+    
     showExportJSONModal() {
         document.getElementById('export-json-modal').classList.remove('hidden');
         document.getElementById('export-json-filename').value = this.animationName.toLowerCase().replace(/\s+/g, '_');
@@ -3492,6 +3499,13 @@ class GLBAnimationEditor {
                     });
                     this.updateKeyframeMarkers();
                     this.showToast(`Selected ${this.selectedKeyframes.size} keyframe(s)`, 'info');
+                }
+                break;
+            case 'Slash':
+                // ? key (Shift + /) opens help
+                if (e.shiftKey) {
+                    e.preventDefault();
+                    this.showShortcutsModal();
                 }
                 break;
             case 'KeyZ':

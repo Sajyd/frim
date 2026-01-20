@@ -1230,6 +1230,56 @@ body {
     resize: vertical;
 }
 
+/* Shortcuts Modal */
+.shortcuts-body {
+    display: grid;
+    grid-template-columns: repeat(2, 1fr);
+    gap: 20px;
+}
+
+.shortcuts-section {
+    background: var(--bg-primary);
+    border-radius: 12px;
+    padding: 16px;
+}
+
+.shortcuts-section h4 {
+    font-size: 14px;
+    font-weight: 600;
+    margin-bottom: 12px;
+    color: var(--accent-primary);
+}
+
+.shortcut-row {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 6px 0;
+    font-size: 13px;
+    color: var(--text-secondary);
+}
+
+.shortcut-row kbd {
+    background: var(--bg-tertiary);
+    border: 1px solid var(--border-primary);
+    border-radius: 4px;
+    padding: 3px 8px;
+    font-family: var(--font-mono);
+    font-size: 11px;
+    color: var(--text-primary);
+    box-shadow: 0 2px 0 var(--border-primary);
+}
+
+.shortcut-row span {
+    color: var(--text-primary);
+}
+
+.shortcut-tip {
+    font-size: 12px;
+    color: var(--text-secondary);
+    padding: 4px 0;
+}
+
 .modal-footer {
     display: flex;
     justify-content: flex-end;

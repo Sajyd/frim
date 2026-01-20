@@ -417,6 +417,9 @@
                 <button class="toolbar-btn active" id="btn-grid" title="Toggle Grid">
                     <span class="icon">⊞</span>
                 </button>
+                <button class="toolbar-btn" id="btn-help" title="Keyboard Shortcuts (?)">
+                    <span class="icon">❓</span>
+                </button>
             </div>
         </div>
         
@@ -788,6 +791,59 @@
             <div class="modal-footer">
                 <button class="btn-secondary" data-close="reset-bones-modal">Cancel</button>
                 <button class="btn-primary" id="btn-confirm-reset-bones">Reset Selected</button>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Keyboard Shortcuts Help Modal -->
+    <div class="modal-overlay hidden" id="shortcuts-modal">
+        <div class="modal modal-large">
+            <div class="modal-header">
+                <h3>⌨️ Keyboard Shortcuts</h3>
+                <button class="modal-close" data-close="shortcuts-modal">×</button>
+            </div>
+            <div class="modal-body shortcuts-body">
+                <div class="shortcuts-section">
+                    <h4>🎬 Playback</h4>
+                    <div class="shortcut-row"><kbd>Space</kbd><span>Play / Pause</span></div>
+                    <div class="shortcut-row"><kbd>←</kbd><span>Previous frame</span></div>
+                    <div class="shortcut-row"><kbd>→</kbd><span>Next frame</span></div>
+                    <div class="shortcut-row"><kbd>Home</kbd><span>Go to first frame</span></div>
+                    <div class="shortcut-row"><kbd>End</kbd><span>Go to last frame</span></div>
+                </div>
+                <div class="shortcuts-section">
+                    <h4>🔑 Keyframes</h4>
+                    <div class="shortcut-row"><kbd>K</kbd><span>Add keyframe</span></div>
+                    <div class="shortcut-row"><kbd>Shift</kbd> + <kbd>K</kbd><span>Add reset keyframe</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>D</kbd><span>Duplicate keyframe(s)</span></div>
+                    <div class="shortcut-row"><kbd>Delete</kbd><span>Delete keyframe(s)</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>A</kbd><span>Select all keyframes</span></div>
+                    <div class="shortcut-row"><kbd>Shift</kbd> + Click<span>Add to selection</span></div>
+                    <div class="shortcut-row"><kbd>Esc</kbd><span>Clear selection</span></div>
+                </div>
+                <div class="shortcuts-section">
+                    <h4>🛠️ Tools</h4>
+                    <div class="shortcut-row"><kbd>V</kbd><span>Select tool</span></div>
+                    <div class="shortcut-row"><kbd>R</kbd><span>Rotate tool</span></div>
+                    <div class="shortcut-row"><kbd>T</kbd><span>Translate tool</span></div>
+                    <div class="shortcut-row"><kbd>S</kbd><span>Scale tool</span></div>
+                    <div class="shortcut-row"><kbd>B</kbd><span>Toggle bone view</span></div>
+                </div>
+                <div class="shortcuts-section">
+                    <h4>📋 Edit</h4>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>Z</kbd><span>Undo</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>Shift</kbd> + <kbd>Z</kbd><span>Redo</span></div>
+                    <div class="shortcut-row"><kbd>Ctrl</kbd> + <kbd>C</kbd><span>Copy pose + reset bone</span></div>
+                </div>
+                <div class="shortcuts-section">
+                    <h4>💡 Tips</h4>
+                    <div class="shortcut-tip">• Box select: Click and drag on timeline</div>
+                    <div class="shortcut-tip">• Drag keyframes to move them</div>
+                    <div class="shortcut-tip">• Selected keyframes move together</div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-primary" data-close="shortcuts-modal">Got it!</button>
             </div>
         </div>
     </div>
