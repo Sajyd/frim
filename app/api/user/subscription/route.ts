@@ -44,6 +44,7 @@ export async function GET() {
       },
       limits: {
         animationsPerProject: animationLimit === Infinity ? 'unlimited' : animationLimit,
+        videoAnalysis: plan.limits.videoAnalysis,
       },
     })
   } catch (error) {

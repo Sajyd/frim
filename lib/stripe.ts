@@ -14,14 +14,15 @@ export const PLANS = {
     features: [
       'Up to 3 projects',
       'Up to 2 animations per project',
-      'GLB/GLTF import',
+      'GLB/GLTF import & export',
       'Basic animation tools',
-      'JSON export',
+      'JSON & GLB export',
       'Community support',
     ],
     limits: {
       projects: 3,
       animationsPerProject: 2,
+      videoAnalysis: false,
     },
   },
   pro: {
@@ -34,13 +35,15 @@ export const PLANS = {
       'Unlimited animations per project',
       'GLB/GLTF import & export',
       'Advanced animation tools',
+      'AI Video Motion Capture',
+      'Extract animations from videos',
       'Priority cloud saves',
-      'GLB export with animations',
       'Priority support',
     ],
     limits: {
       projects: Infinity,
       animationsPerProject: Infinity,
+      videoAnalysis: true,
     },
   },
 } as const

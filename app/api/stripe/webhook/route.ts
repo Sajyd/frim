@@ -37,7 +37,7 @@ export async function POST(request: NextRequest) {
               plan: 'pro',
               stripeSubscriptionId: subscription.id,
               stripePriceId: subscription.items.data[0].price.id,
-              stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000),
+              stripeCurrentPeriodEnd: new Date(subscription.current_period.end * 1000),
             },
           })
         }
@@ -52,7 +52,7 @@ export async function POST(request: NextRequest) {
           data: {
             plan: subscription.status === 'active' ? 'pro' : 'free',
             stripePriceId: subscription.items.data[0].price.id,
-            stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000),
+            stripeCurrentPeriodEnd: new Date(subscription.current_period.end * 1000),
           },
         })
         break
@@ -84,7 +84,7 @@ export async function POST(request: NextRequest) {
           await prisma.user.update({
             where: { stripeCustomerId: invoice.customer as string },
             data: {
-              stripeCurrentPeriodEnd: new Date(subscription.current_period_end * 1000),
+              stripeCurrentPeriodEnd: new Date(subscription.current_period.end * 1000),
             },
           })
         }

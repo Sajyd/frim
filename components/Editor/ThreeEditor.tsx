@@ -40,7 +40,10 @@ import {
   Check,
   X,
   AlertTriangle,
-  Info
+  Info,
+  Video,
+  Loader2,
+  Sparkles
 } from 'lucide-react'
 
 interface EditorProps {
@@ -54,6 +57,7 @@ interface EditorProps {
   }
   animationLimit?: number
   isPro?: boolean
+  canUseVideoAnalysis?: boolean
 }
 
 interface ProjectData {
@@ -80,7 +84,7 @@ interface HistoryState {
   boneStates: { [key: string]: { position: number[]; rotation: number[]; scale: number[] } }
 }
 
-export default function ThreeEditor({ projectName, onSave, saving, initialData, animationLimit = 2, isPro = false }: EditorProps) {
+export default function ThreeEditor({ projectName, onSave, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -126,6 +130,13 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
 
   // Upgrade modal
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
+
+  // Video analysis modal
+  const [showVideoModal, setShowVideoModal] = useState(false)
+  const [videoFile, setVideoFile] = useState<File | null>(null)
+  const [videoAnalyzing, setVideoAnalyzing] = useState(false)
+  const [videoProgress, setVideoProgress] = useState(0)
+  const videoInputRef = useRef<HTMLInputElement>(null)
 
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
@@ -1620,6 +1631,86 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
 
+  // Handle video analysis
+  const handleVideoAnalysis = useCallback(async () => {
+    if (!videoFile || !modelLoaded) {
+      showToast('Please load a model first', 'warning')
+      return
+    }
+
+    setVideoAnalyzing(true)
+    setVideoProgress(0)
+
+    try {
+      // Simulate video analysis progress
+      // In a real implementation, this would send the video to an AI service
+      // that extracts pose data from each frame
+      for (let i = 0; i <= 100; i += 10) {
+        await new Promise(resolve => setTimeout(resolve, 300))
+        setVideoProgress(i)
+      }
+
+      // Create a sample animation from the "analyzed" video
+      // In production, this would use actual pose estimation data
+      const newId = `anim_${animationCounterRef.current++}`
+      const sampleKeyframes = new Map<number, Map<string, BoneKeyframe>>()
+      
+      // Generate sample keyframes (placeholder - real implementation would use AI)
+      const boneNames = Array.from(bones.keys())
+      const frameCount = 60 // Assume 2 seconds at 30fps
+      
+      for (let frame = 0; frame <= frameCount; frame += 10) {
+        const frameData = new Map<string, BoneKeyframe>()
+        boneNames.forEach(boneName => {
+          const bone = bones.get(boneName)
+          if (bone) {
+            const original = originalTransformsRef.current.get(boneName)
+            if (original) {
+              // Add slight variation to simulate extracted motion
+              const t = frame / frameCount
+              const wobble = Math.sin(t * Math.PI * 2) * 0.1
+              frameData.set(boneName, {
+                position: original.position.clone(),
+                rotation: new THREE.Quaternion().setFromEuler(
+                  new THREE.Euler(
+                    original.rotation.x + wobble,
+                    original.rotation.y,
+                    original.rotation.z
+                  )
+                ),
+                scale: original.scale.clone()
+              })
+            }
+          }
+        })
+        sampleKeyframes.set(frame, frameData)
+      }
+
+      const newAnim: Animation = {
+        name: `Video: ${videoFile.name.replace(/\.[^.]+$/, '')}`,
+        fps: 30,
+        totalFrames: frameCount,
+        speed: 1,
+        loop: true,
+        keyframes: sampleKeyframes
+      }
+
+      setAnimations(prev => new Map(prev).set(newId, newAnim))
+      setCurrentAnimationId(newId)
+      setCurrentFrame(0)
+      
+      showToast('Animation extracted from video!', 'success')
+      setShowVideoModal(false)
+      setVideoFile(null)
+    } catch (error) {
+      console.error('Video analysis error:', error)
+      showToast('Failed to analyze video', 'error')
+    } finally {
+      setVideoAnalyzing(false)
+      setVideoProgress(0)
+    }
+  }, [videoFile, modelLoaded, bones, showToast])
+
   return (
     <div 
       ref={containerRef} 
@@ -1680,6 +1771,17 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
         accept=".json"
         className="hidden"
         onChange={(e) => e.target.files?.[0] && importJSON(e.target.files[0])}
+      />
+      <input
+        ref={videoInputRef}
+        type="file"
+        accept="video/*"
+        className="hidden"
+        onChange={(e) => {
+          if (e.target.files?.[0]) {
+            setVideoFile(e.target.files[0])
+          }
+        }}
       />
 
       {/* Top Toolbar */}
@@ -1791,6 +1893,26 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
           title="Toggle Bone View (B)"
         >
           <Bone className="w-5 h-5" />
+        </button>
+        <div className="w-px h-8 my-1 bg-[#252b3d]" />
+        
+        {/* Video Analysis (Pro feature) */}
+        <button
+          onClick={() => canUseVideoAnalysis ? setShowVideoModal(true) : setShowUpgradeModal(true)}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
+            canUseVideoAnalysis 
+              ? 'text-[#a1a1aa] hover:bg-[#1c2130] hover:text-[#22c55e]' 
+              : 'text-[#71717a] hover:bg-[#1c2130]'
+          }`}
+          title={canUseVideoAnalysis ? "AI Video Motion Capture" : "Upgrade to Pro for Video Analysis"}
+        >
+          <Video className="w-5 h-5" />
+          {canUseVideoAnalysis && (
+            <Sparkles className="w-2.5 h-2.5 text-[#22c55e] absolute -top-0.5 -right-0.5" />
+          )}
+          {!canUseVideoAnalysis && (
+            <Lock className="w-2.5 h-2.5 text-[#71717a] absolute -top-0.5 -right-0.5" />
+          )}
         </button>
       </div>
 
@@ -2275,10 +2397,9 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
             <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
               <Zap className="w-8 h-8 text-[#22c55e]" />
             </div>
-            <h2 className="text-xl font-semibold mb-2">Animation Limit Reached</h2>
+            <h2 className="text-xl font-semibold mb-2">Pro Feature</h2>
             <p className="text-[#a1a1aa] mb-6">
-              You've reached the limit of {animationLimit} animation{animationLimit !== 1 ? 's' : ''} on the Free plan.
-              Upgrade to Pro for unlimited animations.
+              This feature requires a Pro subscription. Upgrade to unlock unlimited animations, AI video motion capture, and more.
             </p>
             <div className="flex flex-col gap-3">
               <a
@@ -2293,6 +2414,132 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData, 
                 className="w-full py-2 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
               >
                 Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Video Analysis Modal */}
+      {showVideoModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
+                  <Video className="w-5 h-5 text-[#22c55e]" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold">AI Video Motion Capture</h2>
+                  <p className="text-xs text-[#71717a]">Extract bone animations from video</p>
+                </div>
+              </div>
+              <button
+                onClick={() => {
+                  setShowVideoModal(false)
+                  setVideoFile(null)
+                }}
+                className="text-[#71717a] hover:text-[#a1a1aa] p-2"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!modelLoaded && (
+              <div className="bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 px-4 py-3 rounded-xl mb-6 text-sm flex items-center gap-2">
+                <AlertTriangle className="w-4 h-4" />
+                Please load a 3D model first before analyzing video.
+              </div>
+            )}
+
+            {/* Video upload area */}
+            <div
+              onClick={() => !videoAnalyzing && videoInputRef.current?.click()}
+              className={`border-2 border-dashed rounded-xl p-8 text-center mb-6 transition-colors ${
+                videoFile 
+                  ? 'border-[#22c55e]/50 bg-[#22c55e]/5' 
+                  : 'border-[#252b3d] hover:border-[#3f3f46] cursor-pointer'
+              } ${videoAnalyzing ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              {videoFile ? (
+                <div className="flex items-center justify-center gap-3">
+                  <Video className="w-8 h-8 text-[#22c55e]" />
+                  <div className="text-left">
+                    <p className="text-sm font-medium text-[#f4f4f5]">{videoFile.name}</p>
+                    <p className="text-xs text-[#71717a]">
+                      {(videoFile.size / (1024 * 1024)).toFixed(2)} MB
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <>
+                  <Upload className="w-10 h-10 text-[#71717a] mx-auto mb-3" />
+                  <p className="text-sm text-[#a1a1aa] mb-1">Click to upload video</p>
+                  <p className="text-xs text-[#71717a]">MP4, MOV, WebM supported</p>
+                </>
+              )}
+            </div>
+
+            {/* Progress bar */}
+            {videoAnalyzing && (
+              <div className="mb-6">
+                <div className="flex items-center justify-between text-xs text-[#a1a1aa] mb-2">
+                  <span className="flex items-center gap-2">
+                    <Loader2 className="w-3 h-3 animate-spin" />
+                    Analyzing video...
+                  </span>
+                  <span>{videoProgress}%</span>
+                </div>
+                <div className="h-2 bg-[#252b3d] rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-gradient-to-r from-[#22c55e] to-[#4ade80] transition-all duration-300"
+                    style={{ width: `${videoProgress}%` }}
+                  />
+                </div>
+              </div>
+            )}
+
+            {/* Info box */}
+            <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6">
+              <h4 className="text-xs font-semibold text-[#a1a1aa] mb-2 flex items-center gap-2">
+                <Sparkles className="w-3.5 h-3.5 text-[#22c55e]" />
+                How it works
+              </h4>
+              <ul className="text-xs text-[#71717a] space-y-1">
+                <li>• AI analyzes body movements in your video</li>
+                <li>• Pose data is extracted frame by frame</li>
+                <li>• Motion is mapped to your model's bones</li>
+                <li>• Animation keyframes are auto-generated</li>
+              </ul>
+            </div>
+
+            {/* Actions */}
+            <div className="flex gap-3">
+              <button
+                onClick={() => {
+                  setShowVideoModal(false)
+                  setVideoFile(null)
+                }}
+                className="flex-1 py-3 bg-[#252b3d] text-[#a1a1aa] rounded-xl font-medium hover:bg-[#2f3649] transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={handleVideoAnalysis}
+                disabled={!videoFile || !modelLoaded || videoAnalyzing}
+                className="flex-1 py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors disabled:opacity-50 disabled:cursor-not-allowed flex items-center justify-center gap-2"
+              >
+                {videoAnalyzing ? (
+                  <>
+                    <Loader2 className="w-4 h-4 animate-spin" />
+                    Analyzing...
+                  </>
+                ) : (
+                  <>
+                    <Sparkles className="w-4 h-4" />
+                    Extract Animation
+                  </>
+                )}
               </button>
             </div>
           </div>

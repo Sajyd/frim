@@ -39,6 +39,7 @@ interface Subscription {
   plan: string
   limits: {
     animationsPerProject: number | 'unlimited'
+    videoAnalysis: boolean
   }
 }
 
@@ -314,6 +315,7 @@ export default function EditorPage() {
           } : undefined}
           animationLimit={animationLimit}
           isPro={isPro}
+          canUseVideoAnalysis={subscription?.limits?.videoAnalysis || false}
         />
       </div>
 
