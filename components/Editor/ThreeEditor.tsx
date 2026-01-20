@@ -286,7 +286,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     animate()
 
     return () => cancelAnimationFrame(animationIdRef.current)
-  }, [isPlaying, currentFrame, currentAnimation, fps, speed, loop, totalFrames, showBoneView])
+  }, [isPlaying, currentFrame, currentAnimation, fps, speed, loop, totalFrames, showBoneView, goToFrame])
 
   // Update transform controls mode
   useEffect(() => {
@@ -658,7 +658,7 @@ export default function ThreeEditor({ projectName, onSave, saving, initialData }
     const clampedFrame = Math.max(0, Math.min(frame, totalFrames))
     setCurrentFrame(clampedFrame)
     applyPoseAtFrame(clampedFrame)
-  }, [totalFrames])
+  }, [totalFrames, applyPoseAtFrame])
 
   const applyPoseAtFrame = useCallback((frame: number) => {
     if (!currentAnimation || currentAnimation.keyframes.size === 0) return
