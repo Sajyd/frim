@@ -152,6 +152,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const [draggingKeyframe, setDraggingKeyframe] = useState<{boneName: string, fromFrame: number} | null>(null)
   const [exportIncludeModel, setExportIncludeModel] = useState(true)
   const [exportingGLB, setExportingGLB] = useState(false)
+  
+  // Keyframe selection state
+  const [selectedKeyframes, setSelectedKeyframes] = useState<Set<string>>(new Set()) // Set of "frame:boneName" strings
+  const [boxSelection, setBoxSelection] = useState<{active: boolean, startX: number, startY: number, currentX: number, currentY: number} | null>(null)
+  const timelineTracksRef = useRef<HTMLDivElement>(null)
 
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
@@ -1017,6 +1022,246 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
     showToast(`Keyframe moved from frame ${fromFrame} to ${toFrame}`, 'info')
   }, [currentAnimationId, showToast])
+
+  // Select/toggle keyframe selection
+  const selectKeyframe = useCallback((frame: number, boneName: string, addToSelection = false) => {
+    const key = `${frame}:${boneName}`
+    
+    setSelectedKeyframes(prev => {
+      const newSelection = addToSelection ? new Set(prev) : new Set<string>()
+      
+      if (prev.has(key) && addToSelection) {
+        newSelection.delete(key)
+      } else {
+        newSelection.add(key)
+      }
+      
+      return newSelection
+    })
+  }, [])
+
+  // Clear keyframe selection
+  const clearKeyframeSelection = useCallback(() => {
+    setSelectedKeyframes(new Set())
+  }, [])
+
+  // Duplicate selected keyframes (or current bone's keyframe)
+  const duplicateKeyframes = useCallback(() => {
+    if (!currentAnimationId) {
+      showToast('No animation selected', 'error')
+      return
+    }
+
+    setAnimations(prev => {
+      const newAnimations = new Map(prev)
+      const anim = newAnimations.get(currentAnimationId)
+      if (!anim) return prev
+
+      const newKeyframes = new Map(anim.keyframes)
+      let duplicatedCount = 0
+      const newSelection = new Set<string>()
+
+      // If we have selected keyframes, duplicate those
+      if (selectedKeyframes.size > 0) {
+        const keyframesToDuplicate: {frame: number, boneName: string, data: BoneKeyframe}[] = []
+        
+        selectedKeyframes.forEach(key => {
+          const [frameStr, boneName] = key.split(':')
+          const frame = parseInt(frameStr, 10)
+          const frameData = newKeyframes.get(frame)
+          if (frameData?.has(boneName)) {
+            keyframesToDuplicate.push({
+              frame,
+              boneName,
+              data: frameData.get(boneName)!
+            })
+          }
+        })
+
+        if (keyframesToDuplicate.length === 0) {
+          showToast('No valid keyframes selected', 'warning')
+          return prev
+        }
+
+        // Duplicate each keyframe to next frame
+        const offset = 1
+        keyframesToDuplicate.forEach(({ frame, boneName, data }) => {
+          const newFrame = frame + offset
+          if (newFrame <= anim.totalFrames) {
+            if (!newKeyframes.has(newFrame)) {
+              newKeyframes.set(newFrame, new Map())
+            }
+            
+            newKeyframes.get(newFrame)!.set(boneName, {
+              position: data.position.clone(),
+              rotation: data.rotation.clone(),
+              scale: data.scale.clone()
+            })
+            
+            newSelection.add(`${newFrame}:${boneName}`)
+            duplicatedCount++
+          }
+        })
+      } else if (selectedBone) {
+        // No selection, duplicate current bone's keyframe at current frame
+        const frameData = newKeyframes.get(currentFrame)
+        if (frameData?.has(selectedBone.name)) {
+          const data = frameData.get(selectedBone.name)!
+          const newFrame = currentFrame + 1
+          
+          if (newFrame <= anim.totalFrames) {
+            if (!newKeyframes.has(newFrame)) {
+              newKeyframes.set(newFrame, new Map())
+            }
+            
+            newKeyframes.get(newFrame)!.set(selectedBone.name, {
+              position: data.position.clone(),
+              rotation: data.rotation.clone(),
+              scale: data.scale.clone()
+            })
+            
+            newSelection.add(`${newFrame}:${selectedBone.name}`)
+            duplicatedCount++
+          }
+        } else {
+          showToast('No keyframe at current frame for selected bone', 'warning')
+          return prev
+        }
+      } else {
+        showToast('Select keyframes or a bone first', 'warning')
+        return prev
+      }
+
+      // Update selection to new keyframes
+      setSelectedKeyframes(newSelection)
+
+      if (duplicatedCount > 0) {
+        showToast(`Duplicated ${duplicatedCount} keyframe(s)`, 'success')
+      }
+
+      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
+      return newAnimations
+    })
+  }, [currentAnimationId, selectedKeyframes, selectedBone, currentFrame, showToast])
+
+  // Delete all selected keyframes
+  const deleteSelectedKeyframes = useCallback(() => {
+    if (!currentAnimationId) return
+
+    if (selectedKeyframes.size === 0) {
+      // Fall back to deleting current bone's keyframe
+      if (selectedBone) {
+        setAnimations(prev => {
+          const newAnimations = new Map(prev)
+          const anim = newAnimations.get(currentAnimationId)
+          if (!anim) return prev
+
+          const newKeyframes = new Map(anim.keyframes)
+          const frameData = newKeyframes.get(currentFrame)
+          if (frameData?.has(selectedBone.name)) {
+            frameData.delete(selectedBone.name)
+            if (frameData.size === 0) {
+              newKeyframes.delete(currentFrame)
+            }
+            showToast('Keyframe deleted', 'info')
+          }
+
+          newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
+          return newAnimations
+        })
+      }
+      return
+    }
+
+    setAnimations(prev => {
+      const newAnimations = new Map(prev)
+      const anim = newAnimations.get(currentAnimationId)
+      if (!anim) return prev
+
+      const newKeyframes = new Map(anim.keyframes)
+      let deletedCount = 0
+
+      selectedKeyframes.forEach(key => {
+        const [frameStr, boneName] = key.split(':')
+        const frame = parseInt(frameStr, 10)
+        const frameData = newKeyframes.get(frame)
+        
+        if (frameData?.has(boneName)) {
+          frameData.delete(boneName)
+          if (frameData.size === 0) {
+            newKeyframes.delete(frame)
+          }
+          deletedCount++
+        }
+      })
+
+      if (deletedCount > 0) {
+        showToast(`Deleted ${deletedCount} keyframe(s)`, 'info')
+      }
+
+      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
+      return newAnimations
+    })
+
+    setSelectedKeyframes(new Set())
+  }, [currentAnimationId, selectedKeyframes, selectedBone, currentFrame, showToast])
+
+  // Move all selected keyframes by a frame offset
+  const moveSelectedKeyframes = useCallback((deltaFrames: number) => {
+    if (!currentAnimationId || selectedKeyframes.size === 0) return
+
+    setAnimations(prev => {
+      const newAnimations = new Map(prev)
+      const anim = newAnimations.get(currentAnimationId)
+      if (!anim) return prev
+
+      const newKeyframes = new Map(anim.keyframes)
+      const keyframesToMove: {oldFrame: number, newFrame: number, boneName: string, data: BoneKeyframe}[] = []
+
+      // Collect keyframes to move
+      selectedKeyframes.forEach(key => {
+        const [frameStr, boneName] = key.split(':')
+        const frame = parseInt(frameStr, 10)
+        const frameData = newKeyframes.get(frame)
+        
+        if (frameData?.has(boneName)) {
+          keyframesToMove.push({
+            oldFrame: frame,
+            newFrame: Math.max(0, Math.min(anim.totalFrames, frame + deltaFrames)),
+            boneName,
+            data: frameData.get(boneName)!
+          })
+        }
+      })
+
+      // Remove old keyframes
+      keyframesToMove.forEach(({ oldFrame, boneName }) => {
+        const frameData = newKeyframes.get(oldFrame)
+        if (frameData) {
+          frameData.delete(boneName)
+          if (frameData.size === 0) {
+            newKeyframes.delete(oldFrame)
+          }
+        }
+      })
+
+      // Update selection and add new keyframes
+      const newSelection = new Set<string>()
+      keyframesToMove.forEach(({ newFrame, boneName, data }) => {
+        if (!newKeyframes.has(newFrame)) {
+          newKeyframes.set(newFrame, new Map())
+        }
+        newKeyframes.get(newFrame)!.set(boneName, data)
+        newSelection.add(`${newFrame}:${boneName}`)
+      })
+
+      setSelectedKeyframes(newSelection)
+      showToast(`Moved ${keyframesToMove.length} keyframe(s)`, 'info')
+
+      newAnimations.set(currentAnimationId, { ...anim, keyframes: newKeyframes })
+      return newAnimations
+    })
+  }, [currentAnimationId, selectedKeyframes, showToast])
 
   const resetBone = useCallback(() => {
     if (!selectedBone) return
@@ -2042,18 +2287,43 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           break
         case 'Delete':
         case 'Backspace':
-          deleteKeyframe()
+          deleteSelectedKeyframes()
           break
         case 'ArrowLeft': goToFrame(currentFrame - 1); break
         case 'ArrowRight': goToFrame(currentFrame + 1); break
         case 'Home': goToFrame(0); break
         case 'End': goToFrame(totalFrames); break
+        case 'KeyD':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            duplicateKeyframes()
+          }
+          break
+        case 'Escape':
+          clearKeyframeSelection()
+          break
+        case 'KeyA':
+          if (e.ctrlKey || e.metaKey) {
+            e.preventDefault()
+            // Select all keyframes
+            if (currentAnimation) {
+              const allKeys = new Set<string>()
+              currentAnimation.keyframes.forEach((frameData, frame) => {
+                frameData.forEach((_, boneName) => {
+                  allKeys.add(`${frame}:${boneName}`)
+                })
+              })
+              setSelectedKeyframes(allKeys)
+              showToast(`Selected ${allKeys.size} keyframe(s)`, 'info')
+            }
+          }
+          break
       }
     }
 
     window.addEventListener('keydown', handleKeyDown)
     return () => window.removeEventListener('keydown', handleKeyDown)
-  }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, undo, redo, copyPose, resetBone, totalFrames])
+  }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, deleteSelectedKeyframes, duplicateKeyframes, clearKeyframeSelection, undo, redo, copyPose, resetBone, totalFrames, currentAnimation, showToast])
 
   // Canvas click for bone selection
   useEffect(() => {
@@ -2485,11 +2755,29 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 Keyframe
               </button>
               <button
+                onClick={duplicateKeyframes}
+                className="py-2 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
+                title="Duplicate selected keyframes (Ctrl+D)"
+              >
+                <Copy className="w-3.5 h-3.5" />
+                Duplicate
+              </button>
+            </div>
+            <div className="grid grid-cols-2 gap-2">
+              <button
                 onClick={resetBone}
                 className="py-2 bg-[#27272a] text-[#a1a1aa] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Reset
+              </button>
+              <button
+                onClick={deleteSelectedKeyframes}
+                className="py-2 bg-[#27272a] text-[#dc2626] border border-[#3f3f46] rounded-lg text-xs hover:bg-[#3f3f46] transition-colors flex items-center justify-center gap-1"
+                title="Delete selected keyframes"
+              >
+                <Trash2 className="w-3.5 h-3.5" />
+                Delete Key
               </button>
             </div>
             <button
@@ -2770,55 +3058,130 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
           {/* Track */}
           <div
+            ref={timelineTracksRef}
             className="h-[calc(100%-24px)] relative cursor-pointer select-none"
             style={{ 
               width: `${totalFrames * 20}px`,
               background: 'repeating-linear-gradient(90deg, #252b3d 0px, #252b3d 1px, transparent 1px, transparent 20px)'
             }}
             onMouseDown={(e) => {
-              // Start scrubbing
-              e.preventDefault()
-              const track = e.currentTarget
-              const updateFrame = (clientX: number) => {
-                const rect = track.getBoundingClientRect()
-                const x = clientX - rect.left + track.parentElement!.scrollLeft
-                const frame = Math.max(0, Math.min(totalFrames, Math.round(x / 20)))
-                goToFrame(frame)
-              }
+              // Only start box selection if clicking on empty area (not on a keyframe marker)
+              if ((e.target as HTMLElement).classList.contains('keyframe-marker')) return
               
-              updateFrame(e.clientX)
+              const track = e.currentTarget
+              const rect = track.getBoundingClientRect()
+              const startX = e.clientX - rect.left + track.parentElement!.scrollLeft
+              const startY = e.clientY - rect.top
+              
+              // Start box selection
+              setBoxSelection({
+                active: true,
+                startX,
+                startY,
+                currentX: startX,
+                currentY: startY
+              })
               
               const handleMouseMove = (moveEvent: MouseEvent) => {
-                updateFrame(moveEvent.clientX)
+                const currentX = moveEvent.clientX - rect.left + track.parentElement!.scrollLeft
+                const currentY = moveEvent.clientY - rect.top
+                setBoxSelection(prev => prev ? { ...prev, currentX, currentY } : null)
               }
               
-              const handleMouseUp = () => {
+              const handleMouseUp = (upEvent: MouseEvent) => {
                 document.removeEventListener('mousemove', handleMouseMove)
                 document.removeEventListener('mouseup', handleMouseUp)
+                
+                const endX = upEvent.clientX - rect.left + track.parentElement!.scrollLeft
+                const endY = upEvent.clientY - rect.top
+                
+                const left = Math.min(startX, endX)
+                const right = Math.max(startX, endX)
+                const top = Math.min(startY, endY)
+                const bottom = Math.max(startY, endY)
+                
+                // Only select if box has meaningful size
+                if (right - left > 5 || bottom - top > 5) {
+                  // Select keyframes within box
+                  if (!upEvent.shiftKey) {
+                    setSelectedKeyframes(new Set())
+                  }
+                  
+                  const newSelection = upEvent.shiftKey ? new Set(selectedKeyframes) : new Set<string>()
+                  
+                  if (currentAnimation) {
+                    currentAnimation.keyframes.forEach((frameData, frame) => {
+                      const markerX = frame * 20
+                      let idx = 0
+                      frameData.forEach((_, boneName) => {
+                        const markerY = 20 + idx * 16
+                        if (markerX >= left && markerX <= right && markerY >= top && markerY <= bottom) {
+                          newSelection.add(`${frame}:${boneName}`)
+                        }
+                        idx++
+                      })
+                    })
+                  }
+                  
+                  setSelectedKeyframes(newSelection)
+                } else {
+                  // Small movement = click to go to frame
+                  const frame = Math.max(0, Math.min(totalFrames, Math.round(startX / 20)))
+                  if (!upEvent.shiftKey) {
+                    clearKeyframeSelection()
+                  }
+                  goToFrame(frame)
+                }
+                
+                setBoxSelection(null)
               }
               
+              e.preventDefault()
               document.addEventListener('mousemove', handleMouseMove)
               document.addEventListener('mouseup', handleMouseUp)
             }}
           >
+            {/* Box selection overlay */}
+            {boxSelection && (
+              <div
+                className="absolute bg-[#22c55e]/20 border border-[#22c55e] pointer-events-none z-20"
+                style={{
+                  left: `${Math.min(boxSelection.startX, boxSelection.currentX)}px`,
+                  top: `${Math.min(boxSelection.startY, boxSelection.currentY)}px`,
+                  width: `${Math.abs(boxSelection.currentX - boxSelection.startX)}px`,
+                  height: `${Math.abs(boxSelection.currentY - boxSelection.startY)}px`
+                }}
+              />
+            )}
+            
             {/* Keyframe markers */}
             {currentAnimation?.keyframes && Array.from(currentAnimation.keyframes.entries()).map(([frame, frameData]) => (
-              Array.from(frameData.keys()).map((boneName, idx) => (
+              Array.from(frameData.keys()).map((boneName, idx) => {
+                const keyId = `${frame}:${boneName}`
+                const isSelected = selectedKeyframes.has(keyId)
+                
+                return (
                 <div
-                  key={`${frame}-${boneName}`}
-                  className={`absolute w-3 h-3 rounded-sm rotate-45 -translate-x-1/2 cursor-grab hover:scale-125 transition-transform ${
-                    selectedBone?.name === boneName ? 'bg-[#fbbf24] border-2 border-[#151821]' : 'bg-[#22c55e] border-2 border-[#151821]'
+                  key={keyId}
+                  className={`keyframe-marker absolute w-3 h-3 rounded-sm rotate-45 -translate-x-1/2 cursor-grab hover:scale-125 transition-all ${
+                    isSelected 
+                      ? 'bg-[#06b6d4] border-2 border-[#151821] scale-110 shadow-[0_0_10px_#06b6d4]' 
+                      : selectedBone?.name === boneName 
+                        ? 'bg-[#fbbf24] border-2 border-[#151821]' 
+                        : 'bg-[#22c55e] border-2 border-[#151821]'
                   } ${draggingKeyframe?.boneName === boneName && draggingKeyframe?.fromFrame === frame ? 'scale-150 opacity-80 cursor-grabbing' : ''}`}
                   style={{ 
                     left: `${frame * 20}px`, 
                     top: `${20 + idx * 16}px`
                   }}
-                  title={`${boneName} @ frame ${frame} (drag to move)`}
+                  title={`${boneName} @ frame ${frame}${isSelected ? ' (selected)' : ''}`}
                   onClick={(e) => {
                     e.stopPropagation()
                     if (!draggingKeyframe) {
-                    goToFrame(frame)
-                    handleBoneSelect(boneName)
+                      // Shift+click to add/toggle selection
+                      selectKeyframe(frame, boneName, e.shiftKey)
+                      goToFrame(frame)
+                      handleBoneSelect(boneName)
                     }
                   }}
                   onMouseDown={(e) => {
@@ -2830,6 +3193,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     const startFrame = frame
                     let currentNewFrame = startFrame
                     let hasMoved = false
+                    
+                    // If this keyframe is selected and there are multiple selections, move all
+                    const movingMultiple = isSelected && selectedKeyframes.size > 1
                     
                     setDraggingKeyframe({ boneName, fromFrame: frame })
                     
@@ -2850,7 +3216,12 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                       setDraggingKeyframe(null)
                       
                       if (hasMoved && currentNewFrame !== startFrame) {
-                        moveKeyframe(boneName, startFrame, currentNewFrame)
+                        const deltaFrames = currentNewFrame - startFrame
+                        if (movingMultiple) {
+                          moveSelectedKeyframes(deltaFrames)
+                        } else {
+                          moveKeyframe(boneName, startFrame, currentNewFrame)
+                        }
                       }
                     }
                     
@@ -2858,7 +3229,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     document.addEventListener('mouseup', handleMouseUp)
                   }}
                 />
-              ))
+              )})
             ))}
 
             {/* Playhead */}
