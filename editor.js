@@ -1812,13 +1812,17 @@ class GLBAnimationEditor {
                 
                 // Drag to move keyframe
                 marker.addEventListener('mousedown', (e) => {
+                    // Only handle left mouse button
+                    if (e.button !== 0) return;
+                    
                     e.stopPropagation();
                     e.preventDefault();
                     
                     const startX = e.clientX;
-                    const startFrame = parseInt(marker.dataset.frame);
-                    const boneName = marker.dataset.bone;
+                    const startFrame = parseInt(marker.dataset.frame, 10);
+                    const dragBoneName = marker.dataset.bone;
                     let hasMoved = false;
+                    let currentNewFrame = startFrame;
                     
                     marker.style.cursor = 'grabbing';
                     marker.classList.add('dragging');
@@ -1826,29 +1830,29 @@ class GLBAnimationEditor {
                     const onMouseMove = (moveEvent) => {
                         const deltaX = moveEvent.clientX - startX;
                         const deltaFrames = Math.round(deltaX / 20);
-                        const newFrame = Math.max(0, Math.min(this.totalFrames, startFrame + deltaFrames));
+                        currentNewFrame = Math.max(0, Math.min(this.totalFrames, startFrame + deltaFrames));
                         
-                        if (newFrame !== startFrame) {
+                        if (currentNewFrame !== startFrame) {
                             hasMoved = true;
                         }
                         
-                        marker.style.left = `${newFrame * 20}px`;
-                        marker.dataset.tempFrame = newFrame;
-                        marker.title = `${boneName} @ frame ${newFrame}`;
+                        marker.style.left = `${currentNewFrame * 20}px`;
+                        marker.title = `${dragBoneName} @ frame ${currentNewFrame}`;
                     };
                     
-                    const onMouseUp = (upEvent) => {
+                    const onMouseUp = () => {
                         document.removeEventListener('mousemove', onMouseMove);
                         document.removeEventListener('mouseup', onMouseUp);
                         
                         marker.style.cursor = 'grab';
                         marker.classList.remove('dragging');
                         
-                        const newFrame = parseInt(marker.dataset.tempFrame || startFrame);
-                        
-                        if (hasMoved && newFrame !== startFrame) {
+                        if (hasMoved && currentNewFrame !== startFrame) {
                             marker.dataset.dragged = 'true';
-                            this.moveKeyframe(boneName, startFrame, newFrame);
+                            this.moveKeyframe(dragBoneName, startFrame, currentNewFrame);
+                        } else {
+                            // Reset position if not moved
+                            marker.style.left = `${startFrame * 20}px`;
                         }
                     };
                     
@@ -1862,22 +1866,31 @@ class GLBAnimationEditor {
     }
     
     moveKeyframe(boneName, fromFrame, toFrame) {
-        const frameData = this.keyframes.get(fromFrame);
-        if (!frameData || !frameData.has(boneName)) return;
+        if (!this.currentAnimation || !this.currentAnimation.keyframes) {
+            this.showToast('No animation selected', 'error');
+            return;
+        }
+        
+        const keyframes = this.currentAnimation.keyframes;
+        const frameData = keyframes.get(fromFrame);
+        if (!frameData || !frameData.has(boneName)) {
+            console.log('Keyframe not found:', boneName, 'at frame', fromFrame);
+            return;
+        }
         
         const boneData = frameData.get(boneName);
         
         // Remove from old frame
         frameData.delete(boneName);
         if (frameData.size === 0) {
-            this.keyframes.delete(fromFrame);
+            keyframes.delete(fromFrame);
         }
         
         // Add to new frame
-        if (!this.keyframes.has(toFrame)) {
-            this.keyframes.set(toFrame, new Map());
+        if (!keyframes.has(toFrame)) {
+            keyframes.set(toFrame, new Map());
         }
-        this.keyframes.get(toFrame).set(boneName, boneData);
+        keyframes.get(toFrame).set(boneName, boneData);
         
         this.updateKeyframeMarkers();
         this.saveToHistory();
