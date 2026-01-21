@@ -96,12 +96,12 @@ export default function Home() {
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
               </Link>
-              <Link href="/auth/signin" className="btn-secondary flex items-center gap-2">
+              <a href="#everything-you-need" className="btn-secondary flex items-center gap-2">
                 <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                  <polygon points="5,3 19,12 5,21" />
+                  <path d="M8 5v14l11-7z" />
                 </svg>
-                Try Demo
-              </Link>
+                Learn More
+              </a>
             </div>
 
             <div className="flex flex-wrap gap-3">
@@ -251,7 +251,7 @@ export default function Home() {
       </section>
 
       {/* Features Section */}
-      <section className="relative py-24 px-6">
+      <section className="relative py-24 px-6" id="everything-you-need">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="font-display text-4xl font-bold mb-4">Everything you need</h2>
