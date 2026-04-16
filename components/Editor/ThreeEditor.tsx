@@ -2407,9 +2407,35 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   const loadPoseModel = useCallback(async () => {
     if (poseModelRef.current) return poseModelRef.current
-    const { Pose } = await (Function('return import("https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js")')())
-    const pose = new Pose({
-      locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+
+    const CDN_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404'
+    const w = window as any
+
+    if (!w.Pose) {
+      await new Promise<void>((resolve, reject) => {
+        const existing = document.querySelector(`script[data-mediapipe-pose="true"]`) as HTMLScriptElement | null
+        if (existing) {
+          existing.addEventListener('load', () => resolve())
+          existing.addEventListener('error', () => reject(new Error('Failed to load MediaPipe Pose')))
+          return
+        }
+        const script = document.createElement('script')
+        script.src = `${CDN_BASE}/pose.js`
+        script.crossOrigin = 'anonymous'
+        script.dataset.mediapipePose = 'true'
+        script.onload = () => resolve()
+        script.onerror = () => reject(new Error('Failed to load MediaPipe Pose'))
+        document.head.appendChild(script)
+      })
+    }
+
+    const PoseCtor = w.Pose
+    if (typeof PoseCtor !== 'function') {
+      throw new Error('MediaPipe Pose did not load correctly')
+    }
+
+    const pose = new PoseCtor({
+      locateFile: (file: string) => `${CDN_BASE}/${file}`
     })
     pose.setOptions({
       modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false,
