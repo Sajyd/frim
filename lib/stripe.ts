@@ -16,13 +16,14 @@ export const PLANS = {
       'Up to 2 animations per project',
       'GLB/GLTF import & export',
       'Basic animation tools',
+      'AI Video Motion Capture',
       'JSON & GLB export',
       'Community support',
     ],
     limits: {
       projects: 3,
       animationsPerProject: 2,
-      videoAnalysis: false,
+      videoAnalysis: true,
     },
   },
   pro: {

@@ -6,8 +6,7 @@ import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
 import { GLTFLoader } from 'three/examples/jsm/loaders/GLTFLoader.js'
 import { GLTFExporter } from 'three/examples/jsm/exporters/GLTFExporter.js'
-// MediaPipe import disabled - Video Motion Capture coming soon
-// import { PoseLandmarker, FilesetResolver } from '@mediapipe/tasks-vision'
+// MediaPipe Pose is loaded dynamically from CDN when video capture is used
 import {
   FolderOpen,
   Download,
@@ -2402,9 +2401,242 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Video Motion Capture - Coming Soon
-  // This feature will be implemented with a cloud-based AI solution (e.g., DeepMotion API)
-  // For now, the button shows "Coming Soon" and is disabled
+  // Video Motion Capture - MediaPipe pose detection
+  const poseModelRef = useRef<any>(null)
+  const capturedFramesRef = useRef<{landmarks: any[]}[]>([])
+
+  const loadPoseModel = useCallback(async () => {
+    if (poseModelRef.current) return poseModelRef.current
+    const { Pose } = await (Function('return import("https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/pose.js")')())
+    const pose = new Pose({
+      locateFile: (file: string) => `https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404/${file}`
+    })
+    pose.setOptions({
+      modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false,
+      smoothSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5
+    })
+    await pose.initialize()
+    poseModelRef.current = pose
+    return pose
+  }, [])
+
+  const analyzeSkeletonHierarchy = useCallback(() => {
+    if (bones.size === 0) return null
+    const info: { bones: Map<string, any>; order: string[]; spineLength: number } = { bones: new Map(), order: [], spineLength: 0 }
+
+    let rootBone: THREE.Bone | null = null
+    bones.forEach((bone) => {
+      if (!rootBone && (!bone.parent || !bones.has(bone.parent.name))) rootBone = bone
+    })
+    if (!rootBone) return null
+
+    let chainBone: THREE.Object3D | null = rootBone
+    while (chainBone) {
+      let next: THREE.Object3D | null = null
+      for (const child of chainBone.children) { if (bones.has(child.name)) { next = child; break } }
+      if (!next) break
+      const cp = next.position
+      info.spineLength += Math.sqrt(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z)
+      chainBone = next
+    }
+    if (info.spineLength === 0) info.spineLength = 0.77
+
+    const queue: THREE.Bone[] = [rootBone]
+    while (queue.length > 0) {
+      const bone = queue.shift()!
+      let firstBoneChild: THREE.Object3D | null = null
+      for (const child of bone.children) {
+        if (bones.has(child.name)) { if (!firstBoneChild) firstBoneChild = child; queue.push(child as THREE.Bone) }
+      }
+      const orig = originalTransformsRef.current.get(bone.name)
+      const restRotZ = orig ? orig.rotation.z : bone.rotation.z
+      let childPosAngle = Math.PI / 2
+      let restAngle = restRotZ + childPosAngle
+      if (firstBoneChild) {
+        const cx = firstBoneChild.position.x, cy = firstBoneChild.position.y
+        childPosAngle = Math.atan2(cy, cx)
+        const cosR = Math.cos(restRotZ), sinR = Math.sin(restRotZ)
+        restAngle = Math.atan2(cx * sinR + cy * cosR, cx * cosR - cy * sinR)
+      }
+      let parentName: string | null = null
+      if (bone.parent && bones.has(bone.parent.name)) parentName = bone.parent.name
+      info.bones.set(bone.name, { parentName, restAngle, childPosAngle, restRotZ })
+      info.order.push(bone.name)
+    }
+    return info
+  }, [bones])
+
+  const processVideoCapture = useCallback(async () => {
+    if (!videoFile || bones.size === 0) return
+
+    const skeletonInfo = analyzeSkeletonHierarchy()
+    if (!skeletonInfo) { showToast('No skeleton found to map to', 'error'); return }
+
+    setVideoAnalyzing(true)
+    setVideoProgress(0)
+
+    try {
+      const pose = await loadPoseModel()
+
+      const video = document.createElement('video')
+      video.muted = true
+      video.playsInline = true
+      video.src = URL.createObjectURL(videoFile)
+      await new Promise<void>(r => { video.onloadedmetadata = () => r() })
+
+      const canvas = document.createElement('canvas')
+      canvas.width = video.videoWidth
+      canvas.height = video.videoHeight
+      const ctx = canvas.getContext('2d')!
+
+      const fps = 30
+      const totalFrames = Math.floor(video.duration * fps)
+      const sampleRate = 2
+      const frames: { landmarks: any[] }[] = []
+
+      for (let i = 0; i < totalFrames; i += sampleRate) {
+        video.currentTime = i / fps
+        await new Promise<void>(r => { video.onseeked = () => r() })
+        ctx.drawImage(video, 0, 0)
+
+        const results: any = await new Promise(resolve => {
+          pose.onResults((res: any) => resolve(res))
+          pose.send({ image: canvas })
+        })
+
+        if (results?.poseLandmarks) {
+          const avgVis = results.poseLandmarks.reduce((s: number, l: any) => s + (l.visibility || 0), 0) / results.poseLandmarks.length
+          if (avgVis >= 0.5) frames.push({ landmarks: results.poseLandmarks })
+        }
+
+        setVideoProgress(Math.round((i / totalFrames) * 100))
+        await new Promise(r => setTimeout(r, 5))
+      }
+
+      URL.revokeObjectURL(video.src)
+      if (frames.length === 0) { showToast('No poses detected in video', 'warning'); return }
+
+      // Create animation and apply keyframes
+      const normalize = (a: number) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a }
+      const id = `anim_${animationCounterRef.current++}`
+      const newAnim: Animation = {
+        name: `Video Capture`,
+        fps: 24, totalFrames: frames.length, speed: 1, loop: true,
+        keyframes: new Map()
+      }
+
+      let refBodyScale: number | null = null
+      let refHipCenter: { x: number; y: number } | null = null
+      let scaleFactor = 1
+      let prevZ = 0
+
+      const getBoneMapping = (lm: any[]) => {
+        const midHip = { x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 }
+        const midShoulder = { x: (lm[11].x + lm[12].x) / 2, y: (lm[11].y + lm[12].y) / 2 }
+        const midNeck = { x: (midShoulder.x + lm[0].x) / 2, y: (midShoulder.y + lm[0].y) / 2 }
+        return {
+          'Hips': { start: midHip, end: midShoulder }, 'Spine': { start: midHip, end: midShoulder },
+          'Spine1': { start: midHip, end: midShoulder }, 'Spine2': { start: midHip, end: midShoulder },
+          'Neck': { start: midShoulder, end: midNeck }, 'Head': { start: midNeck, end: lm[0] },
+          'LeftShoulder': { start: midShoulder, end: lm[11] }, 'LeftArm': { start: lm[11], end: lm[13] },
+          'LeftForeArm': { start: lm[13], end: lm[15] }, 'RightShoulder': { start: midShoulder, end: lm[12] },
+          'RightArm': { start: lm[12], end: lm[14] }, 'RightForeArm': { start: lm[14], end: lm[16] },
+          'LeftUpLeg': { start: lm[23], end: lm[25] }, 'LeftLeg': { start: lm[25], end: lm[27] },
+          'RightUpLeg': { start: lm[24], end: lm[26] }, 'RightLeg': { start: lm[26], end: lm[28] },
+        } as Record<string, { start: { x: number; y: number }; end: { x: number; y: number } }>
+      }
+
+      frames.forEach((frame, fi) => {
+        const lm = frame.landmarks
+        const midHip = { x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 }
+        const midShoulder = { x: (lm[11].x + lm[12].x) / 2, y: (lm[11].y + lm[12].y) / 2 }
+        const bodyScale = Math.sqrt((midShoulder.x - midHip.x) ** 2 + (midShoulder.y - midHip.y) ** 2)
+
+        if (fi === 0 || !refBodyScale) {
+          refHipCenter = { x: midHip.x, y: midHip.y }
+          refBodyScale = bodyScale || 0.25
+          const spine2D = Math.sqrt((lm[0].x - midHip.x) ** 2 + (lm[0].y - midHip.y) ** 2)
+          scaleFactor = skeletonInfo.spineLength / (spine2D || 0.5)
+          prevZ = 0
+        }
+
+        let rawZ = 0
+        if (refBodyScale > 0.01 && bodyScale > 0.01) rawZ = (refBodyScale / bodyScale - 1) * 2.0
+        const z = 0.3 * rawZ + 0.7 * prevZ
+        prevZ = z
+
+        const deltaX = -(midHip.x - refHipCenter!.x) * scaleFactor
+        const deltaY = -(midHip.y - refHipCenter!.y) * scaleFactor
+
+        const rootBoneName = skeletonInfo.order[0]
+        const rootOrig = originalTransformsRef.current.get(rootBoneName)
+        const rootBone = bones.get(rootBoneName)
+        const rootRest = rootOrig ? rootOrig.position : rootBone?.position
+        const rootPos = rootRest
+          ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, (rootRest.z || 0) + z)
+          : new THREE.Vector3(deltaX, 1 + deltaY, z)
+
+        const mapping = getBoneMapping(lm)
+        const accAngles: Record<string, number> = {}
+        const frameKeyframes = new Map<string, BoneKeyframe>()
+
+        for (const boneName of skeletonInfo.order) {
+          const bi = skeletonInfo.bones.get(boneName)
+          if (!bi) continue
+          const bone = bones.get(boneName)
+          if (!bone) continue
+
+          const parentAcc = bi.parentName ? (accAngles[bi.parentName] ?? 0) : 0
+
+          let seg = mapping[boneName] || null
+          if (!seg) {
+            const lower = boneName.toLowerCase()
+            for (const [mn, s] of Object.entries(mapping)) {
+              if (lower.includes(mn.toLowerCase()) || mn.toLowerCase().includes(lower)) { seg = s; break }
+            }
+          }
+
+          if (!seg) { accAngles[boneName] = parentAcc + bi.restRotZ; continue }
+
+          const dx = -(seg.end.x - seg.start.x)
+          const dy = -(seg.end.y - seg.start.y)
+          const segLen = Math.sqrt(dx * dx + dy * dy)
+          if (segLen < 0.001) { accAngles[boneName] = parentAcc + bi.restRotZ; continue }
+
+          const targetAngle = Math.atan2(dy, dx)
+          const localRotZ = normalize(targetAngle - parentAcc - bi.restAngle)
+          accAngles[boneName] = parentAcc + bi.restRotZ + localRotZ
+
+          const half = localRotZ / 2
+          const quat = new THREE.Quaternion(0, 0, Math.sin(half), Math.cos(half))
+          const isRoot = !bi.parentName
+          const boneOrig = originalTransformsRef.current.get(boneName)
+          const boneRest = boneOrig ? boneOrig.position : bone.position
+
+          frameKeyframes.set(boneName, {
+            position: isRoot ? rootPos.clone() : new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
+            rotation: quat,
+            scale: new THREE.Vector3(1, 1, 1),
+          })
+        }
+
+        newAnim.keyframes.set(fi, frameKeyframes)
+      })
+
+      setAnimations(prev => new Map(prev).set(id, newAnim))
+      setCurrentAnimationId(id)
+      setCurrentFrame(0)
+      setShowVideoModal(false)
+      setVideoFile(null)
+      showToast(`Imported ${frames.length} frames from video!`, 'success')
+    } catch (err: any) {
+      console.error('Video capture error:', err)
+      showToast('Error: ' + (err.message || 'Video processing failed'), 'error')
+    } finally {
+      setVideoAnalyzing(false)
+      setVideoProgress(0)
+    }
+  }, [videoFile, bones, analyzeSkeletonHierarchy, loadPoseModel, showToast, setAnimations, setCurrentAnimationId, setCurrentFrame])
 
   return (
     <div 
@@ -2475,7 +2707,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         onChange={(e) => {
           if (e.target.files?.[0]) {
             setVideoFile(e.target.files[0])
+            setShowVideoModal(true)
           }
+          e.target.value = ''
         }}
       />
 
@@ -2591,16 +2825,19 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
-        {/* Video Analysis (Coming Soon) */}
+        {/* AI Video Motion Capture */}
         <button
           onClick={() => {
-            showToast('AI Video Motion Capture is coming soon!', 'info')
+            if (bones.size === 0) {
+              showToast('Load a model with a skeleton first', 'warning')
+              return
+            }
+            videoInputRef.current?.click()
           }}
-          className="w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative text-[#71717a] hover:bg-[#1c2130] cursor-not-allowed opacity-60"
-          title="AI Video Motion Capture - Coming Soon"
+          className="w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative text-[#a1a1aa] hover:bg-[#1c2130]"
+          title="AI Video Motion Capture"
         >
           <Video className="w-5 h-5" />
-          <span className="absolute -top-1 -right-1 text-[8px] bg-amber-500/20 text-amber-400 px-1 rounded font-bold">SOON</span>
         </button>
       </div>
 
@@ -3329,7 +3566,76 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         </div>
       )}
 
-      {/* Video Analysis Modal - Coming Soon (disabled) */}
+      {/* Video Motion Capture Modal */}
+      {showVideoModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-6">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
+                  <Video className="w-5 h-5 text-[#22c55e]" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold">AI Motion Capture</h2>
+                  <p className="text-xs text-[#71717a]">{videoFile?.name || 'No file selected'}</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { setShowVideoModal(false); setVideoFile(null); setVideoAnalyzing(false) }}
+                className="text-[#71717a] hover:text-[#a1a1aa] p-2"
+                disabled={videoAnalyzing}
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            {!videoAnalyzing ? (
+              <>
+                <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-3">
+                  <p className="text-xs text-[#71717a]">MediaPipe AI will detect body poses frame-by-frame and map them to your skeleton.</p>
+                  <div className="flex items-center gap-2 text-xs text-[#a1a1aa]">
+                    <span className="w-2 h-2 bg-[#22c55e] rounded-full" />
+                    Processes entirely in your browser
+                  </div>
+                </div>
+                <div className="flex gap-3">
+                  <button
+                    onClick={() => { setShowVideoModal(false); setVideoFile(null) }}
+                    className="flex-1 py-2.5 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={processVideoCapture}
+                    className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
+                  >
+                    <Video className="w-4 h-4" />
+                    Process Video
+                  </button>
+                </div>
+              </>
+            ) : (
+              <div className="space-y-4">
+                <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-[#a1a1aa]">Analyzing video...</span>
+                    <span className="text-sm font-mono text-[#22c55e]">{videoProgress}%</span>
+                  </div>
+                  <div className="h-2 bg-[#252b3d] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#22c55e] to-[#4ade80] rounded-full transition-all duration-300"
+                      style={{ width: `${videoProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-[#71717a] mt-2">
+                    {videoProgress < 5 ? 'Loading AI model...' : 'Detecting poses frame by frame...'}
+                  </p>
+                </div>
+              </div>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* GLB Export Modal */}
       {showExportModal && (

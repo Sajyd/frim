@@ -152,26 +152,24 @@ export default function Home() {
         <div className="max-w-6xl mx-auto">
           <div className="relative bg-gradient-to-br from-dark-900 via-dark-900 to-dark-800/50 border border-dark-700/50 rounded-3xl p-8 md:p-12 overflow-hidden">
             {/* Background decoration */}
-            <div className="absolute top-0 right-0 w-96 h-96 bg-amber-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
-            <div className="absolute bottom-0 left-0 w-64 h-64 bg-purple-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
+            <div className="absolute top-0 right-0 w-96 h-96 bg-frim-500/5 rounded-full blur-3xl -translate-y-1/2 translate-x-1/2" />
+            <div className="absolute bottom-0 left-0 w-64 h-64 bg-emerald-500/5 rounded-full blur-3xl translate-y-1/2 -translate-x-1/2" />
             
             <div className="relative grid lg:grid-cols-2 gap-12 items-center">
               <div>
-                <div className="inline-flex items-center gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-1.5 rounded-full text-xs font-semibold text-amber-400 mb-6">
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
-                  </svg>
-                  COMING SOON
+                <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/30 px-3 py-1.5 rounded-full text-xs font-semibold text-frim-400 mb-6">
+                  <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
+                  NOW AVAILABLE
                 </div>
                 
                 <h2 className="font-display text-3xl md:text-4xl font-bold mb-4">
                   AI Video<br />
-                  <span className="bg-gradient-to-r from-amber-400 to-orange-400 bg-clip-text text-transparent">Motion Capture</span>
+                  <span className="bg-gradient-to-r from-frim-400 to-emerald-400 bg-clip-text text-transparent">Motion Capture</span>
                 </h2>
                 
                 <p className="text-dark-400 mb-6 leading-relaxed">
-                  We&apos;re building something amazing! Soon you&apos;ll be able to upload any video 
-                  and let AI extract human movements automatically — no expensive mocap suits required.
+                  Upload any video and let AI extract human movements automatically — 
+                  no expensive mocap suits required. Runs entirely in your browser.
                 </p>
                 
                 <ul className="space-y-3 mb-8">
@@ -181,9 +179,9 @@ export default function Home() {
                     'Auto-generates keyframes for bones',
                     'Works with any rigged humanoid model'
                   ].map((item, i) => (
-                    <li key={i} className="flex items-center gap-3 text-sm text-dark-500">
-                      <div className="w-5 h-5 rounded-full bg-dark-700 flex items-center justify-center shrink-0">
-                        <svg className="w-3 h-3 text-dark-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <li key={i} className="flex items-center gap-3 text-sm text-dark-300">
+                      <div className="w-5 h-5 rounded-full bg-frim-500/20 flex items-center justify-center shrink-0">
+                        <svg className="w-3 h-3 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
@@ -192,12 +190,13 @@ export default function Home() {
                   ))}
                 </ul>
                 
-                <div className="inline-flex items-center gap-2 bg-dark-800 text-dark-400 px-6 py-3 rounded-xl font-semibold cursor-not-allowed">
+                <Link href="/auth/register" className="inline-flex items-center gap-2 bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-6 py-3 rounded-xl font-semibold hover:shadow-lg hover:shadow-frim-500/25 transition-all">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
                   </svg>
-                  Coming Soon
-                </div>
+                  Try It Now
+                </Link>
               </div>
               
               {/* Visual */}
@@ -519,10 +518,9 @@ const features = [
   },
   {
     title: 'AI Video Motion Capture',
-    description: 'Coming soon! Upload a video and let AI extract body movements automatically.',
-    icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>,
+    description: 'Upload a video and let AI extract body movements automatically. Runs in your browser with MediaPipe.',
+    icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2" strokeWidth={2}/></svg>,
     highlight: false,
-    comingSoon: true,
   },
   {
     title: 'Bone Controls',

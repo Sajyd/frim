@@ -12,7 +12,7 @@ A web-based skeletal animation editor for GLB/GLTF models with cloud saves.
 - ☁️ **Cloud Saves** - Save projects to PostgreSQL database, access anywhere
 - 🔐 **Authentication** - Sign in with GitHub, Google, or email/password
 - 📦 **GLB Export** - Export animations back to GLB format
-- 🎥 **Video to Animation** - AI-powered pose detection from video (experimental)
+- 🎥 **AI Video Motion Capture** - Upload a video and extract skeletal animations with AI pose detection
 - 🎨 **Modern UI** - Dark theme with green accents, responsive design
 
 ## Tech Stack
