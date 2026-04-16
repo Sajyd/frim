@@ -2477,16 +2477,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const orig = originalTransformsRef.current.get(bone.name)
       const restRotZ = orig ? orig.rotation.z : bone.rotation.z
       let childPosAngle = Math.PI / 2
-      let restAngle = restRotZ + childPosAngle
       if (firstBoneChild) {
         const cx = firstBoneChild.position.x, cy = firstBoneChild.position.y
         childPosAngle = Math.atan2(cy, cx)
-        const cosR = Math.cos(restRotZ), sinR = Math.sin(restRotZ)
-        restAngle = Math.atan2(cx * sinR + cy * cosR, cx * cosR - cy * sinR)
       }
       let parentName: string | null = null
       if (bone.parent && bones.has(bone.parent.name)) parentName = bone.parent.name
-      info.bones.set(bone.name, { parentName, restAngle, childPosAngle, restRotZ })
+      info.bones.set(bone.name, { parentName, childPosAngle, restRotZ })
       info.order.push(bone.name)
     }
     return info
@@ -2518,31 +2515,99 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const fps = 30
       const totalFrames = Math.floor(video.duration * fps)
       const sampleRate = 2
-      const frames: { landmarks: any[] }[] = []
+      const sampleIndices: number[] = []
+      for (let i = 0; i < totalFrames; i += sampleRate) sampleIndices.push(i)
+      const N = sampleIndices.length
 
-      for (let i = 0; i < totalFrames; i += sampleRate) {
-        video.currentTime = i / fps
-        await new Promise<void>(r => { video.onseeked = () => r() })
-        ctx.drawImage(video, 0, 0)
+      // Run MediaPipe with temporal smoothing forward, then reset and run backward.
+      // Forward and backward passes cancel the asymmetric temporal lag from MP's
+      // smoothing filter. Results per frame are averaged with visibility weights.
+      const runPass = async (reversed: boolean, progressOffset: number, progressScale: number) => {
+        const out: (any[] | null)[] = new Array(N).fill(null)
+        if (typeof (pose as any).reset === 'function') (pose as any).reset()
+        for (let idx = 0; idx < N; idx++) {
+          const i = reversed ? N - 1 - idx : idx
+          const frameIdx = sampleIndices[i]
+          video.currentTime = frameIdx / fps
+          await new Promise<void>(r => { video.onseeked = () => r() })
+          ctx.drawImage(video, 0, 0)
 
-        const results: any = await new Promise(resolve => {
-          pose.onResults((res: any) => resolve(res))
-          pose.send({ image: canvas })
-        })
+          const results: any = await new Promise(resolve => {
+            pose.onResults((res: any) => resolve(res))
+            pose.send({ image: canvas })
+          })
 
-        if (results?.poseLandmarks) {
-          const avgVis = results.poseLandmarks.reduce((s: number, l: any) => s + (l.visibility || 0), 0) / results.poseLandmarks.length
-          if (avgVis >= 0.5) frames.push({ landmarks: results.poseLandmarks })
+          if (results?.poseLandmarks) out[i] = results.poseLandmarks
+          setVideoProgress(Math.round(progressOffset + (idx / N) * progressScale))
+          await new Promise(r => setTimeout(r, 2))
         }
-
-        setVideoProgress(Math.round((i / totalFrames) * 100))
-        await new Promise(r => setTimeout(r, 5))
+        return out
       }
 
+      const pass1 = await runPass(false, 0, 45)
+      const pass2 = await runPass(true, 45, 45)
+
       URL.revokeObjectURL(video.src)
+
+      // Combine passes with visibility-weighted average
+      const combined: (any[] | null)[] = new Array(N).fill(null)
+      for (let i = 0; i < N; i++) {
+        const a = pass1[i], b = pass2[i]
+        if (!a && !b) continue
+        if (!a) { combined[i] = b; continue }
+        if (!b) { combined[i] = a; continue }
+        const merged: any[] = []
+        for (let k = 0; k < a.length; k++) {
+          const la = a[k], lb = b[k]
+          const va = Math.max(0.01, la.visibility || 0)
+          const vb = Math.max(0.01, lb.visibility || 0)
+          const wsum = va + vb
+          merged.push({
+            x: (la.x * va + lb.x * vb) / wsum,
+            y: (la.y * va + lb.y * vb) / wsum,
+            z: ((la.z || 0) * va + (lb.z || 0) * vb) / wsum,
+            visibility: (va + vb) / 2,
+          })
+        }
+        combined[i] = merged
+      }
+
+      // Temporal moving-average smoothing (window = 3, visibility-weighted)
+      const smoothed: (any[] | null)[] = new Array(N).fill(null)
+      for (let i = 0; i < N; i++) {
+        const window: any[][] = []
+        for (let d = -1; d <= 1; d++) {
+          const j = i + d
+          if (j >= 0 && j < N && combined[j]) window.push(combined[j] as any[])
+        }
+        if (window.length === 0) continue
+        const L = window[0].length
+        const avg: any[] = []
+        for (let k = 0; k < L; k++) {
+          let sx = 0, sy = 0, sz = 0, sw = 0, sv = 0
+          for (const w of window) {
+            const v = Math.max(0.01, w[k].visibility || 0)
+            sx += w[k].x * v; sy += w[k].y * v; sz += (w[k].z || 0) * v
+            sw += v; sv += v
+          }
+          avg.push({ x: sx / sw, y: sy / sw, z: sz / sw, visibility: sv / window.length })
+        }
+        smoothed[i] = avg
+      }
+
+      const frames: { landmarks: any[] }[] = []
+      for (let i = 0; i < N; i++) {
+        const lm = smoothed[i]
+        if (!lm) continue
+        const avgVis = lm.reduce((s, l) => s + (l.visibility || 0), 0) / lm.length
+        if (avgVis >= 0.4) frames.push({ landmarks: lm })
+      }
+
       if (frames.length === 0) { showToast('No poses detected in video', 'warning'); return }
 
-      // Create animation and apply keyframes
+      setVideoProgress(95)
+
+      // Build animation
       const normalize = (a: number) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a }
       const id = `anim_${animationCounterRef.current++}`
       const newAnim: Animation = {
@@ -2581,8 +2646,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         if (fi === 0 || !refBodyScale) {
           refHipCenter = { x: midHip.x, y: midHip.y }
           refBodyScale = bodyScale || 0.25
-          const spine2D = Math.sqrt((lm[0].x - midHip.x) ** 2 + (lm[0].y - midHip.y) ** 2)
-          scaleFactor = skeletonInfo.spineLength / (spine2D || 0.5)
+          scaleFactor = skeletonInfo.spineLength / (bodyScale || 0.25)
           prevZ = 0
         }
 
@@ -2622,16 +2686,34 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             }
           }
 
-          if (!seg) { accAngles[boneName] = parentAcc + bi.restRotZ; continue }
+          if (!seg) {
+            // Keep rest rotation for unmapped bones
+            accAngles[boneName] = parentAcc + bi.restRotZ
+            const half = bi.restRotZ / 2
+            const quat = new THREE.Quaternion(0, 0, Math.sin(half), Math.cos(half))
+            const boneOrig = originalTransformsRef.current.get(boneName)
+            const boneRest = boneOrig ? boneOrig.position : bone.position
+            frameKeyframes.set(boneName, {
+              position: new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
+              rotation: quat,
+              scale: new THREE.Vector3(1, 1, 1),
+            })
+            continue
+          }
 
           const dx = -(seg.end.x - seg.start.x)
           const dy = -(seg.end.y - seg.start.y)
           const segLen = Math.sqrt(dx * dx + dy * dy)
-          if (segLen < 0.001) { accAngles[boneName] = parentAcc + bi.restRotZ; continue }
+          if (segLen < 0.001) {
+            accAngles[boneName] = parentAcc + bi.restRotZ
+            continue
+          }
 
           const targetAngle = Math.atan2(dy, dx)
-          const localRotZ = normalize(targetAngle - parentAcc - bi.restAngle)
-          accAngles[boneName] = parentAcc + bi.restRotZ + localRotZ
+          // Bone's world direction = parentAcc + rotation.z + childPosAngle
+          // We want world direction = targetAngle
+          const localRotZ = normalize(targetAngle - parentAcc - bi.childPosAngle)
+          accAngles[boneName] = parentAcc + localRotZ
 
           const half = localRotZ / 2
           const quat = new THREE.Quaternion(0, 0, Math.sin(half), Math.cos(half))
@@ -3664,7 +3746,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     />
                   </div>
                   <p className="text-xs text-[#71717a] mt-2">
-                    {videoProgress < 5 ? 'Loading AI model...' : 'Detecting poses frame by frame...'}
+                    {videoProgress < 5 ? 'Loading AI model...' : videoProgress < 45 ? 'Pass 1/2: detecting poses forward...' : videoProgress < 90 ? 'Pass 2/2: detecting poses backward...' : 'Combining passes and building keyframes...'}
                   </p>
                 </div>
               </div>
