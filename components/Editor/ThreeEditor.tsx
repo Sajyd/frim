@@ -2476,14 +2476,20 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       }
       const orig = originalTransformsRef.current.get(bone.name)
       const restRotZ = orig ? orig.rotation.z : bone.rotation.z
-      let childPosAngle = Math.PI / 2
+      const restQuat = orig
+        ? new THREE.Quaternion().setFromEuler(orig.rotation)
+        : new THREE.Quaternion().setFromEuler(bone.rotation)
+      // Child's rest direction in bone's local frame (normalized 3D vector).
+      // Used as the reference axis for setFromUnitVectors.
+      let childPosDir = new THREE.Vector3(0, 1, 0)
       if (firstBoneChild) {
-        const cx = firstBoneChild.position.x, cy = firstBoneChild.position.y
-        childPosAngle = Math.atan2(cy, cx)
+        const cp = firstBoneChild.position
+        const len = Math.sqrt(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z)
+        if (len > 1e-6) childPosDir = new THREE.Vector3(cp.x / len, cp.y / len, cp.z / len)
       }
       let parentName: string | null = null
       if (bone.parent && bones.has(bone.parent.name)) parentName = bone.parent.name
-      info.bones.set(bone.name, { parentName, childPosAngle, restRotZ })
+      info.bones.set(bone.name, { parentName, childPosDir, restRotZ, restQuat })
       info.order.push(bone.name)
     }
     return info
@@ -2608,7 +2614,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       setVideoProgress(95)
 
       // Build animation
-      const normalize = (a: number) => { while (a > Math.PI) a -= 2 * Math.PI; while (a < -Math.PI) a += 2 * Math.PI; return a }
       const id = `anim_${animationCounterRef.current++}`
       const newAnim: Animation = {
         name: `Video Capture`,
@@ -2621,10 +2626,16 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       let scaleFactor = 1
       let prevZ = 0
 
-      const getBoneMapping = (lm: any[]) => {
-        const midHip = { x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 }
-        const midShoulder = { x: (lm[11].x + lm[12].x) / 2, y: (lm[11].y + lm[12].y) / 2 }
-        const midNeck = { x: (midShoulder.x + lm[0].x) / 2, y: (midShoulder.y + lm[0].y) / 2 }
+      // Scale factor for landmark z (it's noisier than x/y, so we attenuate it a bit)
+      const Z_DAMPING = 0.75
+
+      type Pt = { x: number; y: number; z: number }
+      const midpoint = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 })
+
+      const getBoneMapping = (lm: any[]): Record<string, { start: Pt; end: Pt }> => {
+        const midHip = midpoint(lm[23], lm[24])
+        const midShoulder = midpoint(lm[11], lm[12])
+        const midNeck = midpoint(midShoulder, lm[0])
         return {
           'Hips': { start: midHip, end: midShoulder }, 'Spine': { start: midHip, end: midShoulder },
           'Spine1': { start: midHip, end: midShoulder }, 'Spine2': { start: midHip, end: midShoulder },
@@ -2634,13 +2645,24 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           'RightArm': { start: lm[12], end: lm[14] }, 'RightForeArm': { start: lm[14], end: lm[16] },
           'LeftUpLeg': { start: lm[23], end: lm[25] }, 'LeftLeg': { start: lm[25], end: lm[27] },
           'RightUpLeg': { start: lm[24], end: lm[26] }, 'RightLeg': { start: lm[26], end: lm[28] },
-        } as Record<string, { start: { x: number; y: number }; end: { x: number; y: number } }>
+        }
+      }
+
+      // Convert landmark-space direction to character-space (flip x, y, z axes)
+      const toCharDir = (start: Pt, end: Pt) => {
+        const dx = -(end.x - start.x)
+        const dy = -(end.y - start.y)
+        const dz = -(end.z - start.z) * Z_DAMPING
+        const v = new THREE.Vector3(dx, dy, dz)
+        const len = v.length()
+        if (len < 1e-5) return null
+        return v.divideScalar(len)
       }
 
       frames.forEach((frame, fi) => {
         const lm = frame.landmarks
-        const midHip = { x: (lm[23].x + lm[24].x) / 2, y: (lm[23].y + lm[24].y) / 2 }
-        const midShoulder = { x: (lm[11].x + lm[12].x) / 2, y: (lm[11].y + lm[12].y) / 2 }
+        const midHip: Pt = midpoint(lm[23], lm[24])
+        const midShoulder: Pt = midpoint(lm[11], lm[12])
         const bodyScale = Math.sqrt((midShoulder.x - midHip.x) ** 2 + (midShoulder.y - midHip.y) ** 2)
 
         if (fi === 0 || !refBodyScale) {
@@ -2667,8 +2689,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           : new THREE.Vector3(deltaX, 1 + deltaY, z)
 
         const mapping = getBoneMapping(lm)
-        const accAngles: Record<string, number> = {}
+        // Accumulated world-space quaternion per bone (for parent transforms)
+        const worldQuats: Record<string, THREE.Quaternion> = {}
         const frameKeyframes = new Map<string, BoneKeyframe>()
+
+        // Reusable scratch quaternions/vectors
+        const tmpParentInv = new THREE.Quaternion()
+        const tmpLocalDir = new THREE.Vector3()
 
         for (const boneName of skeletonInfo.order) {
           const bi = skeletonInfo.bones.get(boneName)
@@ -2676,7 +2703,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           const bone = bones.get(boneName)
           if (!bone) continue
 
-          const parentAcc = bi.parentName ? (accAngles[bi.parentName] ?? 0) : 0
+          const parentWorldQ = bi.parentName
+            ? (worldQuats[bi.parentName] ?? new THREE.Quaternion())
+            : new THREE.Quaternion()
 
           let seg = mapping[boneName] || null
           if (!seg) {
@@ -2686,44 +2715,29 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             }
           }
 
-          if (!seg) {
-            // Keep rest rotation for unmapped bones
-            accAngles[boneName] = parentAcc + bi.restRotZ
-            const half = bi.restRotZ / 2
-            const quat = new THREE.Quaternion(0, 0, Math.sin(half), Math.cos(half))
-            const boneOrig = originalTransformsRef.current.get(boneName)
-            const boneRest = boneOrig ? boneOrig.position : bone.position
-            frameKeyframes.set(boneName, {
-              position: new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
-              rotation: quat,
-              scale: new THREE.Vector3(1, 1, 1),
-            })
-            continue
+          // Default: keep rest rotation
+          let localQuat: THREE.Quaternion = bi.restQuat.clone()
+
+          if (seg) {
+            const targetWorldDir = toCharDir(seg.start, seg.end)
+            if (targetWorldDir) {
+              // Transform target from world to bone's parent-local frame
+              tmpParentInv.copy(parentWorldQ).invert()
+              tmpLocalDir.copy(targetWorldDir).applyQuaternion(tmpParentInv)
+              // Bone's local rotation aligns childPosDir with the local target
+              localQuat = new THREE.Quaternion().setFromUnitVectors(bi.childPosDir, tmpLocalDir)
+            }
           }
 
-          const dx = -(seg.end.x - seg.start.x)
-          const dy = -(seg.end.y - seg.start.y)
-          const segLen = Math.sqrt(dx * dx + dy * dy)
-          if (segLen < 0.001) {
-            accAngles[boneName] = parentAcc + bi.restRotZ
-            continue
-          }
+          worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
 
-          const targetAngle = Math.atan2(dy, dx)
-          // Bone's world direction = parentAcc + rotation.z + childPosAngle
-          // We want world direction = targetAngle
-          const localRotZ = normalize(targetAngle - parentAcc - bi.childPosAngle)
-          accAngles[boneName] = parentAcc + localRotZ
-
-          const half = localRotZ / 2
-          const quat = new THREE.Quaternion(0, 0, Math.sin(half), Math.cos(half))
           const isRoot = !bi.parentName
           const boneOrig = originalTransformsRef.current.get(boneName)
           const boneRest = boneOrig ? boneOrig.position : bone.position
 
           frameKeyframes.set(boneName, {
             position: isRoot ? rootPos.clone() : new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
-            rotation: quat,
+            rotation: localQuat,
             scale: new THREE.Vector3(1, 1, 1),
           })
         }
