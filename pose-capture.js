@@ -1,3 +1,5 @@
+import * as THREE from 'three';
+
 // Frim Pose Capture - Video to Animation using MediaPipe Pose
 // Converts video body movements to skeletal animation keyframes
 
@@ -12,6 +14,13 @@ class PoseCapture {
         this.frames = [];
         this.currentPreviewFrame = 0;
         this.animationId = null;
+        
+        // Skeleton analysis & depth estimation
+        this.skeletonInfo = null;
+        this.referenceBodyScale = null;
+        this.referenceHipCenter = null;
+        this.scaleFactor = 1;
+        this.previousZ = 0;
         
         // Pose landmark indices (MediaPipe)
         this.LANDMARKS = {
@@ -604,183 +613,270 @@ class PoseCapture {
         this.animationId = requestAnimationFrame(animate);
     }
     
+    analyzeSkeletonHierarchy() {
+        if (!this.editor || !this.editor.bones) return null;
+
+        const info = { bones: new Map(), order: [], spineLength: 0 };
+
+        let rootBone = null;
+        this.editor.bones.forEach((bone) => {
+            if (!rootBone && (!bone.parent || !this.editor.bones.has(bone.parent.name))) {
+                rootBone = bone;
+            }
+        });
+        if (!rootBone) return null;
+
+        // Measure main-chain length (first child at each level) for scale calibration
+        let chainBone = rootBone;
+        while (chainBone) {
+            let next = null;
+            for (const child of chainBone.children) {
+                if (this.editor.bones.has(child.name)) { next = child; break; }
+            }
+            if (!next) break;
+            const cp = next.position;
+            info.spineLength += Math.sqrt(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z);
+            chainBone = next;
+        }
+        if (info.spineLength === 0) info.spineLength = 0.77;
+
+        // BFS to build per-bone info in hierarchy order
+        const queue = [rootBone];
+        while (queue.length > 0) {
+            const bone = queue.shift();
+
+            let firstBoneChild = null;
+            for (const child of bone.children) {
+                if (this.editor.bones.has(child.name)) {
+                    if (!firstBoneChild) firstBoneChild = child;
+                    queue.push(child);
+                }
+            }
+
+            const orig = this.editor.originalBoneTransforms?.get(bone.name);
+            const restRotZ = orig ? orig.rotation.z : bone.rotation.z;
+
+            let childPosAngle = Math.PI / 2;
+            let restAngle = restRotZ + childPosAngle;
+
+            if (firstBoneChild) {
+                const cx = firstBoneChild.position.x;
+                const cy = firstBoneChild.position.y;
+                childPosAngle = Math.atan2(cy, cx);
+                const cosR = Math.cos(restRotZ);
+                const sinR = Math.sin(restRotZ);
+                restAngle = Math.atan2(cx * sinR + cy * cosR, cx * cosR - cy * sinR);
+            }
+
+            let parentName = null;
+            if (bone.parent && this.editor.bones.has(bone.parent.name)) {
+                parentName = bone.parent.name;
+            }
+
+            info.bones.set(bone.name, { parentName, restAngle, childPosAngle, restRotZ });
+            info.order.push(bone.name);
+        }
+
+        return info;
+    }
+
+    getBoneLandmarkMapping(landmarks) {
+        const midHip = {
+            x: (landmarks[23].x + landmarks[24].x) / 2,
+            y: (landmarks[23].y + landmarks[24].y) / 2,
+        };
+        const midShoulder = {
+            x: (landmarks[11].x + landmarks[12].x) / 2,
+            y: (landmarks[11].y + landmarks[12].y) / 2,
+        };
+        const midNeck = {
+            x: (midShoulder.x + landmarks[0].x) / 2,
+            y: (midShoulder.y + landmarks[0].y) / 2,
+        };
+
+        return {
+            'Hips':            { start: midHip, end: midShoulder },
+            'Spine':           { start: midHip, end: midShoulder },
+            'Spine1':          { start: midHip, end: midShoulder },
+            'Spine2':          { start: midHip, end: midShoulder },
+            'Neck':            { start: midShoulder, end: midNeck },
+            'Head':            { start: midNeck, end: landmarks[0] },
+            'LeftShoulder':    { start: midShoulder, end: landmarks[11] },
+            'LeftArm':         { start: landmarks[11], end: landmarks[13] },
+            'LeftForeArm':     { start: landmarks[13], end: landmarks[15] },
+            'RightShoulder':   { start: midShoulder, end: landmarks[12] },
+            'RightArm':        { start: landmarks[12], end: landmarks[14] },
+            'RightForeArm':    { start: landmarks[14], end: landmarks[16] },
+            'LeftUpLeg':       { start: landmarks[23], end: landmarks[25] },
+            'LeftLeg':         { start: landmarks[25], end: landmarks[27] },
+            'RightUpLeg':      { start: landmarks[24], end: landmarks[26] },
+            'RightLeg':        { start: landmarks[26], end: landmarks[28] },
+        };
+    }
+
+    normalizeAngle(angle) {
+        while (angle > Math.PI) angle -= 2 * Math.PI;
+        while (angle < -Math.PI) angle += 2 * Math.PI;
+        return angle;
+    }
+
     applyToAnimation() {
         if (!this.editor || !this.editor.bones || this.frames.length === 0) {
             console.error('Cannot apply: editor not ready or no frames');
             return;
         }
-        
+
+        this.skeletonInfo = this.analyzeSkeletonHierarchy();
+        if (!this.skeletonInfo) {
+            console.error('Cannot analyze skeleton hierarchy');
+            return;
+        }
+
+        this.referenceBodyScale = null;
+        this.referenceHipCenter = null;
+        this.previousZ = 0;
+
         const outputFps = parseInt(document.getElementById('pose-output-fps').value);
-        
-        // Create new animation
         const animId = this.editor.createNewAnimation(`Video Capture ${Date.now()}`);
-        
-        // Set FPS and total frames
+
         if (this.editor.currentAnimation) {
             this.editor.currentAnimation.fps = outputFps;
             this.editor.currentAnimation.totalFrames = this.frames.length;
         }
-        
-        // Map pose landmarks to bones
+
         this.frames.forEach((frame, frameIndex) => {
-            const boneTransforms = this.landmarksToBoneTransforms(frame.landmarks);
-            
-            // Apply transforms to each bone
+            const boneTransforms = this.landmarksToBoneTransforms(frame.landmarks, frameIndex);
+
             Object.entries(boneTransforms).forEach(([boneName, transform]) => {
-                const bone = this.editor.bones.get(boneName);
-                if (bone) {
-                    // Store keyframe
-                    if (!this.editor.keyframes.has(frameIndex)) {
-                        this.editor.keyframes.set(frameIndex, new Map());
-                    }
-                    
-                    this.editor.keyframes.get(frameIndex).set(boneName, {
-                        position: { x: bone.position.x, y: bone.position.y, z: bone.position.z },
-                        rotation: { 
-                            x: transform.rotation.x, 
-                            y: transform.rotation.y, 
-                            z: transform.rotation.z, 
-                            w: transform.rotation.w 
-                        },
-                        scale: { x: 1, y: 1, z: 1 }
-                    });
+                if (!this.editor.bones.has(boneName)) return;
+
+                if (!this.editor.keyframes.has(frameIndex)) {
+                    this.editor.keyframes.set(frameIndex, new Map());
                 }
+                this.editor.keyframes.get(frameIndex).set(boneName, {
+                    position: transform.position,
+                    rotation: transform.rotation,
+                    scale: new THREE.Vector3(1, 1, 1),
+                });
             });
         });
-        
-        // Update UI
+
         this.editor.updateTimeline();
         this.editor.goToFrame(0);
-        
-        // Close modal
         this.closeModal();
-        
-        // Show success
         this.editor.showToast?.(`Imported ${this.frames.length} frames from video!`, 'success');
     }
-    
-    landmarksToBoneTransforms(landmarks) {
+
+    landmarksToBoneTransforms(landmarks, frameIndex) {
+        if (!this.skeletonInfo) return {};
+
         const transforms = {};
-        
-        // Helper to calculate angle between points
-        const getAngle = (a, b) => {
-            return Math.atan2(b.y - a.y, b.x - a.x);
+        const accAngles = {};
+
+        const midHip = {
+            x: (landmarks[23].x + landmarks[24].x) / 2,
+            y: (landmarks[23].y + landmarks[24].y) / 2,
         };
-        
-        const getAngle3D = (a, b) => {
-            const dx = b.x - a.x;
-            const dy = b.y - a.y;
-            const dz = (b.z || 0) - (a.z || 0);
-            return {
-                x: Math.atan2(dy, Math.sqrt(dx * dx + dz * dz)),
-                y: Math.atan2(dx, dz),
-                z: Math.atan2(dy, dx)
-            };
+        const midShoulder = {
+            x: (landmarks[11].x + landmarks[12].x) / 2,
+            y: (landmarks[11].y + landmarks[12].y) / 2,
         };
-        
-        // Convert Euler to Quaternion
-        const eulerToQuat = (x, y, z) => {
-            const c1 = Math.cos(x / 2);
-            const c2 = Math.cos(y / 2);
-            const c3 = Math.cos(z / 2);
-            const s1 = Math.sin(x / 2);
-            const s2 = Math.sin(y / 2);
-            const s3 = Math.sin(z / 2);
-            
-            return {
-                x: s1 * c2 * c3 + c1 * s2 * s3,
-                y: c1 * s2 * c3 - s1 * c2 * s3,
-                z: c1 * c2 * s3 + s1 * s2 * c3,
-                w: c1 * c2 * c3 - s1 * s2 * s3
-            };
-        };
-        
-        // Map common bone names (adjust based on your model's skeleton)
-        const boneMapping = {
-            // Spine/Torso
-            'Spine': () => {
-                const hip = { x: (landmarks[23].x + landmarks[24].x) / 2, y: (landmarks[23].y + landmarks[24].y) / 2 };
-                const shoulder = { x: (landmarks[11].x + landmarks[12].x) / 2, y: (landmarks[11].y + landmarks[12].y) / 2 };
-                const angle = getAngle(hip, shoulder) - Math.PI / 2;
-                return eulerToQuat(0, 0, angle * 0.5);
-            },
-            'Spine1': () => {
-                const hip = { x: (landmarks[23].x + landmarks[24].x) / 2, y: (landmarks[23].y + landmarks[24].y) / 2 };
-                const shoulder = { x: (landmarks[11].x + landmarks[12].x) / 2, y: (landmarks[11].y + landmarks[12].y) / 2 };
-                const angle = getAngle(hip, shoulder) - Math.PI / 2;
-                return eulerToQuat(0, 0, angle * 0.3);
-            },
-            
-            // Left Arm
-            'LeftArm': () => {
-                const angle = getAngle(landmarks[11], landmarks[13]);
-                return eulerToQuat(0, 0, angle);
-            },
-            'LeftForeArm': () => {
-                const angle = getAngle(landmarks[13], landmarks[15]);
-                return eulerToQuat(0, 0, angle);
-            },
-            
-            // Right Arm
-            'RightArm': () => {
-                const angle = getAngle(landmarks[12], landmarks[14]);
-                return eulerToQuat(0, 0, angle);
-            },
-            'RightForeArm': () => {
-                const angle = getAngle(landmarks[14], landmarks[16]);
-                return eulerToQuat(0, 0, angle);
-            },
-            
-            // Left Leg
-            'LeftUpLeg': () => {
-                const angle = getAngle(landmarks[23], landmarks[25]) - Math.PI / 2;
-                return eulerToQuat(angle, 0, 0);
-            },
-            'LeftLeg': () => {
-                const angle = getAngle(landmarks[25], landmarks[27]) - Math.PI / 2;
-                return eulerToQuat(angle, 0, 0);
-            },
-            
-            // Right Leg
-            'RightUpLeg': () => {
-                const angle = getAngle(landmarks[24], landmarks[26]) - Math.PI / 2;
-                return eulerToQuat(angle, 0, 0);
-            },
-            'RightLeg': () => {
-                const angle = getAngle(landmarks[26], landmarks[28]) - Math.PI / 2;
-                return eulerToQuat(angle, 0, 0);
-            },
-            
-            // Head
-            'Head': () => {
-                const midShoulder = { x: (landmarks[11].x + landmarks[12].x) / 2, y: (landmarks[11].y + landmarks[12].y) / 2 };
-                const nose = landmarks[0];
-                const angle = getAngle(midShoulder, nose) - Math.PI / 2;
-                return eulerToQuat(0, 0, angle * 0.5);
-            }
-        };
-        
-        // Try to match bones in the model
-        if (this.editor && this.editor.bones) {
-            this.editor.bones.forEach((bone, boneName) => {
-                // Try exact match first
-                if (boneMapping[boneName]) {
-                    transforms[boneName] = { rotation: boneMapping[boneName]() };
-                    return;
-                }
-                
-                // Try partial matches
-                const lowerName = boneName.toLowerCase();
-                for (const [mapName, fn] of Object.entries(boneMapping)) {
-                    if (lowerName.includes(mapName.toLowerCase()) || 
-                        mapName.toLowerCase().includes(lowerName)) {
-                        transforms[boneName] = { rotation: fn() };
-                        return;
+        const bodyScale = Math.sqrt(
+            (midShoulder.x - midHip.x) ** 2 + (midShoulder.y - midHip.y) ** 2
+        );
+
+        // First frame establishes reference scale and position
+        if (frameIndex === 0 || !this.referenceBodyScale) {
+            this.referenceHipCenter = { x: midHip.x, y: midHip.y };
+            this.referenceBodyScale = bodyScale || 0.25;
+            const nose = landmarks[0];
+            const spine2D = Math.sqrt(
+                (nose.x - midHip.x) ** 2 + (nose.y - midHip.y) ** 2
+            );
+            this.scaleFactor = (this.skeletonInfo.spineLength) / (spine2D || 0.5);
+            this.previousZ = 0;
+        }
+
+        // Z depth: body appearing smaller → further away (positive Z)
+        let rawZ = 0;
+        if (this.referenceBodyScale > 0.01 && bodyScale > 0.01) {
+            rawZ = (this.referenceBodyScale / bodyScale - 1) * 2.0;
+        }
+        const z = 0.3 * rawZ + 0.7 * this.previousZ;
+        this.previousZ = z;
+
+        // Root position tracks hip movement (X flipped for character-space, Y flipped for 3D-up)
+        const deltaX = -(midHip.x - this.referenceHipCenter.x) * this.scaleFactor;
+        const deltaY = -(midHip.y - this.referenceHipCenter.y) * this.scaleFactor;
+
+        const rootBoneName = this.skeletonInfo.order[0];
+        const rootOrig = this.editor.originalBoneTransforms?.get(rootBoneName);
+        const rootBone = this.editor.bones.get(rootBoneName);
+        const rootRest = rootOrig ? rootOrig.position : rootBone?.position;
+
+        const rootPos = rootRest
+            ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, (rootRest.z || 0) + z)
+            : new THREE.Vector3(deltaX, 1 + deltaY, z);
+
+        const mapping = this.getBoneLandmarkMapping(landmarks);
+
+        for (const boneName of this.skeletonInfo.order) {
+            const boneInfo = this.skeletonInfo.bones.get(boneName);
+            if (!boneInfo) continue;
+
+            const bone = this.editor.bones.get(boneName);
+            if (!bone) continue;
+
+            const parentAccAngle = boneInfo.parentName
+                ? (accAngles[boneInfo.parentName] ?? 0) : 0;
+
+            // Match bone to landmark segment (exact then partial name match)
+            let segment = mapping[boneName] || null;
+            if (!segment) {
+                const lower = boneName.toLowerCase();
+                for (const [mapName, seg] of Object.entries(mapping)) {
+                    if (lower.includes(mapName.toLowerCase()) ||
+                        mapName.toLowerCase().includes(lower)) {
+                        segment = seg;
+                        break;
                     }
                 }
-            });
+            }
+
+            if (!segment) {
+                accAngles[boneName] = parentAccAngle + boneInfo.restRotZ;
+                continue;
+            }
+
+            // Target direction (flipped to character-space: -X mirrors left/right, -Y flips up)
+            const dx = -(segment.end.x - segment.start.x);
+            const dy = -(segment.end.y - segment.start.y);
+            const segLen = Math.sqrt(dx * dx + dy * dy);
+
+            if (segLen < 0.001) {
+                accAngles[boneName] = parentAccAngle + boneInfo.restRotZ;
+                continue;
+            }
+
+            const targetAngle = Math.atan2(dy, dx);
+            const localRotZ = this.normalizeAngle(targetAngle - parentAccAngle - boneInfo.restAngle);
+            accAngles[boneName] = parentAccAngle + boneInfo.restRotZ + localRotZ;
+
+            const halfAngle = localRotZ / 2;
+            const quat = new THREE.Quaternion(0, 0, Math.sin(halfAngle), Math.cos(halfAngle));
+
+            const isRoot = !boneInfo.parentName;
+            const boneOrig = this.editor.originalBoneTransforms?.get(boneName);
+            const boneRest = boneOrig ? boneOrig.position : bone.position;
+
+            transforms[boneName] = {
+                rotation: quat,
+                position: isRoot
+                    ? rootPos.clone()
+                    : new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
+            };
         }
-        
+
         return transforms;
     }
     
@@ -792,7 +888,11 @@ class PoseCapture {
         this.frames = [];
         this.currentPreviewFrame = 0;
         
-        // Reset UI
+        this.skeletonInfo = null;
+        this.referenceBodyScale = null;
+        this.referenceHipCenter = null;
+        this.previousZ = 0;
+        
         document.getElementById('btn-pose-process').disabled = true;
         document.getElementById('pose-progress')?.classList.add('hidden');
     }
