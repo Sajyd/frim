@@ -158,8 +158,10 @@ export default function Home() {
             <div className="relative grid lg:grid-cols-2 gap-12 items-center">
               <div>
                 <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/30 px-3 py-1.5 rounded-full text-xs font-semibold text-frim-400 mb-6">
-                  <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
-                  NOW AVAILABLE
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                  </svg>
+                  PRO FEATURE
                 </div>
                 
                 <h2 className="font-display text-3xl md:text-4xl font-bold mb-4">
@@ -190,12 +192,11 @@ export default function Home() {
                   ))}
                 </ul>
                 
-                <Link href="/auth/register" className="inline-flex items-center gap-2 bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-6 py-3 rounded-xl font-semibold hover:shadow-lg hover:shadow-frim-500/25 transition-all">
+                <Link href="/pricing" className="inline-flex items-center gap-2 bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-6 py-3 rounded-xl font-semibold hover:shadow-lg hover:shadow-frim-500/25 transition-all">
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M14.752 11.168l-3.197-2.132A1 1 0 0010 9.87v4.263a1 1 0 001.555.832l3.197-2.132a1 1 0 000-1.664z" />
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
-                  Try It Now
+                  Upgrade to Pro
                 </Link>
               </div>
               
@@ -520,7 +521,7 @@ const features = [
     title: 'AI Video Motion Capture',
     description: 'Upload a video and let AI extract body movements automatically. Runs in your browser with MediaPipe.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2" strokeWidth={2}/></svg>,
-    highlight: false,
+    highlight: true,
   },
   {
     title: 'Bone Controls',

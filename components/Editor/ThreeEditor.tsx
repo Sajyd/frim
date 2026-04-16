@@ -2825,19 +2825,29 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
-        {/* AI Video Motion Capture */}
+        {/* AI Video Motion Capture (Pro) */}
         <button
           onClick={() => {
+            if (!canUseVideoAnalysis) {
+              setUpgradeModalReason('video_analysis')
+              setShowUpgradeModal(true)
+              return
+            }
             if (bones.size === 0) {
               showToast('Load a model with a skeleton first', 'warning')
               return
             }
             videoInputRef.current?.click()
           }}
-          className="w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative text-[#a1a1aa] hover:bg-[#1c2130]"
-          title="AI Video Motion Capture"
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
+            canUseVideoAnalysis ? 'text-[#a1a1aa] hover:bg-[#1c2130]' : 'text-[#71717a] hover:bg-[#1c2130]'
+          }`}
+          title={canUseVideoAnalysis ? 'AI Video Motion Capture' : 'AI Video Motion Capture (Pro)'}
         >
           <Video className="w-5 h-5" />
+          {!canUseVideoAnalysis && (
+            <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">PRO</span>
+          )}
         </button>
       </div>
 

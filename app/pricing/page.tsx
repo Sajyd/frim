@@ -17,11 +17,11 @@ const plans = [
       'Up to 2 animations per project',
       'GLB/GLTF import & export',
       'Basic animation tools',
-      'AI Video Motion Capture',
       'JSON & GLB export',
       'Community support',
     ],
     notIncluded: [
+      'AI Video Motion Capture',
       'Priority cloud saves',
       'Priority support',
     ],
