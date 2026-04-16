@@ -2525,9 +2525,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       for (let i = 0; i < totalFrames; i += sampleRate) sampleIndices.push(i)
       const N = sampleIndices.length
 
-      // Run MediaPipe with temporal smoothing forward, then reset and run backward.
-      // Forward and backward passes cancel the asymmetric temporal lag from MP's
-      // smoothing filter. Results per frame are averaged with visibility weights.
+      // Run MediaPipe multiple times alternating forward and backward. Each pass
+      // resets MP's internal smoothing state, so passes 1 & 3 (forward) and 2 & 4
+      // (backward) may produce slightly different outputs due to floating-point
+      // ordering in the inference pipeline. Averaging 4 passes further reduces
+      // landmark jitter.
       const runPass = async (reversed: boolean, progressOffset: number, progressScale: number) => {
         const out: (any[] | null)[] = new Array(N).fill(null)
         if (typeof (pose as any).reset === 'function') (pose as any).reset()
@@ -2550,29 +2552,39 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         return out
       }
 
-      const pass1 = await runPass(false, 0, 45)
-      const pass2 = await runPass(true, 45, 45)
+      const TOTAL_PASSES = 4
+      const PASSES_PROGRESS = 90 // leave last 10% for smoothing + keyframe build
+      const passProgressScale = PASSES_PROGRESS / TOTAL_PASSES
+      const allPasses: (any[] | null)[][] = []
+      for (let p = 0; p < TOTAL_PASSES; p++) {
+        const reversed = p % 2 === 1
+        const offset = p * passProgressScale
+        const result = await runPass(reversed, offset, passProgressScale)
+        allPasses.push(result)
+      }
 
       URL.revokeObjectURL(video.src)
 
-      // Combine passes with visibility-weighted average
+      // Combine all passes with visibility-weighted average
       const combined: (any[] | null)[] = new Array(N).fill(null)
       for (let i = 0; i < N; i++) {
-        const a = pass1[i], b = pass2[i]
-        if (!a && !b) continue
-        if (!a) { combined[i] = b; continue }
-        if (!b) { combined[i] = a; continue }
+        const available = allPasses.map(p => p[i]).filter((v): v is any[] => !!v)
+        if (available.length === 0) continue
+        const L = available[0].length
         const merged: any[] = []
-        for (let k = 0; k < a.length; k++) {
-          const la = a[k], lb = b[k]
-          const va = Math.max(0.01, la.visibility || 0)
-          const vb = Math.max(0.01, lb.visibility || 0)
-          const wsum = va + vb
+        for (let k = 0; k < L; k++) {
+          let sx = 0, sy = 0, sz = 0, sw = 0, sv = 0
+          for (const pass of available) {
+            const l = pass[k]
+            const v = Math.max(0.01, l.visibility || 0)
+            sx += l.x * v; sy += l.y * v; sz += (l.z || 0) * v
+            sw += v; sv += v
+          }
           merged.push({
-            x: (la.x * va + lb.x * vb) / wsum,
-            y: (la.y * va + lb.y * vb) / wsum,
-            z: ((la.z || 0) * va + (lb.z || 0) * vb) / wsum,
-            visibility: (va + vb) / 2,
+            x: sx / sw,
+            y: sy / sw,
+            z: sz / sw,
+            visibility: sv / available.length,
           })
         }
         combined[i] = merged
@@ -3760,7 +3772,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     />
                   </div>
                   <p className="text-xs text-[#71717a] mt-2">
-                    {videoProgress < 5 ? 'Loading AI model...' : videoProgress < 45 ? 'Pass 1/2: detecting poses forward...' : videoProgress < 90 ? 'Pass 2/2: detecting poses backward...' : 'Combining passes and building keyframes...'}
+                    {
+                      videoProgress < 5 ? 'Loading AI model...' :
+                      videoProgress < 22 ? 'Pass 1/4: detecting poses forward...' :
+                      videoProgress < 45 ? 'Pass 2/4: detecting poses backward...' :
+                      videoProgress < 67 ? 'Pass 3/4: detecting poses forward...' :
+                      videoProgress < 90 ? 'Pass 4/4: detecting poses backward...' :
+                      'Combining passes and building keyframes...'
+                    }
                   </p>
                 </div>
               </div>
