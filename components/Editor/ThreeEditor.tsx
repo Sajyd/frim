@@ -3628,7 +3628,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             {!videoAnalyzing ? (
               <>
                 <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-3">
-                  <p className="text-xs text-[#71717a]">MediaPipe AI will detect body poses frame-by-frame and map them to your skeleton.</p>
+                  <p className="text-xs text-[#71717a]">Frim AI will detect body poses frame-by-frame and map them to your skeleton.</p>
                   <div className="flex items-center gap-2 text-xs text-[#a1a1aa]">
                     <span className="w-2 h-2 bg-[#22c55e] rounded-full" />
                     Processes entirely in your browser

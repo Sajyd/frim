@@ -519,7 +519,7 @@ const features = [
   },
   {
     title: 'AI Video Motion Capture',
-    description: 'Upload a video and let AI extract body movements automatically. Runs in your browser with MediaPipe.',
+    description: 'Upload a video and let Frim AI extract body movements automatically. Runs entirely in your browser.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2" strokeWidth={2}/></svg>,
     highlight: true,
   },
