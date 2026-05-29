@@ -110,6 +110,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // Editor state
   const [currentTool, setCurrentTool] = useState<'select' | 'rotate' | 'translate' | 'scale'>('rotate')
   const [selectedBone, setSelectedBone] = useState<THREE.Bone | null>(null)
+  const [isModelSelected, setIsModelSelected] = useState(false)
   const [bones, setBones] = useState<Map<string, THREE.Bone>>(new Map())
   const [currentFrame, setCurrentFrame] = useState(0)
   const [isPlaying, setIsPlaying] = useState(false)
@@ -568,16 +569,17 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     }
   }, [currentTool])
 
-  // Attach transform controls to selected bone
+  // Attach transform controls to selected bone or whole model
   useEffect(() => {
     if (transformControlsRef.current) {
-      if (selectedBone && currentTool !== 'select') {
-        transformControlsRef.current.attach(selectedBone)
+      const target = isModelSelected ? modelRef.current : selectedBone
+      if (target && currentTool !== 'select') {
+        transformControlsRef.current.attach(target)
       } else {
         transformControlsRef.current.detach()
       }
     }
-  }, [selectedBone, currentTool])
+  }, [selectedBone, isModelSelected, currentTool])
 
   // Grid visibility
   useEffect(() => {
@@ -713,6 +715,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setModelLoaded(true)
         setShowWelcome(false)
         setSelectedBone(null)
+        setIsModelSelected(false)
 
         // Process GLB animations if present
         const glbAnimations = gltf.animations || []
@@ -917,6 +920,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     const bone = bones.get(boneName)
     if (!bone) return
 
+    setIsModelSelected(false)
+
     // Update helper colors
     boneHelpersRef.current.forEach(helper => {
       const isSelected = helper.userData.boneName === boneName
@@ -944,6 +949,32 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
     setSelectedBone(bone)
   }, [bones])
+
+  // Select the whole model so it can be moved/scaled/rotated (bones follow automatically)
+  const handleModelSelect = useCallback(() => {
+    if (!modelRef.current) return
+
+    // Clear bone selection visuals
+    setSelectedBone(null)
+    boneHelpersRef.current.forEach(helper => {
+      helper.scale.setScalar(1)
+      helper.traverse(child => {
+        const mesh = child as THREE.Mesh
+        if (mesh.isMesh && mesh.material) {
+          const mat = mesh.material as THREE.MeshBasicMaterial | THREE.MeshStandardMaterial
+          if (mesh.geometry.type === 'OctahedronGeometry') {
+            mat.color.setHex(mat.wireframe ? 0x86efac : mat.side === THREE.BackSide ? 0x4ade80 : 0x22c55e)
+          } else if (mesh.geometry.type === 'SphereGeometry') {
+            mat.color.setHex(0xffffff)
+          }
+        }
+      })
+    })
+
+    setIsModelSelected(true)
+    // The gizmo only shows in a transform mode, so jump out of pure "select"
+    setCurrentTool(prev => (prev === 'select' ? 'translate' : prev))
+  }, [])
 
   const addKeyframe = useCallback(() => {
     if (!selectedBone || !currentAnimationId) {
@@ -1639,6 +1670,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           setModelLoaded(true)
           setShowWelcome(false)
           setSelectedBone(null)
+          setIsModelSelected(false)
 
           // Process GLB animations if present
           const glbAnimations = gltf.animations || []
@@ -1811,6 +1843,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         originalTransformsRef.current = originalTransforms
         setModelLoaded(true)
         setShowWelcome(false)
+        setSelectedBone(null)
+        setIsModelSelected(false)
 
         showToast(`Project restored! Found ${boneMap.size} bones.`, 'success')
       }, (error) => {
@@ -2375,13 +2409,22 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
         if (obj?.userData.boneName) {
           handleBoneSelect(obj.userData.boneName)
+          return
+        }
+      }
+
+      // No bone helper hit: try the model mesh itself to select the whole model
+      if (modelRef.current) {
+        const modelHits = raycaster.intersectObject(modelRef.current, true)
+        if (modelHits.length > 0) {
+          handleModelSelect()
         }
       }
     }
 
     canvas.addEventListener('click', handleClick)
     return () => canvas.removeEventListener('click', handleClick)
-  }, [handleBoneSelect])
+  }, [handleBoneSelect, handleModelSelect])
 
   // Drag and drop
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -2403,7 +2446,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Video Motion Capture - MediaPipe pose detection
   const poseModelRef = useRef<any>(null)
-  const capturedFramesRef = useRef<{landmarks: any[]}[]>([])
 
   const loadPoseModel = useCallback(async () => {
     if (poseModelRef.current) return poseModelRef.current
@@ -2456,6 +2498,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     })
     if (!rootBone) return null
 
+    // Measure the main spine chain length (first child at each level) for scale calibration
     let chainBone: THREE.Object3D | null = rootBone
     while (chainBone) {
       let next: THREE.Object3D | null = null
@@ -2475,12 +2518,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         if (bones.has(child.name)) { if (!firstBoneChild) firstBoneChild = child; queue.push(child as THREE.Bone) }
       }
       const orig = originalTransformsRef.current.get(bone.name)
-      const restRotZ = orig ? orig.rotation.z : bone.rotation.z
       const restQuat = orig
         ? new THREE.Quaternion().setFromEuler(orig.rotation)
         : new THREE.Quaternion().setFromEuler(bone.rotation)
-      // Child's rest direction in bone's local frame (normalized 3D vector).
-      // Used as the reference axis for setFromUnitVectors.
+      // Child's rest direction in the bone's local frame (normalized). This is the
+      // axis that gets aligned to the captured limb direction via setFromUnitVectors.
       let childPosDir = new THREE.Vector3(0, 1, 0)
       if (firstBoneChild) {
         const cp = firstBoneChild.position
@@ -2489,7 +2531,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       }
       let parentName: string | null = null
       if (bone.parent && bones.has(bone.parent.name)) parentName = bone.parent.name
-      info.bones.set(bone.name, { parentName, childPosDir, restRotZ, restQuat })
+      info.bones.set(bone.name, { parentName, childPosDir, restQuat })
       info.order.push(bone.name)
     }
     return info
@@ -2524,19 +2566,24 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const sampleIndices: number[] = []
       for (let i = 0; i < totalFrames; i += sampleRate) sampleIndices.push(i)
       const N = sampleIndices.length
+      if (N === 0) { showToast('Video too short to capture', 'warning'); return }
 
-      // Run MediaPipe multiple times alternating forward and backward. Each pass
-      // resets MP's internal smoothing state, so passes 1 & 3 (forward) and 2 & 4
-      // (backward) may produce slightly different outputs due to floating-point
-      // ordering in the inference pipeline. Averaging 4 passes further reduces
-      // landmark jitter.
-      const runPass = async (reversed: boolean, progressOffset: number, progressScale: number) => {
-        const out: (any[] | null)[] = new Array(N).fill(null)
+      // A captured frame keeps BOTH landmark sets:
+      //  - image:  normalized screen coords (used for root/screen placement + depth)
+      //  - world:  metric 3D coords centred on the hips (used for bone orientation)
+      // World landmarks are essential for accurate 3D limb angles because their x/y/z
+      // share a consistent metric scale, unlike image-space z.
+      type LMSet = { image: any[]; world: any[] } | null
+
+      // Run MediaPipe over all sampled frames. MP applies temporal smoothing biased
+      // toward already-seen frames, so a forward pass lags slightly behind motion and a
+      // backward pass leads it. Averaging the two cancels that asymmetric lag.
+      const runPass = async (reversed: boolean, progressOffset: number, progressScale: number): Promise<LMSet[]> => {
+        const out: LMSet[] = new Array(N).fill(null)
         if (typeof (pose as any).reset === 'function') (pose as any).reset()
         for (let idx = 0; idx < N; idx++) {
           const i = reversed ? N - 1 - idx : idx
-          const frameIdx = sampleIndices[i]
-          video.currentTime = frameIdx / fps
+          video.currentTime = sampleIndices[i] / fps
           await new Promise<void>(r => { video.onseeked = () => r() })
           ctx.drawImage(video, 0, 0)
 
@@ -2545,87 +2592,81 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             pose.send({ image: canvas })
           })
 
-          if (results?.poseLandmarks) out[i] = results.poseLandmarks
+          if (results?.poseLandmarks) {
+            out[i] = {
+              image: results.poseLandmarks,
+              world: results.poseWorldLandmarks || results.poseLandmarks,
+            }
+          }
           setVideoProgress(Math.round(progressOffset + (idx / N) * progressScale))
           await new Promise(r => setTimeout(r, 2))
         }
         return out
       }
 
-      const TOTAL_PASSES = 4
-      const PASSES_PROGRESS = 90 // leave last 10% for smoothing + keyframe build
-      const passProgressScale = PASSES_PROGRESS / TOTAL_PASSES
-      const allPasses: (any[] | null)[][] = []
-      for (let p = 0; p < TOTAL_PASSES; p++) {
-        const reversed = p % 2 === 1
-        const offset = p * passProgressScale
-        const result = await runPass(reversed, offset, passProgressScale)
-        allPasses.push(result)
-      }
+      const passFwd = await runPass(false, 0, 45)
+      const passBwd = await runPass(true, 45, 45)
 
       URL.revokeObjectURL(video.src)
 
-      // Combine all passes with visibility-weighted average
-      const combined: (any[] | null)[] = new Array(N).fill(null)
-      for (let i = 0; i < N; i++) {
-        const available = allPasses.map(p => p[i]).filter((v): v is any[] => !!v)
-        if (available.length === 0) continue
-        const L = available[0].length
-        const merged: any[] = []
+      // Visibility-weighted average of several landmark arrays into one.
+      const avgLandmarks = (arrays: any[][]): any[] => {
+        const L = arrays[0].length
+        const res: any[] = []
         for (let k = 0; k < L; k++) {
           let sx = 0, sy = 0, sz = 0, sw = 0, sv = 0
-          for (const pass of available) {
-            const l = pass[k]
-            const v = Math.max(0.01, l.visibility || 0)
-            sx += l.x * v; sy += l.y * v; sz += (l.z || 0) * v
-            sw += v; sv += v
+          for (const arr of arrays) {
+            const l = arr[k]
+            const vis = l.visibility ?? 1
+            const w = Math.max(0.01, vis)
+            sx += l.x * w; sy += l.y * w; sz += (l.z || 0) * w
+            sw += w; sv += vis
           }
-          merged.push({
-            x: sx / sw,
-            y: sy / sw,
-            z: sz / sw,
-            visibility: sv / available.length,
-          })
+          res.push({ x: sx / sw, y: sy / sw, z: sz / sw, visibility: sv / arrays.length })
         }
-        combined[i] = merged
+        return res
       }
 
-      // Temporal moving-average smoothing (window = 3, visibility-weighted)
-      const smoothed: (any[] | null)[] = new Array(N).fill(null)
+      // Merge the forward and backward passes per frame.
+      const combined: LMSet[] = new Array(N).fill(null)
       for (let i = 0; i < N; i++) {
-        const window: any[][] = []
+        const a = passFwd[i], b = passBwd[i]
+        if (!a && !b) continue
+        if (!a) { combined[i] = b; continue }
+        if (!b) { combined[i] = a; continue }
+        combined[i] = {
+          image: avgLandmarks([a.image, b.image]),
+          world: avgLandmarks([a.world, b.world]),
+        }
+      }
+
+      // Light temporal smoothing (window = 3) to remove residual jitter without
+      // blurring fast motion.
+      const smoothed: LMSet[] = new Array(N).fill(null)
+      for (let i = 0; i < N; i++) {
+        if (!combined[i]) continue
+        const imgWin: any[][] = []
+        const worldWin: any[][] = []
         for (let d = -1; d <= 1; d++) {
           const j = i + d
-          if (j >= 0 && j < N && combined[j]) window.push(combined[j] as any[])
+          if (j >= 0 && j < N && combined[j]) { imgWin.push(combined[j]!.image); worldWin.push(combined[j]!.world) }
         }
-        if (window.length === 0) continue
-        const L = window[0].length
-        const avg: any[] = []
-        for (let k = 0; k < L; k++) {
-          let sx = 0, sy = 0, sz = 0, sw = 0, sv = 0
-          for (const w of window) {
-            const v = Math.max(0.01, w[k].visibility || 0)
-            sx += w[k].x * v; sy += w[k].y * v; sz += (w[k].z || 0) * v
-            sw += v; sv += v
-          }
-          avg.push({ x: sx / sw, y: sy / sw, z: sz / sw, visibility: sv / window.length })
-        }
-        smoothed[i] = avg
+        smoothed[i] = { image: avgLandmarks(imgWin), world: avgLandmarks(worldWin) }
       }
 
-      const frames: { landmarks: any[] }[] = []
+      const frames: LMSet[] = []
       for (let i = 0; i < N; i++) {
-        const lm = smoothed[i]
-        if (!lm) continue
-        const avgVis = lm.reduce((s, l) => s + (l.visibility || 0), 0) / lm.length
-        if (avgVis >= 0.4) frames.push({ landmarks: lm })
+        const f = smoothed[i]
+        if (!f) continue
+        const avgVis = f.image.reduce((s, l) => s + (l.visibility || 0), 0) / f.image.length
+        if (avgVis >= 0.4) frames.push(f)
       }
 
       if (frames.length === 0) { showToast('No poses detected in video', 'warning'); return }
 
       setVideoProgress(95)
 
-      // Build animation
+      // --- Build the animation ---------------------------------------------
       const id = `anim_${animationCounterRef.current++}`
       const newAnim: Animation = {
         name: `Video Capture`,
@@ -2633,81 +2674,94 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         keyframes: new Map()
       }
 
-      let refBodyScale: number | null = null
-      let refHipCenter: { x: number; y: number } | null = null
-      let scaleFactor = 1
-      let prevZ = 0
-
-      // Scale factor for landmark z (it's noisier than x/y, so we attenuate it a bit)
-      const Z_DAMPING = 0.75
-
       type Pt = { x: number; y: number; z: number }
-      const midpoint = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 })
+      const mid = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 })
 
+      // Bone -> (start landmark, end landmark) using the standard MediaPipe Pose
+      // 33-point topology. Same mapping is applied to both world and image sets.
       const getBoneMapping = (lm: any[]): Record<string, { start: Pt; end: Pt }> => {
-        const midHip = midpoint(lm[23], lm[24])
-        const midShoulder = midpoint(lm[11], lm[12])
-        const midNeck = midpoint(midShoulder, lm[0])
+        const midHip = mid(lm[23], lm[24])
+        const midShoulder = mid(lm[11], lm[12])
+        const midNeck = mid(midShoulder, lm[0])
         return {
           'Hips': { start: midHip, end: midShoulder }, 'Spine': { start: midHip, end: midShoulder },
           'Spine1': { start: midHip, end: midShoulder }, 'Spine2': { start: midHip, end: midShoulder },
           'Neck': { start: midShoulder, end: midNeck }, 'Head': { start: midNeck, end: lm[0] },
           'LeftShoulder': { start: midShoulder, end: lm[11] }, 'LeftArm': { start: lm[11], end: lm[13] },
-          'LeftForeArm': { start: lm[13], end: lm[15] }, 'RightShoulder': { start: midShoulder, end: lm[12] },
-          'RightArm': { start: lm[12], end: lm[14] }, 'RightForeArm': { start: lm[14], end: lm[16] },
+          'LeftForeArm': { start: lm[13], end: lm[15] }, 'LeftHand': { start: lm[15], end: lm[19] },
+          'RightShoulder': { start: midShoulder, end: lm[12] }, 'RightArm': { start: lm[12], end: lm[14] },
+          'RightForeArm': { start: lm[14], end: lm[16] }, 'RightHand': { start: lm[16], end: lm[20] },
           'LeftUpLeg': { start: lm[23], end: lm[25] }, 'LeftLeg': { start: lm[25], end: lm[27] },
+          'LeftFoot': { start: lm[27], end: lm[31] },
           'RightUpLeg': { start: lm[24], end: lm[26] }, 'RightLeg': { start: lm[26], end: lm[28] },
+          'RightFoot': { start: lm[28], end: lm[32] },
         }
       }
 
-      // Convert landmark-space direction to character-space (flip x, y, z axes)
-      const toCharDir = (start: Pt, end: Pt) => {
-        const dx = -(end.x - start.x)
-        const dy = -(end.y - start.y)
-        const dz = -(end.z - start.z) * Z_DAMPING
-        const v = new THREE.Vector3(dx, dy, dz)
+      // MediaPipe axes: +x right, +y down, +z away from camera. Three.js character
+      // space wants +x right(mirrored), +y up, +z toward viewer, so negate all axes.
+      // World landmarks already share one metric scale, so no per-axis damping needed.
+      const dirFromSeg = (start: Pt, end: Pt): THREE.Vector3 | null => {
+        const v = new THREE.Vector3(-(end.x - start.x), -(end.y - start.y), -(end.z - start.z))
         const len = v.length()
-        if (len < 1e-5) return null
+        if (len < 1e-6) return null
         return v.divideScalar(len)
       }
 
-      frames.forEach((frame, fi) => {
-        const lm = frame.landmarks
-        const midHip: Pt = midpoint(lm[23], lm[24])
-        const midShoulder: Pt = midpoint(lm[11], lm[12])
-        const bodyScale = Math.sqrt((midShoulder.x - midHip.x) ** 2 + (midShoulder.y - midHip.y) ** 2)
+      const findSegment = (mapping: Record<string, { start: Pt; end: Pt }>, boneName: string) => {
+        if (mapping[boneName]) return mapping[boneName]
+        const lower = boneName.toLowerCase()
+        for (const [mn, s] of Object.entries(mapping)) {
+          if (lower.includes(mn.toLowerCase()) || mn.toLowerCase().includes(lower)) return s
+        }
+        return null
+      }
 
-        if (fi === 0 || !refBodyScale) {
-          refHipCenter = { x: midHip.x, y: midHip.y }
+      const rootBoneName = skeletonInfo.order[0]
+      const rootRest = originalTransformsRef.current.get(rootBoneName)?.position
+        ?? bones.get(rootBoneName)?.position
+
+      // Root motion calibration uses image-space landmarks (screen placement + depth).
+      let refBodyScale = 0
+      let refHipCenter = { x: 0, y: 0 }
+      let screenScale = 1
+      let prevZ = 0
+
+      const tmpParentInv = new THREE.Quaternion()
+      const tmpLocalDir = new THREE.Vector3()
+
+      frames.forEach((frame, fi) => {
+        const img = frame!.image
+        const wld = frame!.world
+
+        // --- Root translation from image-space landmarks ---
+        const imgMidHip = mid(img[23], img[24])
+        const imgMidShoulder = mid(img[11], img[12])
+        const bodyScale = Math.hypot(imgMidShoulder.x - imgMidHip.x, imgMidShoulder.y - imgMidHip.y)
+
+        if (fi === 0) {
+          refHipCenter = { x: imgMidHip.x, y: imgMidHip.y }
           refBodyScale = bodyScale || 0.25
-          scaleFactor = skeletonInfo.spineLength / (bodyScale || 0.25)
+          screenScale = skeletonInfo.spineLength / (bodyScale || 0.25)
           prevZ = 0
         }
 
+        // Apparent shrink/grow of the torso => depth (further when smaller).
         let rawZ = 0
         if (refBodyScale > 0.01 && bodyScale > 0.01) rawZ = (refBodyScale / bodyScale - 1) * 2.0
         const z = 0.3 * rawZ + 0.7 * prevZ
         prevZ = z
 
-        const deltaX = -(midHip.x - refHipCenter!.x) * scaleFactor
-        const deltaY = -(midHip.y - refHipCenter!.y) * scaleFactor
-
-        const rootBoneName = skeletonInfo.order[0]
-        const rootOrig = originalTransformsRef.current.get(rootBoneName)
-        const rootBone = bones.get(rootBoneName)
-        const rootRest = rootOrig ? rootOrig.position : rootBone?.position
+        const deltaX = -(imgMidHip.x - refHipCenter.x) * screenScale
+        const deltaY = -(imgMidHip.y - refHipCenter.y) * screenScale
         const rootPos = rootRest
           ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, (rootRest.z || 0) + z)
           : new THREE.Vector3(deltaX, 1 + deltaY, z)
 
-        const mapping = getBoneMapping(lm)
-        // Accumulated world-space quaternion per bone (for parent transforms)
+        // --- Bone orientation from world-space landmarks ---
+        const mapping = getBoneMapping(wld)
         const worldQuats: Record<string, THREE.Quaternion> = {}
         const frameKeyframes = new Map<string, BoneKeyframe>()
-
-        // Reusable scratch quaternions/vectors
-        const tmpParentInv = new THREE.Quaternion()
-        const tmpLocalDir = new THREE.Vector3()
 
         for (const boneName of skeletonInfo.order) {
           const bi = skeletonInfo.bones.get(boneName)
@@ -2719,24 +2773,16 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             ? (worldQuats[bi.parentName] ?? new THREE.Quaternion())
             : new THREE.Quaternion()
 
-          let seg = mapping[boneName] || null
-          if (!seg) {
-            const lower = boneName.toLowerCase()
-            for (const [mn, s] of Object.entries(mapping)) {
-              if (lower.includes(mn.toLowerCase()) || mn.toLowerCase().includes(lower)) { seg = s; break }
-            }
-          }
-
-          // Default: keep rest rotation
+          const seg = findSegment(mapping, boneName)
           let localQuat: THREE.Quaternion = bi.restQuat.clone()
 
           if (seg) {
-            const targetWorldDir = toCharDir(seg.start, seg.end)
+            const targetWorldDir = dirFromSeg(seg.start, seg.end)
             if (targetWorldDir) {
-              // Transform target from world to bone's parent-local frame
+              // Bring the world target into the bone's parent-local frame, then rotate
+              // the bone's rest child-direction onto it (shortest-arc rotation).
               tmpParentInv.copy(parentWorldQ).invert()
               tmpLocalDir.copy(targetWorldDir).applyQuaternion(tmpParentInv)
-              // Bone's local rotation aligns childPosDir with the local target
               localQuat = new THREE.Quaternion().setFromUnitVectors(bi.childPosDir, tmpLocalDir)
             }
           }
@@ -2744,8 +2790,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
 
           const isRoot = !bi.parentName
-          const boneOrig = originalTransformsRef.current.get(boneName)
-          const boneRest = boneOrig ? boneOrig.position : bone.position
+          const boneRest = originalTransformsRef.current.get(boneName)?.position ?? bone.position
 
           frameKeyframes.set(boneName, {
             position: isRoot ? rootPos.clone() : new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
@@ -3031,6 +3076,18 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         
         <div className="flex-1 overflow-y-auto p-2">
           <div className="space-y-0.5 font-mono text-xs">
+            <div
+              onClick={handleModelSelect}
+              className={`px-2 py-1.5 mb-1 rounded cursor-pointer transition-colors flex items-center gap-1.5 ${
+                isModelSelected
+                  ? 'bg-[#22c55e]/20 text-[#22c55e] border border-[#22c55e]/30'
+                  : 'hover:bg-[#1c2130] text-[#a1a1aa]'
+              }`}
+              title="Move, scale or rotate the whole model"
+            >
+              <Package className="w-3 h-3" />
+              Whole Model
+            </div>
             {Array.from(bones.keys()).map(name => (
               <div
                 key={name}
@@ -3774,10 +3831,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                   <p className="text-xs text-[#71717a] mt-2">
                     {
                       videoProgress < 5 ? 'Loading AI model...' :
-                      videoProgress < 22 ? 'Pass 1/4: detecting poses forward...' :
-                      videoProgress < 45 ? 'Pass 2/4: detecting poses backward...' :
-                      videoProgress < 67 ? 'Pass 3/4: detecting poses forward...' :
-                      videoProgress < 90 ? 'Pass 4/4: detecting poses backward...' :
+                      videoProgress < 45 ? 'Pass 1/2: detecting poses forward...' :
+                      videoProgress < 90 ? 'Pass 2/2: detecting poses backward...' :
                       'Combining passes and building keyframes...'
                     }
                   </p>
