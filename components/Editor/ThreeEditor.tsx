@@ -104,6 +104,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const boneHelpersRef = useRef<THREE.Group[]>([])
   const boneVisualizerGroupRef = useRef<THREE.Group | null>(null)
   const modelRef = useRef<THREE.Group | null>(null)
+  const modelSelectionBoxRef = useRef<THREE.BoxHelper | null>(null)
   const originalGLTFRef = useRef<any>(null)
   const modelDataRef = useRef<string | null>(null)  // Store base64 encoded model data
 
@@ -554,6 +555,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       }
 
+      // Keep the model selection outline glued to the model as it moves/scales/rotates
+      if (modelSelectionBoxRef.current && modelRef.current) {
+        modelSelectionBoxRef.current.setFromObject(modelRef.current)
+      }
+
       controlsRef.current?.update()
       rendererRef.current!.render(sceneRef.current!, cameraRef.current!)
     }
@@ -580,6 +586,30 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       }
     }
   }, [selectedBone, isModelSelected, currentTool])
+
+  // Show a selection outline around the whole model when it is selected
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+
+    if (isModelSelected && modelRef.current) {
+      if (!modelSelectionBoxRef.current) {
+        const box = new THREE.BoxHelper(modelRef.current, 0x22c55e)
+        box.userData.isModelSelectionBox = true
+        ;(box.material as THREE.LineBasicMaterial).depthTest = false
+        box.renderOrder = 999
+        scene.add(box)
+        modelSelectionBoxRef.current = box
+      } else {
+        modelSelectionBoxRef.current.setFromObject(modelRef.current)
+      }
+    } else if (modelSelectionBoxRef.current) {
+      scene.remove(modelSelectionBoxRef.current)
+      modelSelectionBoxRef.current.geometry.dispose()
+      ;(modelSelectionBoxRef.current.material as THREE.Material).dispose()
+      modelSelectionBoxRef.current = null
+    }
+  }, [isModelSelected, modelLoaded])
 
   // Grid visibility
   useEffect(() => {
@@ -950,12 +980,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     setSelectedBone(bone)
   }, [bones])
 
-  // Select the whole model so it can be moved/scaled/rotated (bones follow automatically)
-  const handleModelSelect = useCallback(() => {
-    if (!modelRef.current) return
-
-    // Clear bone selection visuals
-    setSelectedBone(null)
+  // Reset bone marker visuals to their unselected appearance
+  const resetBoneHelperVisuals = useCallback(() => {
     boneHelpersRef.current.forEach(helper => {
       helper.scale.setScalar(1)
       helper.traverse(child => {
@@ -970,11 +996,25 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       })
     })
+  }, [])
 
+  // Select the whole model so it can be moved/scaled/rotated (bones follow automatically)
+  const handleModelSelect = useCallback(() => {
+    if (!modelRef.current) return
+
+    setSelectedBone(null)
+    resetBoneHelperVisuals()
     setIsModelSelected(true)
     // The gizmo only shows in a transform mode, so jump out of pure "select"
     setCurrentTool(prev => (prev === 'select' ? 'translate' : prev))
-  }, [])
+  }, [resetBoneHelperVisuals])
+
+  // Clear all selection (bone + whole model)
+  const handleDeselect = useCallback(() => {
+    setSelectedBone(null)
+    setIsModelSelected(false)
+    resetBoneHelperVisuals()
+  }, [resetBoneHelperVisuals])
 
   const addKeyframe = useCallback(() => {
     if (!selectedBone || !currentAnimationId) {
@@ -2374,13 +2414,30 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     return () => window.removeEventListener('keydown', handleKeyDown)
   }, [currentFrame, goToFrame, addKeyframe, deleteKeyframe, deleteSelectedKeyframes, duplicateKeyframes, clearKeyframeSelection, undo, redo, copyPose, resetBone, totalFrames, currentAnimation, showToast])
 
-  // Canvas click for bone selection
+  // Canvas click for bone / model selection
   useEffect(() => {
     const canvas = canvasRef.current
     if (!canvas) return
 
+    // Track press position so we can tell a real click from a camera-orbit / gizmo drag
+    let downX = 0
+    let downY = 0
+    let isPotentialClick = false
+    const DRAG_THRESHOLD = 5
+
+    const handlePointerDown = (e: MouseEvent) => {
+      downX = e.clientX
+      downY = e.clientY
+      // Ignore presses that start on the transform gizmo
+      isPotentialClick = !(transformControlsRef.current?.dragging ?? false)
+    }
+
     const handleClick = (e: MouseEvent) => {
       if (!cameraRef.current || !sceneRef.current) return
+
+      // Skip if this was a drag (camera orbit / gizmo manipulation)
+      const moved = Math.hypot(e.clientX - downX, e.clientY - downY)
+      if (!isPotentialClick || moved > DRAG_THRESHOLD) return
 
       const rect = canvas.getBoundingClientRect()
       const mouse = new THREE.Vector2(
@@ -2402,6 +2459,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
       const intersects = raycaster.intersectObjects(meshesToTest, false)
 
+      // A visible bone marker takes priority (markers render on top of the mesh)
       if (intersects.length > 0) {
         let obj: THREE.Object3D | null = intersects[0].object
         while (obj && !obj.userData.boneName) {
@@ -2413,18 +2471,26 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       }
 
-      // No bone helper hit: try the model mesh itself to select the whole model
+      // Otherwise, clicking anywhere on the model body selects the whole model
       if (modelRef.current) {
         const modelHits = raycaster.intersectObject(modelRef.current, true)
         if (modelHits.length > 0) {
           handleModelSelect()
+          return
         }
       }
+
+      // Clicked empty space: clear any selection
+      handleDeselect()
     }
 
+    canvas.addEventListener('pointerdown', handlePointerDown)
     canvas.addEventListener('click', handleClick)
-    return () => canvas.removeEventListener('click', handleClick)
-  }, [handleBoneSelect, handleModelSelect])
+    return () => {
+      canvas.removeEventListener('pointerdown', handlePointerDown)
+      canvas.removeEventListener('click', handleClick)
+    }
+  }, [handleBoneSelect, handleModelSelect, handleDeselect])
 
   // Drag and drop
   const handleDrop = useCallback((e: React.DragEvent) => {
