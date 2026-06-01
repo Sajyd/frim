@@ -2549,8 +2549,10 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       locateFile: (file: string) => `${CDN_BASE}/${file}`
     })
     pose.setOptions({
-      modelComplexity: 1, smoothLandmarks: true, enableSegmentation: false,
-      smoothSegmentation: false, minDetectionConfidence: 0.5, minTrackingConfidence: 0.5
+      // modelComplexity 2 = "heavy" model: the most accurate option, noticeably better
+      // on overlapping/occluded limbs (less flicker) at the cost of speed.
+      modelComplexity: 2, smoothLandmarks: true, enableSegmentation: false,
+      smoothSegmentation: false, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6
     })
     await pose.initialize()
     poseModelRef.current = pose
@@ -2842,6 +2844,26 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const refHipCenter = { x: mean(hipXs), y: mean(hipYs) }
       const screenScale = skeletonInfo.spineLength / (median(torsoSizes) || 0.25)
 
+      // Root horizontal/vertical motion is the noisiest signal (hip jitter amplified by
+      // screenScale), so a "static" dancer can appear to slide. Heavily smooth the hip
+      // trajectory, apply a translation gain < 1, and a deadzone so small sway maps to
+      // zero. Real locomotion still registers (at reduced amplitude); standing still
+      // keeps the model in place.
+      const ROOT_GAIN = 0.5
+      const ROOT_DEADZONE = 0.015
+      const smoothSeries = (arr: number[], win: number) => arr.map((_, i) => {
+        let s = 0, c = 0
+        for (let d = -win; d <= win; d++) { const j = i + d; if (j >= 0 && j < arr.length) { s += arr[j]; c++ } }
+        return c ? s / c : 0
+      })
+      const shapeRoot = (v: number) => {
+        const g = v * ROOT_GAIN
+        if (Math.abs(g) < ROOT_DEADZONE) return 0
+        return g - Math.sign(g) * ROOT_DEADZONE
+      }
+      const rootDX = smoothSeries(hipXs.map(x => (x - refHipCenter.x) * screenScale), 5).map(shapeRoot)
+      const rootDY = smoothSeries(hipYs.map(y => -(y - refHipCenter.y) * screenScale), 5).map(shapeRoot)
+
       // Torso orientation is applied relative to the first valid frame so the rig's
       // bind/rest orientation is preserved and we only add the body's rotation.
       let refTorsoQuat: THREE.Quaternion | null = null
@@ -2850,13 +2872,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const tmpLocalDir = new THREE.Vector3()
 
       frames.forEach((frame, fi) => {
-        const img = frame!.image
         const wld = frame!.world
 
-        // --- Root translation from image-space landmarks (faithful, no synthetic z) ---
-        const imgMidHip = mid(img[23], img[24])
-        const deltaX = (imgMidHip.x - refHipCenter.x) * screenScale
-        const deltaY = -(imgMidHip.y - refHipCenter.y) * screenScale
+        // --- Root translation: smoothed + dampened hip motion (no synthetic z) ---
+        const deltaX = rootDX[fi] ?? 0
+        const deltaY = rootDY[fi] ?? 0
         const rootPos = rootRest
           ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, rootRest.z || 0)
           : new THREE.Vector3(deltaX, 1 + deltaY, 0)
