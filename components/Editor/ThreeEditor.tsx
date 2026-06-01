@@ -2626,6 +2626,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
       const ctx = canvas.getContext('2d')!
+      // Image landmarks are normalized to width/height separately; multiply x by the
+      // aspect ratio so screen-space directions are measured in consistent units.
+      const aspect = (video.videoWidth || 1) / (video.videoHeight || 1)
 
       const fps = 30
       const totalFrames = Math.floor(video.duration * fps)
@@ -2743,15 +2746,17 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       }
 
-      // Landmark space -> character space. MediaPipe: +x right, +y down, +z away from
-      // camera. Three.js character: +x right, +y up, +z toward viewer. So keep x, and
-      // negate y and z (a proper 180° rotation about x, no mirroring). Keeping x means
-      // the captured pose reproduces the video exactly (no left/right swap). MediaPipe's
-      // world-z is compressed relative to x/y, so a small gain (>1) restores the toward/
-      // away depth that otherwise reads as a flat, front-facing pose.
-      const Z_GAIN = 1.4
+      // Hybrid landmark space -> character space. We feed charVec "hybrid" points whose
+      // x/y come from the ACCURATE 2D image landmarks (aspect-corrected) and whose z is
+      // the world-space depth, already scaled to the screen plane and damped (see the
+      // per-frame hyb build below). MediaPipe image axes: +x right, +y down; Three.js
+      // character: +x right, +y up, +z toward viewer. So keep x, negate y and z (a 180°
+      // rotation about x, no mirroring). Driving x/y from the 2D landmarks means the
+      // model's silhouette matches the clean detected skeleton; world-z only adds a
+      // restrained sense of toward/away depth, which is the unreliable axis.
+      const Z_DEPTH = 0.55
       const charVec = (a: Pt, b: Pt): THREE.Vector3 =>
-        new THREE.Vector3((b.x - a.x), -(b.y - a.y), -(b.z - a.z) * Z_GAIN)
+        new THREE.Vector3((b.x - a.x), -(b.y - a.y), -(b.z - a.z))
 
       const dirFromSeg = (start: Pt, end: Pt): THREE.Vector3 | null => {
         const v = charVec(start, end)
@@ -2847,6 +2852,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const tmpLocalDir = new THREE.Vector3()
 
       frames.forEach((frame, fi) => {
+        const img = frame!.image
         const wld = frame!.world
 
         // --- Root translation: smoothed + dampened hip motion (no synthetic z) ---
@@ -2856,8 +2862,21 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, rootRest.z || 0)
           : new THREE.Vector3(deltaX, 1 + deltaY, 0)
 
-        // --- Bone orientation from world-space landmarks ---
-        const mapping = getBoneMapping(wld)
+        // --- Build hybrid landmarks: accurate 2D screen position (x,y) + damped world
+        // depth (z). z is converted from metres to the screen-plane scale using the
+        // torso as a reference, then attenuated by Z_DEPTH so the unreliable depth axis
+        // can't crumple an otherwise-correct 2D pose. ---
+        const msI = mid(img[11], img[12]), mhI = mid(img[23], img[24])
+        const imgTorso = Math.hypot((msI.x - mhI.x) * aspect, msI.y - mhI.y) || 1e-6
+        const msW = mid(wld[11], wld[12]), mhW = mid(wld[23], wld[24])
+        const worldTorso = Math.hypot(msW.x - mhW.x, msW.y - mhW.y, msW.z - mhW.z) || 1e-6
+        const zScale = (imgTorso / worldTorso) * Z_DEPTH
+        const hyb: Pt[] = img.map((l: any, k: number) => ({
+          x: l.x * aspect, y: l.y, z: (wld[k]?.z ?? 0) * zScale,
+        }))
+
+        // --- Bone orientation from hybrid landmarks ---
+        const mapping = getBoneMapping(hyb)
         const worldQuats: Record<string, THREE.Quaternion> = {}
         const frameKeyframes = new Map<string, BoneKeyframe>()
 
@@ -2877,7 +2896,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           if (isRoot) {
             // Root/pelvis: full 3D orientation from the torso basis, applied relative to
             // the first frame so the rig's rest orientation is the baseline.
-            const qTorso = torsoQuatFromWorld(wld)
+            const qTorso = torsoQuatFromWorld(hyb)
             if (qTorso) {
               if (!refTorsoQuat) refTorsoQuat = qTorso.clone()
               const deltaQ = qTorso.clone().multiply(refTorsoQuat.clone().invert())
