@@ -2766,12 +2766,40 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
       // MediaPipe axes: +x right, +y down, +z away from camera. Three.js character
       // space wants +x right(mirrored), +y up, +z toward viewer, so negate all axes.
-      // World landmarks already share one metric scale, so no per-axis damping needed.
+      // MediaPipe's world-z tends to be compressed, so emphasize depth with Z_GAIN to
+      // make toward/away motion read clearly. Easy single-knob tuning.
+      const Z_GAIN = 1.6
+      const charVec = (a: Pt, b: Pt): THREE.Vector3 =>
+        new THREE.Vector3(-(b.x - a.x), -(b.y - a.y), -(b.z - a.z) * Z_GAIN)
+
       const dirFromSeg = (start: Pt, end: Pt): THREE.Vector3 | null => {
-        const v = new THREE.Vector3(-(end.x - start.x), -(end.y - start.y), -(end.z - start.z))
+        const v = charVec(start, end)
         const len = v.length()
         if (len < 1e-6) return null
         return v.divideScalar(len)
+      }
+
+      // Full orientation of the torso (pelvis) as a world-space quaternion, built from
+      // an orthonormal basis: up = hips->shoulders, right = hip/shoulder line, forward =
+      // perpendicular to the torso plane. This is what lets the body actually FACE
+      // different directions (yaw/pitch/roll) instead of staying flat to the camera.
+      const torsoQuatFromWorld = (lm: any[]): THREE.Quaternion | null => {
+        const lHip = lm[23], rHip = lm[24], lSho = lm[11], rSho = lm[12]
+        const midHip = mid(lHip, rHip)
+        const midSho = mid(lSho, rSho)
+        const up = charVec(midHip, midSho)
+        if (up.lengthSq() < 1e-8) return null
+        up.normalize()
+        // Average of hip line and shoulder line ~ body's left-right axis (more stable).
+        const rightApprox = charVec(rHip, lHip).add(charVec(rSho, lSho))
+        if (rightApprox.lengthSq() < 1e-8) return null
+        rightApprox.normalize()
+        const forward = new THREE.Vector3().crossVectors(rightApprox, up)
+        if (forward.lengthSq() < 1e-8) return null
+        forward.normalize()
+        const right = new THREE.Vector3().crossVectors(up, forward).normalize()
+        const m = new THREE.Matrix4().makeBasis(right, up, forward)
+        return new THREE.Quaternion().setFromRotationMatrix(m)
       }
 
       const findSegment = (mapping: Record<string, { start: Pt; end: Pt }>, boneName: string) => {
@@ -2786,12 +2814,17 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const rootBoneName = skeletonInfo.order[0]
       const rootRest = originalTransformsRef.current.get(rootBoneName)?.position
         ?? bones.get(rootBoneName)?.position
+      const restHipsQuat: THREE.Quaternion =
+        skeletonInfo.bones.get(rootBoneName)?.restQuat?.clone() ?? new THREE.Quaternion()
 
       // Root motion calibration uses image-space landmarks (screen placement + depth).
       let refBodyScale = 0
       let refHipCenter = { x: 0, y: 0 }
       let screenScale = 1
       let prevZ = 0
+      // Torso orientation is applied relative to the first valid frame so the rig's
+      // bind/rest orientation is preserved and we only add the body's rotation.
+      let refTorsoQuat: THREE.Quaternion | null = null
 
       const tmpParentInv = new THREE.Quaternion()
       const tmpLocalDir = new THREE.Vector3()
@@ -2835,27 +2868,38 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           const bone = bones.get(boneName)
           if (!bone) continue
 
+          const isRoot = !bi.parentName
           const parentWorldQ = bi.parentName
             ? (worldQuats[bi.parentName] ?? new THREE.Quaternion())
             : new THREE.Quaternion()
 
-          const seg = findSegment(mapping, boneName)
           let localQuat: THREE.Quaternion = bi.restQuat.clone()
 
-          if (seg) {
-            const targetWorldDir = dirFromSeg(seg.start, seg.end)
-            if (targetWorldDir) {
-              // Bring the world target into the bone's parent-local frame, then rotate
-              // the bone's rest child-direction onto it (shortest-arc rotation).
-              tmpParentInv.copy(parentWorldQ).invert()
-              tmpLocalDir.copy(targetWorldDir).applyQuaternion(tmpParentInv)
-              localQuat = new THREE.Quaternion().setFromUnitVectors(bi.childPosDir, tmpLocalDir)
+          if (isRoot) {
+            // Root/pelvis: full 3D orientation from the torso basis, applied relative to
+            // the first frame so the rig's rest orientation is the baseline.
+            const qTorso = torsoQuatFromWorld(wld)
+            if (qTorso) {
+              if (!refTorsoQuat) refTorsoQuat = qTorso.clone()
+              const deltaQ = qTorso.clone().multiply(refTorsoQuat.clone().invert())
+              localQuat = deltaQ.multiply(restHipsQuat.clone())
+            }
+          } else {
+            const seg = findSegment(mapping, boneName)
+            if (seg) {
+              const targetWorldDir = dirFromSeg(seg.start, seg.end)
+              if (targetWorldDir) {
+                // Bring the world target into the bone's parent-local frame, then rotate
+                // the bone's rest child-direction onto it (shortest-arc rotation).
+                tmpParentInv.copy(parentWorldQ).invert()
+                tmpLocalDir.copy(targetWorldDir).applyQuaternion(tmpParentInv)
+                localQuat = new THREE.Quaternion().setFromUnitVectors(bi.childPosDir, tmpLocalDir)
+              }
             }
           }
 
           worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
 
-          const isRoot = !bi.parentName
           const boneRest = originalTransformsRef.current.get(boneName)?.position ?? bone.position
 
           frameKeyframes.set(boneName, {
