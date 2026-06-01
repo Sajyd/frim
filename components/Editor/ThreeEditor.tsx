@@ -2510,8 +2510,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   // File input ref
   const fileInputRef = useRef<HTMLInputElement>(null)
 
-  // Video Motion Capture - MediaPipe pose detection
+  // Video Motion Capture - MediaPipe Tasks PoseLandmarker (heavy model)
   const poseModelRef = useRef<any>(null)
+  // Monotonically increasing timestamp shared by every detectForVideo() call on the
+  // single landmarker instance (VIDEO running mode requires strictly increasing ts).
+  const poseTsRef = useRef(0)
   // Live preview (testing): MediaPipe skeleton drawn over the source video.
   const previewVideoRef = useRef<HTMLVideoElement>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -2519,44 +2522,37 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
   const loadPoseModel = useCallback(async () => {
     if (poseModelRef.current) return poseModelRef.current
 
-    const CDN_BASE = 'https://cdn.jsdelivr.net/npm/@mediapipe/pose@0.5.1675469404'
-    const w = window as any
+    // Load JS bundle and WASM from the same CDN version so they stay ABI-compatible.
+    // The Function(...) wrapper keeps the bundler from trying to resolve the URL import.
+    const VER = '0.10.22-rc.20250304'
+    const BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VER}`
+    const MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'
 
-    if (!w.Pose) {
-      await new Promise<void>((resolve, reject) => {
-        const existing = document.querySelector(`script[data-mediapipe-pose="true"]`) as HTMLScriptElement | null
-        if (existing) {
-          existing.addEventListener('load', () => resolve())
-          existing.addEventListener('error', () => reject(new Error('Failed to load MediaPipe Pose')))
-          return
-        }
-        const script = document.createElement('script')
-        script.src = `${CDN_BASE}/pose.js`
-        script.crossOrigin = 'anonymous'
-        script.dataset.mediapipePose = 'true'
-        script.onload = () => resolve()
-        script.onerror = () => reject(new Error('Failed to load MediaPipe Pose'))
-        document.head.appendChild(script)
-      })
+    const vision: any = await (Function('u', 'return import(u)')(`${BASE}/vision_bundle.mjs`))
+    const { PoseLandmarker, FilesetResolver } = vision
+    if (!PoseLandmarker || !FilesetResolver) throw new Error('Failed to load MediaPipe tasks-vision')
+
+    const fileset = await FilesetResolver.forVisionTasks(`${BASE}/wasm`)
+    const makeOptions = (delegate: 'GPU' | 'CPU') => ({
+      baseOptions: { modelAssetPath: MODEL, delegate },
+      runningMode: 'VIDEO' as const,
+      numPoses: 1,
+      minPoseDetectionConfidence: 0.6,
+      minPosePresenceConfidence: 0.6,
+      minTrackingConfidence: 0.6,
+    })
+
+    let landmarker: any
+    try {
+      landmarker = await PoseLandmarker.createFromOptions(fileset, makeOptions('GPU'))
+    } catch {
+      // Some browsers/GPUs reject the GPU delegate; fall back to CPU.
+      landmarker = await PoseLandmarker.createFromOptions(fileset, makeOptions('CPU'))
     }
 
-    const PoseCtor = w.Pose
-    if (typeof PoseCtor !== 'function') {
-      throw new Error('MediaPipe Pose did not load correctly')
-    }
-
-    const pose = new PoseCtor({
-      locateFile: (file: string) => `${CDN_BASE}/${file}`
-    })
-    pose.setOptions({
-      // modelComplexity 2 = "heavy" model: the most accurate option, noticeably better
-      // on overlapping/occluded limbs (less flicker) at the cost of speed.
-      modelComplexity: 2, smoothLandmarks: true, enableSegmentation: false,
-      smoothSegmentation: false, minDetectionConfidence: 0.6, minTrackingConfidence: 0.6
-    })
-    await pose.initialize()
-    poseModelRef.current = pose
-    return pose
+    poseTsRef.current = 0
+    poseModelRef.current = landmarker
+    return landmarker
   }, [])
 
   const analyzeSkeletonHierarchy = useCallback(() => {
@@ -2651,23 +2647,22 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // backward pass leads it. Averaging the two cancels that asymmetric lag.
       const runPass = async (reversed: boolean, progressOffset: number, progressScale: number): Promise<LMSet[]> => {
         const out: LMSet[] = new Array(N).fill(null)
-        if (typeof (pose as any).reset === 'function') (pose as any).reset()
         for (let idx = 0; idx < N; idx++) {
           const i = reversed ? N - 1 - idx : idx
           video.currentTime = sampleIndices[i] / fps
           await new Promise<void>(r => { video.onseeked = () => r() })
           ctx.drawImage(video, 0, 0)
 
-          const results: any = await new Promise(resolve => {
-            pose.onResults((res: any) => resolve(res))
-            pose.send({ image: canvas })
-          })
+          let result: any = null
+          try {
+            poseTsRef.current += 40
+            result = pose.detectForVideo(canvas, poseTsRef.current)
+          } catch { /* keep frame as null */ }
 
-          if (results?.poseLandmarks) {
-            out[i] = {
-              image: results.poseLandmarks,
-              world: results.poseWorldLandmarks || results.poseLandmarks,
-            }
+          const imageLm = result?.landmarks?.[0]
+          const worldLm = result?.worldLandmarks?.[0]
+          if (imageLm && imageLm.length) {
+            out[i] = { image: imageLm, world: (worldLm && worldLm.length) ? worldLm : imageLm }
           }
           setVideoProgress(Math.round(progressOffset + (idx / N) * progressScale))
           await new Promise(r => setTimeout(r, 2))
@@ -2729,7 +2724,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       for (let i = 0; i < N; i++) {
         const f = smoothed[i]
         if (!f) continue
-        const avgVis = f.image.reduce((s, l) => s + (l.visibility || 0), 0) / f.image.length
+        // tasks-vision may omit visibility; treat missing as visible so valid frames
+        // aren't discarded.
+        const avgVis = f.image.reduce((s, l) => s + (l.visibility ?? 1), 0) / f.image.length
         if (avgVis >= 0.4) frames.push(f)
       }
 
@@ -2970,7 +2967,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
     let cancelled = false
     let raf = 0
-    let busy = false
     const ctx = canvas.getContext('2d')!
     const url = URL.createObjectURL(videoFile)
     video.src = url
@@ -3007,17 +3003,15 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       let pose: any
       try { pose = await loadPoseModel() } catch { return }
       if (cancelled) return
-      pose.onResults((res: any) => {
-        if (cancelled) return
-        if (res?.poseLandmarks) draw(res.poseLandmarks)
-        busy = false
-      })
       video.play().catch(() => {})
-      const loop = async () => {
+      const loop = () => {
         if (cancelled) return
-        if (!busy && !video.paused && video.readyState >= 2) {
-          busy = true
-          try { await pose.send({ image: video }) } catch { busy = false }
+        if (!video.paused && video.readyState >= 2) {
+          try {
+            poseTsRef.current += 33
+            const res = pose.detectForVideo(video, poseTsRef.current)
+            if (res?.landmarks?.[0]) draw(res.landmarks[0])
+          } catch { /* ignore transient detect errors */ }
         }
         raf = requestAnimationFrame(loop)
       }
@@ -3029,7 +3023,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       cancelled = true
       cancelAnimationFrame(raf)
       try { video.pause() } catch {}
-      if (poseModelRef.current) { try { poseModelRef.current.onResults(() => {}) } catch {} }
       URL.revokeObjectURL(url)
     }
   }, [showVideoModal, videoFile, videoAnalyzing, loadPoseModel])
