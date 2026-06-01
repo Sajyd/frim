@@ -2512,9 +2512,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Video Motion Capture - MediaPipe Tasks PoseLandmarker (heavy model)
   const poseModelRef = useRef<any>(null)
-  // Monotonically increasing timestamp shared by every detectForVideo() call on the
-  // single landmarker instance (VIDEO running mode requires strictly increasing ts).
-  const poseTsRef = useRef(0)
   // Live preview (testing): MediaPipe skeleton drawn over the source video.
   const previewVideoRef = useRef<HTMLVideoElement>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement>(null)
@@ -2533,9 +2530,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     if (!PoseLandmarker || !FilesetResolver) throw new Error('Failed to load MediaPipe tasks-vision')
 
     const fileset = await FilesetResolver.forVisionTasks(`${BASE}/wasm`)
+    // IMAGE running mode: every frame is detected independently with NO internal
+    // temporal smoothing. This preserves full limb amplitude/depth (VIDEO mode's
+    // tracking damps fast motion and flattens the pose). We do our own light
+    // smoothing afterwards instead.
     const makeOptions = (delegate: 'GPU' | 'CPU') => ({
       baseOptions: { modelAssetPath: MODEL, delegate },
-      runningMode: 'VIDEO' as const,
+      runningMode: 'IMAGE' as const,
       numPoses: 1,
       minPoseDetectionConfidence: 0.6,
       minPosePresenceConfidence: 0.6,
@@ -2550,7 +2551,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       landmarker = await PoseLandmarker.createFromOptions(fileset, makeOptions('CPU'))
     }
 
-    poseTsRef.current = 0
     poseModelRef.current = landmarker
     return landmarker
   }, [])
@@ -2642,39 +2642,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // share a consistent metric scale, unlike image-space z.
       type LMSet = { image: any[]; world: any[] } | null
 
-      // Run MediaPipe over all sampled frames. MP applies temporal smoothing biased
-      // toward already-seen frames, so a forward pass lags slightly behind motion and a
-      // backward pass leads it. Averaging the two cancels that asymmetric lag.
-      const runPass = async (reversed: boolean, progressOffset: number, progressScale: number): Promise<LMSet[]> => {
-        const out: LMSet[] = new Array(N).fill(null)
-        for (let idx = 0; idx < N; idx++) {
-          const i = reversed ? N - 1 - idx : idx
-          video.currentTime = sampleIndices[i] / fps
-          await new Promise<void>(r => { video.onseeked = () => r() })
-          ctx.drawImage(video, 0, 0)
-
-          let result: any = null
-          try {
-            poseTsRef.current += 40
-            result = pose.detectForVideo(canvas, poseTsRef.current)
-          } catch { /* keep frame as null */ }
-
-          const imageLm = result?.landmarks?.[0]
-          const worldLm = result?.worldLandmarks?.[0]
-          if (imageLm && imageLm.length) {
-            out[i] = { image: imageLm, world: (worldLm && worldLm.length) ? worldLm : imageLm }
-          }
-          setVideoProgress(Math.round(progressOffset + (idx / N) * progressScale))
-          await new Promise(r => setTimeout(r, 2))
-        }
-        return out
-      }
-
-      const passFwd = await runPass(false, 0, 45)
-      const passBwd = await runPass(true, 45, 45)
-
-      URL.revokeObjectURL(video.src)
-
       // Visibility-weighted average of several landmark arrays into one.
       const avgLandmarks = (arrays: any[][]): any[] => {
         const L = arrays[0].length
@@ -2693,18 +2660,28 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         return res
       }
 
-      // Merge the forward and backward passes per frame.
+      // Single IMAGE-mode pass: detect each sampled frame independently. No internal
+      // tracking means no lag and full motion amplitude; our own smoothing (below)
+      // removes residual jitter without flattening the pose.
       const combined: LMSet[] = new Array(N).fill(null)
       for (let i = 0; i < N; i++) {
-        const a = passFwd[i], b = passBwd[i]
-        if (!a && !b) continue
-        if (!a) { combined[i] = b; continue }
-        if (!b) { combined[i] = a; continue }
-        combined[i] = {
-          image: avgLandmarks([a.image, b.image]),
-          world: avgLandmarks([a.world, b.world]),
+        video.currentTime = sampleIndices[i] / fps
+        await new Promise<void>(r => { video.onseeked = () => r() })
+        ctx.drawImage(video, 0, 0)
+
+        let result: any = null
+        try { result = pose.detect(canvas) } catch { /* keep frame as null */ }
+
+        const imageLm = result?.landmarks?.[0]
+        const worldLm = result?.worldLandmarks?.[0]
+        if (imageLm && imageLm.length) {
+          combined[i] = { image: imageLm, world: (worldLm && worldLm.length) ? worldLm : imageLm }
         }
+        setVideoProgress(Math.round((i / N) * 90))
+        await new Promise(r => setTimeout(r, 2))
       }
+
+      URL.revokeObjectURL(video.src)
 
       // Light temporal smoothing (window = 3) to remove residual jitter without
       // blurring fast motion.
@@ -2769,9 +2746,10 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // Landmark space -> character space. MediaPipe: +x right, +y down, +z away from
       // camera. Three.js character: +x right, +y up, +z toward viewer. So keep x, and
       // negate y and z (a proper 180° rotation about x, no mirroring). Keeping x means
-      // the captured pose reproduces the video exactly (no left/right swap). No depth
-      // gain is applied - the motion is exactly what MediaPipe reports.
-      const Z_GAIN = 1.0
+      // the captured pose reproduces the video exactly (no left/right swap). MediaPipe's
+      // world-z is compressed relative to x/y, so a small gain (>1) restores the toward/
+      // away depth that otherwise reads as a flat, front-facing pose.
+      const Z_GAIN = 1.4
       const charVec = (a: Pt, b: Pt): THREE.Vector3 =>
         new THREE.Vector3((b.x - a.x), -(b.y - a.y), -(b.z - a.z) * Z_GAIN)
 
@@ -3004,18 +2982,24 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       try { pose = await loadPoseModel() } catch { return }
       if (cancelled) return
       video.play().catch(() => {})
-      const loop = () => {
+      // The heavy model's detect() is synchronous and blocks the main thread, so
+      // running it every animation frame stutters the video. Throttle it to ~10fps:
+      // the video keeps playing smoothly and the skeleton overlay updates often
+      // enough to be useful.
+      let lastDetect = 0
+      const DETECT_INTERVAL = 100
+      const loop = (now: number) => {
         if (cancelled) return
-        if (!video.paused && video.readyState >= 2) {
+        if (!video.paused && video.readyState >= 2 && now - lastDetect >= DETECT_INTERVAL) {
+          lastDetect = now
           try {
-            poseTsRef.current += 33
-            const res = pose.detectForVideo(video, poseTsRef.current)
+            const res = pose.detect(video)
             if (res?.landmarks?.[0]) draw(res.landmarks[0])
           } catch { /* ignore transient detect errors */ }
         }
         raf = requestAnimationFrame(loop)
       }
-      loop()
+      raf = requestAnimationFrame(loop)
     }
     setup()
 
@@ -4057,9 +4041,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                   <p className="text-xs text-[#71717a] mt-2">
                     {
                       videoProgress < 5 ? 'Loading AI model...' :
-                      videoProgress < 45 ? 'Pass 1/2: detecting poses forward...' :
-                      videoProgress < 90 ? 'Pass 2/2: detecting poses backward...' :
-                      'Combining passes and building keyframes...'
+                      videoProgress < 90 ? 'Detecting poses frame by frame...' :
+                      'Smoothing and building keyframes...'
                     }
                   </p>
                 </div>
