@@ -2814,6 +2814,18 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         return v.divideScalar(len)
       }
 
+      // A single hybrid landmark -> character space (same axis convention as charVec:
+      // keep x, negate y and z). Used for per-bone positional retargeting so joints can
+      // translate, not just rotate.
+      const charPt = (p: Pt): THREE.Vector3 => new THREE.Vector3(p.x, -p.y, -p.z)
+
+      // How strongly each bone's captured joint position drives its translation. 0 =
+      // pure rotation (bones keep rest length, old behaviour); 1 = joints snap exactly
+      // onto the captured skeleton (full stretch to dancer proportions). A blend keeps
+      // the rig's proportions mostly intact while letting limbs visibly move/jump on
+      // every axis instead of only rotating.
+      const POSITION_GAIN = 0.6
+
       // Full orientation of the torso (pelvis) as a world-space quaternion, built from
       // an orthonormal basis: up = hips->shoulders, right = hip/shoulder line, forward =
       // perpendicular to the torso plane. This is what lets the body actually FACE
@@ -2962,9 +2974,20 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           x: l.x * aspect, y: l.y, z: (wld[k]?.z ?? 0) * zScale,
         }))
 
-        // --- Bone orientation from hybrid landmarks ---
+        // --- Bone orientation + positional retargeting from hybrid landmarks ---
         const mapping = getBoneMapping(hyb)
         const worldQuats: Record<string, THREE.Quaternion> = {}
+        // Track each bone's resolved WORLD position so children can convert their own
+        // world-space targets back into local (parent-relative) space.
+        const worldPositions: Record<string, THREE.Vector3> = {}
+
+        // Scale that maps hybrid-landmark units into rig units, calibrated so the
+        // captured torso (hip->shoulder) matches the rig's spine length.
+        const midHipChar = charPt(mid(hyb[23], hyb[24]))
+        const midShoulderChar = charPt(mid(hyb[11], hyb[12]))
+        const hybTorso = midShoulderChar.distanceTo(midHipChar) || 1e-6
+        const rigScale = skeletonInfo.spineLength / hybTorso
+
         const frameKeyframes = new Map<string, BoneKeyframe>()
 
         for (const boneName of skeletonInfo.order) {
@@ -2977,8 +3000,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           const parentWorldQ = bi.parentName
             ? (worldQuats[bi.parentName] ?? new THREE.Quaternion())
             : new THREE.Quaternion()
+          const parentWorldPos = bi.parentName
+            ? (worldPositions[bi.parentName] ?? new THREE.Vector3())
+            : new THREE.Vector3()
 
           let localQuat: THREE.Quaternion = bi.restQuat.clone()
+          const boneRest = originalTransformsRef.current.get(boneName)?.position ?? bone.position
+          let localPos = new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z)
 
           if (isRoot) {
             // Root/pelvis: full 3D orientation from the torso basis, applied relative to
@@ -2989,6 +3017,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
               const deltaQ = qTorso.clone().multiply(refTorsoQuat.clone().invert())
               localQuat = deltaQ.multiply(restHipsQuat.clone())
             }
+            localPos = rootPos.clone()
+            worldPositions[boneName] = rootPos.clone()
           } else {
             const seg = findSegment(mapping, boneName)
             if (seg) {
@@ -3001,14 +3031,36 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 localQuat = new THREE.Quaternion().setFromUnitVectors(bi.childPosDir, tmpLocalDir)
               }
             }
+
+            // Where rotation alone (rest bone length) would place this bone's head.
+            const fkWorldPos = parentWorldPos.clone().add(
+              localPos.clone().applyQuaternion(parentWorldQ)
+            )
+
+            // Where the captured skeleton places this joint: hip-relative landmark
+            // offset, scaled to rig units, added onto the moving root. seg.start is the
+            // bone's head joint (e.g. elbow for the forearm).
+            let resolvedWorldPos = fkWorldPos
+            if (seg) {
+              const jointWorldPos = rootPos.clone().add(
+                charPt(seg.start).sub(midHipChar).multiplyScalar(rigScale)
+              )
+              // Blend FK (keeps proportions) with the captured joint (adds real
+              // translation on every axis - vertical jumps, leg tucks, etc.).
+              resolvedWorldPos = fkWorldPos.clone().lerp(jointWorldPos, POSITION_GAIN)
+            }
+
+            // Convert the resolved world position back into parent-local space.
+            localPos = resolvedWorldPos.clone().sub(parentWorldPos).applyQuaternion(
+              parentWorldQ.clone().invert()
+            )
+            worldPositions[boneName] = resolvedWorldPos
           }
 
           worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
 
-          const boneRest = originalTransformsRef.current.get(boneName)?.position ?? bone.position
-
           frameKeyframes.set(boneName, {
-            position: isRoot ? rootPos.clone() : new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z),
+            position: localPos,
             rotation: localQuat,
             scale: new THREE.Vector3(1, 1, 1),
           })
