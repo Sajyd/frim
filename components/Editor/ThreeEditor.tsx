@@ -2512,6 +2512,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Video Motion Capture - MediaPipe pose detection
   const poseModelRef = useRef<any>(null)
+  // Live preview (testing): MediaPipe skeleton drawn over the source video.
+  const previewVideoRef = useRef<HTMLVideoElement>(null)
+  const previewCanvasRef = useRef<HTMLCanvasElement>(null)
 
   const loadPoseModel = useCallback(async () => {
     if (poseModelRef.current) return poseModelRef.current
@@ -2764,13 +2767,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       }
 
-      // MediaPipe axes: +x right, +y down, +z away from camera. Three.js character
-      // space wants +x right(mirrored), +y up, +z toward viewer, so negate all axes.
-      // MediaPipe's world-z tends to be compressed, so emphasize depth with Z_GAIN to
-      // make toward/away motion read clearly. Easy single-knob tuning.
-      const Z_GAIN = 1.6
+      // Landmark space -> character space. MediaPipe: +x right, +y down, +z away from
+      // camera. Three.js character: +x right, +y up, +z toward viewer. So keep x, and
+      // negate y and z (a proper 180° rotation about x, no mirroring). Keeping x means
+      // the captured pose reproduces the video exactly (no left/right swap). No depth
+      // gain is applied - the motion is exactly what MediaPipe reports.
+      const Z_GAIN = 1.0
       const charVec = (a: Pt, b: Pt): THREE.Vector3 =>
-        new THREE.Vector3(-(b.x - a.x), -(b.y - a.y), -(b.z - a.z) * Z_GAIN)
+        new THREE.Vector3((b.x - a.x), -(b.y - a.y), -(b.z - a.z) * Z_GAIN)
 
       const dirFromSeg = (start: Pt, end: Pt): THREE.Vector3 | null => {
         const v = charVec(start, end)
@@ -2817,11 +2821,27 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const restHipsQuat: THREE.Quaternion =
         skeletonInfo.bones.get(rootBoneName)?.restQuat?.clone() ?? new THREE.Quaternion()
 
-      // Root motion calibration uses image-space landmarks (screen placement + depth).
-      let refBodyScale = 0
-      let refHipCenter = { x: 0, y: 0 }
-      let screenScale = 1
-      let prevZ = 0
+      // Root translation (image-space). Anchor to the AVERAGE hip position and scale by
+      // the MEDIAN torso size across the whole clip. This keeps a steady dancer centred
+      // (no slow drift to one side) and prevents amplitude blow-up from an unlucky first
+      // frame. The translation is exactly the hip motion MediaPipe reports, mapped 1:1
+      // to model scale - nothing synthetic is added.
+      const mean = (a: number[]) => (a.length ? a.reduce((s, v) => s + v, 0) / a.length : 0)
+      const median = (a: number[]) => {
+        if (!a.length) return 0.25
+        const s = [...a].sort((x, y) => x - y)
+        return s[Math.floor(s.length / 2)]
+      }
+      const hipXs: number[] = [], hipYs: number[] = [], torsoSizes: number[] = []
+      for (const f of frames) {
+        const mh = mid(f!.image[23], f!.image[24])
+        const ms = mid(f!.image[11], f!.image[12])
+        hipXs.push(mh.x); hipYs.push(mh.y)
+        torsoSizes.push(Math.hypot(ms.x - mh.x, ms.y - mh.y))
+      }
+      const refHipCenter = { x: mean(hipXs), y: mean(hipYs) }
+      const screenScale = skeletonInfo.spineLength / (median(torsoSizes) || 0.25)
+
       // Torso orientation is applied relative to the first valid frame so the rig's
       // bind/rest orientation is preserved and we only add the body's rotation.
       let refTorsoQuat: THREE.Quaternion | null = null
@@ -2833,29 +2853,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         const img = frame!.image
         const wld = frame!.world
 
-        // --- Root translation from image-space landmarks ---
+        // --- Root translation from image-space landmarks (faithful, no synthetic z) ---
         const imgMidHip = mid(img[23], img[24])
-        const imgMidShoulder = mid(img[11], img[12])
-        const bodyScale = Math.hypot(imgMidShoulder.x - imgMidHip.x, imgMidShoulder.y - imgMidHip.y)
-
-        if (fi === 0) {
-          refHipCenter = { x: imgMidHip.x, y: imgMidHip.y }
-          refBodyScale = bodyScale || 0.25
-          screenScale = skeletonInfo.spineLength / (bodyScale || 0.25)
-          prevZ = 0
-        }
-
-        // Apparent shrink/grow of the torso => depth (further when smaller).
-        let rawZ = 0
-        if (refBodyScale > 0.01 && bodyScale > 0.01) rawZ = (refBodyScale / bodyScale - 1) * 2.0
-        const z = 0.3 * rawZ + 0.7 * prevZ
-        prevZ = z
-
-        const deltaX = -(imgMidHip.x - refHipCenter.x) * screenScale
+        const deltaX = (imgMidHip.x - refHipCenter.x) * screenScale
         const deltaY = -(imgMidHip.y - refHipCenter.y) * screenScale
         const rootPos = rootRest
-          ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, (rootRest.z || 0) + z)
-          : new THREE.Vector3(deltaX, 1 + deltaY, z)
+          ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, rootRest.z || 0)
+          : new THREE.Vector3(deltaX, 1 + deltaY, 0)
 
         // --- Bone orientation from world-space landmarks ---
         const mapping = getBoneMapping(wld)
@@ -2926,6 +2930,89 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       setVideoProgress(0)
     }
   }, [videoFile, bones, analyzeSkeletonHierarchy, loadPoseModel, showToast, setAnimations, setCurrentAnimationId, setCurrentFrame])
+
+  // TEMPORARY (testing): live MediaPipe skeleton overlaid on the source video so testers
+  // can compare the detected pose against the captured animation. Remove later.
+  useEffect(() => {
+    if (!showVideoModal || !videoFile || videoAnalyzing) return
+    const video = previewVideoRef.current
+    const canvas = previewCanvasRef.current
+    if (!video || !canvas) return
+
+    // MediaPipe Pose 33-point body connections (face points omitted for clarity).
+    const CONNECTIONS: [number, number][] = [
+      [11, 12], [11, 13], [13, 15], [12, 14], [14, 16],
+      [11, 23], [12, 24], [23, 24],
+      [23, 25], [25, 27], [27, 29], [29, 31], [27, 31],
+      [24, 26], [26, 28], [28, 30], [30, 32], [28, 32],
+      [15, 17], [15, 19], [17, 19], [16, 18], [16, 20], [18, 20],
+    ]
+
+    let cancelled = false
+    let raf = 0
+    let busy = false
+    const ctx = canvas.getContext('2d')!
+    const url = URL.createObjectURL(videoFile)
+    video.src = url
+    video.muted = true
+    video.loop = true
+
+    const draw = (landmarks: any[]) => {
+      const w = video.videoWidth, h = video.videoHeight
+      if (!w || !h) return
+      if (canvas.width !== w) canvas.width = w
+      if (canvas.height !== h) canvas.height = h
+      ctx.clearRect(0, 0, w, h)
+      ctx.lineWidth = Math.max(2, w / 250)
+      ctx.strokeStyle = '#22c55e'
+      ctx.fillStyle = '#4ade80'
+      for (const [a, b] of CONNECTIONS) {
+        const la = landmarks[a], lb = landmarks[b]
+        if (!la || !lb || (la.visibility ?? 1) < 0.4 || (lb.visibility ?? 1) < 0.4) continue
+        ctx.beginPath()
+        ctx.moveTo(la.x * w, la.y * h)
+        ctx.lineTo(lb.x * w, lb.y * h)
+        ctx.stroke()
+      }
+      const r = Math.max(3, w / 180)
+      for (const lm of landmarks) {
+        if ((lm.visibility ?? 1) < 0.4) continue
+        ctx.beginPath()
+        ctx.arc(lm.x * w, lm.y * h, r, 0, Math.PI * 2)
+        ctx.fill()
+      }
+    }
+
+    const setup = async () => {
+      let pose: any
+      try { pose = await loadPoseModel() } catch { return }
+      if (cancelled) return
+      pose.onResults((res: any) => {
+        if (cancelled) return
+        if (res?.poseLandmarks) draw(res.poseLandmarks)
+        busy = false
+      })
+      video.play().catch(() => {})
+      const loop = async () => {
+        if (cancelled) return
+        if (!busy && !video.paused && video.readyState >= 2) {
+          busy = true
+          try { await pose.send({ image: video }) } catch { busy = false }
+        }
+        raf = requestAnimationFrame(loop)
+      }
+      loop()
+    }
+    setup()
+
+    return () => {
+      cancelled = true
+      cancelAnimationFrame(raf)
+      try { video.pause() } catch {}
+      if (poseModelRef.current) { try { poseModelRef.current.onResults(() => {}) } catch {} }
+      URL.revokeObjectURL(url)
+    }
+  }, [showVideoModal, videoFile, videoAnalyzing, loadPoseModel])
 
   return (
     <div 
@@ -3880,7 +3967,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       {/* Video Motion Capture Modal */}
       {showVideoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
-          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg p-6">
             <div className="flex items-center justify-between mb-6">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
@@ -3902,6 +3989,22 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
             {!videoAnalyzing ? (
               <>
+                {/* TEMPORARY preview: live MediaPipe skeleton over the video (testing) */}
+                <div className="relative w-full rounded-xl overflow-hidden mb-3 bg-black flex items-center justify-center" style={{ aspectRatio: '16 / 9' }}>
+                  <video
+                    ref={previewVideoRef}
+                    className="absolute inset-0 w-full h-full object-contain"
+                    playsInline
+                    muted
+                  />
+                  <canvas
+                    ref={previewCanvasRef}
+                    className="absolute inset-0 w-full h-full object-contain pointer-events-none"
+                  />
+                  <span className="absolute top-2 left-2 text-[10px] font-bold bg-black/60 text-[#4ade80] px-2 py-0.5 rounded">
+                    PREVIEW · detected skeleton
+                  </span>
+                </div>
                 <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-3">
                   <p className="text-xs text-[#71717a]">Frim AI will detect body poses frame-by-frame and map them to your skeleton.</p>
                   <div className="flex items-center gap-2 text-xs text-[#a1a1aa]">
