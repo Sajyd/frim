@@ -2630,19 +2630,23 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // aspect ratio so screen-space directions are measured in consistent units.
       const aspect = (video.videoWidth || 1) / (video.videoHeight || 1)
 
-      const fps = 30
-      const totalFrames = Math.floor(video.duration * fps)
-      const sampleRate = 2
-      const sampleIndices: number[] = []
-      for (let i = 0; i < totalFrames; i += sampleRate) sampleIndices.push(i)
-      const N = sampleIndices.length
-      if (N === 0) { showToast('Video too short to capture', 'warning'); return }
+      const captureFps = 30
+      const totalAnimFrames = Math.max(1, Math.round(video.duration * captureFps))
+      // Interleaved passes: even frames (0,2,4…) and odd frames (1,3,5…) each get a
+      // forward + backward pass averaged together → full 30 fps coverage with 4 passes.
+      const evenIndices: number[] = []
+      const oddIndices: number[] = []
+      for (let i = 0; i < totalAnimFrames; i++) {
+        if (i % 2 === 0) evenIndices.push(i)
+        else oddIndices.push(i)
+      }
+      if (evenIndices.length === 0 && oddIndices.length === 0) {
+        showToast('Video too short to capture', 'warning'); return
+      }
 
       // A captured frame keeps BOTH landmark sets:
       //  - image:  normalized screen coords (used for root/screen placement + depth)
       //  - world:  metric 3D coords centred on the hips (used for bone orientation)
-      // World landmarks are essential for accurate 3D limb angles because their x/y/z
-      // share a consistent metric scale, unlike image-space z.
       type LMSet = { image: any[]; world: any[] } | null
 
       // Visibility-weighted average of several landmark arrays into one.
@@ -2663,62 +2667,107 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         return res
       }
 
-      // Single IMAGE-mode pass: detect each sampled frame independently. No internal
-      // tracking means no lag and full motion amplitude; our own smoothing (below)
-      // removes residual jitter without flattening the pose.
-      const combined: LMSet[] = new Array(N).fill(null)
-      for (let i = 0; i < N; i++) {
-        video.currentTime = sampleIndices[i] / fps
-        await new Promise<void>(r => { video.onseeked = () => r() })
-        ctx.drawImage(video, 0, 0)
+      const runPass = async (
+        indices: number[],
+        reversed: boolean,
+        progressOffset: number,
+        progressScale: number,
+      ): Promise<LMSet[]> => {
+        const out: LMSet[] = new Array(indices.length).fill(null)
+        const order = reversed
+          ? [...Array(indices.length).keys()].reverse()
+          : [...Array(indices.length).keys()]
+        for (const idx of order) {
+          video.currentTime = indices[idx] / captureFps
+          await new Promise<void>(r => { video.onseeked = () => r() })
+          ctx.drawImage(video, 0, 0)
 
-        let result: any = null
-        try { result = pose.detect(canvas) } catch { /* keep frame as null */ }
+          let result: any = null
+          try { result = pose.detect(canvas) } catch { /* keep frame as null */ }
 
-        const imageLm = result?.landmarks?.[0]
-        const worldLm = result?.worldLandmarks?.[0]
-        if (imageLm && imageLm.length) {
-          combined[i] = { image: imageLm, world: (worldLm && worldLm.length) ? worldLm : imageLm }
+          const imageLm = result?.landmarks?.[0]
+          const worldLm = result?.worldLandmarks?.[0]
+          if (imageLm && imageLm.length) {
+            out[idx] = { image: imageLm, world: (worldLm && worldLm.length) ? worldLm : imageLm }
+          }
+          const done = reversed ? indices.length - 1 - idx : idx
+          setVideoProgress(Math.round(progressOffset + (done / indices.length) * progressScale))
+          await new Promise(r => setTimeout(r, 2))
         }
-        setVideoProgress(Math.round((i / N) * 90))
-        await new Promise(r => setTimeout(r, 2))
+        return out
       }
+
+      const mergePassPair = (fwd: LMSet[], bwd: LMSet[], indices: number[]): Map<number, LMSet> => {
+        const map = new Map<number, LMSet>()
+        for (let i = 0; i < indices.length; i++) {
+          const a = fwd[i], b = bwd[i]
+          if (!a && !b) continue
+          if (!a) { map.set(indices[i], b); continue }
+          if (!b) { map.set(indices[i], a); continue }
+          map.set(indices[i], {
+            image: avgLandmarks([a.image, b.image]),
+            world: avgLandmarks([a.world, b.world]),
+          })
+        }
+        return map
+      }
+
+      // 4 passes: even fwd/bwd + odd fwd/bwd → every video frame sampled once, each
+      // averaged from two detections for stability.
+      const evenFwd = evenIndices.length ? await runPass(evenIndices, false, 0, 22) : []
+      const evenBwd = evenIndices.length ? await runPass(evenIndices, true, 22, 22) : []
+      const oddFwd = oddIndices.length ? await runPass(oddIndices, false, 44, 22) : []
+      const oddBwd = oddIndices.length ? await runPass(oddIndices, true, 66, 22) : []
 
       URL.revokeObjectURL(video.src)
 
-      // Light temporal smoothing (window = 3) to remove residual jitter without
-      // blurring fast motion.
-      const smoothed: LMSet[] = new Array(N).fill(null)
-      for (let i = 0; i < N; i++) {
-        if (!combined[i]) continue
+      const timeline: LMSet[] = new Array(totalAnimFrames).fill(null)
+      if (evenIndices.length) {
+        for (const [frameIdx, data] of mergePassPair(evenFwd, evenBwd, evenIndices)) {
+          timeline[frameIdx] = data
+        }
+      }
+      if (oddIndices.length) {
+        for (const [frameIdx, data] of mergePassPair(oddFwd, oddBwd, oddIndices)) {
+          timeline[frameIdx] = data
+        }
+      }
+
+      // Light temporal smoothing on the video timeline (window = 3) to remove jitter
+      // without blurring fast motion or shifting the rhythm.
+      const smoothedTimeline: LMSet[] = new Array(totalAnimFrames).fill(null)
+      for (let frameIdx = 0; frameIdx < totalAnimFrames; frameIdx++) {
+        if (!timeline[frameIdx]) continue
         const imgWin: any[][] = []
         const worldWin: any[][] = []
         for (let d = -1; d <= 1; d++) {
-          const j = i + d
-          if (j >= 0 && j < N && combined[j]) { imgWin.push(combined[j]!.image); worldWin.push(combined[j]!.world) }
+          const j = frameIdx + d
+          if (j >= 0 && j < totalAnimFrames && timeline[j]) {
+            imgWin.push(timeline[j]!.image)
+            worldWin.push(timeline[j]!.world)
+          }
         }
-        smoothed[i] = { image: avgLandmarks(imgWin), world: avgLandmarks(worldWin) }
+        smoothedTimeline[frameIdx] = { image: avgLandmarks(imgWin), world: avgLandmarks(worldWin) }
       }
 
-      const frames: LMSet[] = []
-      for (let i = 0; i < N; i++) {
-        const f = smoothed[i]
+      const frameEntries: { frameIdx: number; data: LMSet }[] = []
+      for (let frameIdx = 0; frameIdx < totalAnimFrames; frameIdx++) {
+        const f = smoothedTimeline[frameIdx]
         if (!f) continue
-        // tasks-vision may omit visibility; treat missing as visible so valid frames
-        // aren't discarded.
         const avgVis = f.image.reduce((s, l) => s + (l.visibility ?? 1), 0) / f.image.length
-        if (avgVis >= 0.4) frames.push(f)
+        if (avgVis >= 0.4) frameEntries.push({ frameIdx, data: f })
       }
 
-      if (frames.length === 0) { showToast('No poses detected in video', 'warning'); return }
+      if (frameEntries.length === 0) { showToast('No poses detected in video', 'warning'); return }
 
-      setVideoProgress(95)
+      setVideoProgress(92)
 
       // --- Build the animation ---------------------------------------------
       const id = `anim_${animationCounterRef.current++}`
       const newAnim: Animation = {
         name: `Video Capture`,
-        fps: 24, totalFrames: frames.length, speed: 1, loop: true,
+        // Match video timeline: frame N at t = N/captureFps seconds.
+        fps: captureFps, totalFrames: totalAnimFrames, speed: 1, loop: true,
         keyframes: new Map()
       }
 
@@ -2754,7 +2803,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // rotation about x, no mirroring). Driving x/y from the 2D landmarks means the
       // model's silhouette matches the clean detected skeleton; world-z only adds a
       // restrained sense of toward/away depth, which is the unreliable axis.
-      const Z_DEPTH = 0.55
+      const Z_DEPTH = 0.72
       const charVec = (a: Pt, b: Pt): THREE.Vector3 =>
         new THREE.Vector3((b.x - a.x), -(b.y - a.y), -(b.z - a.z))
 
@@ -2814,35 +2863,68 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         const s = [...a].sort((x, y) => x - y)
         return s[Math.floor(s.length / 2)]
       }
-      const hipXs: number[] = [], hipYs: number[] = [], torsoSizes: number[] = []
-      for (const f of frames) {
-        const mh = mid(f!.image[23], f!.image[24])
-        const ms = mid(f!.image[11], f!.image[12])
-        hipXs.push(mh.x); hipYs.push(mh.y)
+      const hipXs: number[] = [], hipYs: number[] = [], hipZs: number[] = [], torsoSizes: number[] = []
+      for (const { data } of frameEntries) {
+        const mh = mid(data!.image[23], data!.image[24])
+        const ms = mid(data!.image[11], data!.image[12])
+        const mhW = mid(data!.world[23], data!.world[24])
+        hipXs.push(mh.x); hipYs.push(mh.y); hipZs.push(mhW.z)
         torsoSizes.push(Math.hypot(ms.x - mh.x, ms.y - mh.y))
       }
       const refHipCenter = { x: mean(hipXs), y: mean(hipYs) }
+      const refHipZ = mean(hipZs)
       const screenScale = skeletonInfo.spineLength / (median(torsoSizes) || 0.25)
 
-      // Root horizontal/vertical motion is the noisiest signal (hip jitter amplified by
-      // screenScale), so a "static" dancer can appear to slide. Heavily smooth the hip
-      // trajectory, apply a translation gain < 1, and a deadzone so small sway maps to
-      // zero. Real locomotion still registers (at reduced amplitude); standing still
-      // keeps the model in place.
-      const ROOT_GAIN = 0.5
-      const ROOT_DEADZONE = 0.015
-      const smoothSeries = (arr: number[], win: number) => arr.map((_, i) => {
-        let s = 0, c = 0
-        for (let d = -win; d <= win; d++) { const j = i + d; if (j >= 0 && j < arr.length) { s += arr[j]; c++ } }
-        return c ? s / c : 0
-      })
-      const shapeRoot = (v: number) => {
-        const g = v * ROOT_GAIN
-        if (Math.abs(g) < ROOT_DEADZONE) return 0
-        return g - Math.sign(g) * ROOT_DEADZONE
+      // Root motion from hip trajectory in the video. Horizontal (X) stays dampened so a
+      // centred dancer doesn't drift; vertical (Y) follows the 2D skeleton bounce/squat
+      // closely so the whole body moves up/down with the video rhythm. Z from world hips
+      // adds toward/away depth for crossed legs and crouch.
+      const ROOT_GAIN_X = 0.45
+      const ROOT_GAIN_Y = 0.95
+      const ROOT_GAIN_Z = 0.4
+      const ROOT_DEADZONE_X = 0.015
+      const ROOT_DEADZONE_Y = 0.004
+      const smoothOnTimeline = (values: Map<number, number>, win: number) => {
+        const out = new Map<number, number>()
+        for (const { frameIdx } of frameEntries) {
+          let s = 0, c = 0
+          for (let d = -win; d <= win; d++) {
+            const v = values.get(frameIdx + d)
+            if (v !== undefined) { s += v; c++ }
+          }
+          out.set(frameIdx, c ? s / c : values.get(frameIdx) ?? 0)
+        }
+        return out
       }
-      const rootDX = smoothSeries(hipXs.map(x => (x - refHipCenter.x) * screenScale), 5).map(shapeRoot)
-      const rootDY = smoothSeries(hipYs.map(y => -(y - refHipCenter.y) * screenScale), 5).map(shapeRoot)
+      const shapeRoot = (v: number, gain: number, deadzone: number) => {
+        const g = v * gain
+        if (Math.abs(g) < deadzone) return 0
+        return g - Math.sign(g) * deadzone
+      }
+
+      const rawDX = new Map<number, number>()
+      const rawDY = new Map<number, number>()
+      const rawDZ = new Map<number, number>()
+      for (let i = 0; i < frameEntries.length; i++) {
+        const { frameIdx, data } = frameEntries[i]
+        const mh = mid(data!.image[23], data!.image[24])
+        const mhW = mid(data!.world[23], data!.world[24])
+        rawDX.set(frameIdx, (mh.x - refHipCenter.x) * screenScale)
+        rawDY.set(frameIdx, -(mh.y - refHipCenter.y) * screenScale)
+        rawDZ.set(frameIdx, -(mhW.z - refHipZ) * screenScale)
+      }
+      const rootDX = new Map<number, number>()
+      const rootDY = new Map<number, number>()
+      const rootDZ = new Map<number, number>()
+      for (const [frameIdx, v] of smoothOnTimeline(rawDX, 4)) {
+        rootDX.set(frameIdx, shapeRoot(v, ROOT_GAIN_X, ROOT_DEADZONE_X))
+      }
+      for (const [frameIdx, v] of smoothOnTimeline(rawDY, 2)) {
+        rootDY.set(frameIdx, shapeRoot(v, ROOT_GAIN_Y, ROOT_DEADZONE_Y))
+      }
+      for (const [frameIdx, v] of smoothOnTimeline(rawDZ, 2)) {
+        rootDZ.set(frameIdx, shapeRoot(v, ROOT_GAIN_Z, 0))
+      }
 
       // Torso orientation is applied relative to the first valid frame so the rig's
       // bind/rest orientation is preserved and we only add the body's rotation.
@@ -2851,16 +2933,21 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       const tmpParentInv = new THREE.Quaternion()
       const tmpLocalDir = new THREE.Vector3()
 
-      frames.forEach((frame, fi) => {
+      frameEntries.forEach(({ frameIdx, data: frame }) => {
         const img = frame!.image
         const wld = frame!.world
 
-        // --- Root translation: smoothed + dampened hip motion (no synthetic z) ---
-        const deltaX = rootDX[fi] ?? 0
-        const deltaY = rootDY[fi] ?? 0
+        // --- Root translation: hip motion mapped 1:1 to video (bounce + depth) ---
+        const deltaX = rootDX.get(frameIdx) ?? 0
+        const deltaY = rootDY.get(frameIdx) ?? 0
+        const deltaZ = rootDZ.get(frameIdx) ?? 0
         const rootPos = rootRest
-          ? new THREE.Vector3(rootRest.x + deltaX, rootRest.y + deltaY, rootRest.z || 0)
-          : new THREE.Vector3(deltaX, 1 + deltaY, 0)
+          ? new THREE.Vector3(
+              rootRest.x + deltaX,
+              rootRest.y + deltaY,
+              (rootRest.z || 0) + deltaZ,
+            )
+          : new THREE.Vector3(deltaX, 1 + deltaY, deltaZ)
 
         // --- Build hybrid landmarks: accurate 2D screen position (x,y) + damped world
         // depth (z). z is converted from metres to the screen-plane scale using the
@@ -2927,7 +3014,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           })
         }
 
-        newAnim.keyframes.set(fi, frameKeyframes)
+        newAnim.keyframes.set(frameIdx, frameKeyframes)
       })
 
       setAnimations(prev => new Map(prev).set(id, newAnim))
@@ -2935,7 +3022,8 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       setCurrentFrame(0)
       setShowVideoModal(false)
       setVideoFile(null)
-      showToast(`Imported ${frames.length} frames from video!`, 'success')
+      const durationSec = (totalAnimFrames / captureFps).toFixed(1)
+      showToast(`Imported ${frameEntries.length} keyframes · ${captureFps} fps · ${durationSec}s`, 'success')
     } catch (err: any) {
       console.error('Video capture error:', err)
       showToast('Error: ' + (err.message || 'Video processing failed'), 'error')
@@ -4060,8 +4148,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                   <p className="text-xs text-[#71717a] mt-2">
                     {
                       videoProgress < 5 ? 'Loading AI model...' :
-                      videoProgress < 90 ? 'Detecting poses frame by frame...' :
-                      'Smoothing and building keyframes...'
+                      videoProgress < 22 ? 'Pass 1/4: even frames forward...' :
+                      videoProgress < 44 ? 'Pass 2/4: even frames backward...' :
+                      videoProgress < 66 ? 'Pass 3/4: odd frames forward...' :
+                      videoProgress < 88 ? 'Pass 4/4: odd frames backward...' :
+                      'Building keyframes at video pace...'
                     }
                   </p>
                 </div>
