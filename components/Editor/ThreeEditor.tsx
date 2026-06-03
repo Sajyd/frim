@@ -2824,7 +2824,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // onto the captured skeleton (full stretch to dancer proportions). A blend keeps
       // the rig's proportions mostly intact while letting limbs visibly move/jump on
       // every axis instead of only rotating.
-      const POSITION_GAIN = 0.6
+      //
+      // The vertical axis gets a much higher gain than horizontal/depth: the user wants
+      // the model to follow the MediaPipe skeleton's up/down bounce closely (jumps,
+      // squats, limb raises), and Y is the most reliable axis from the 2D landmarks, so
+      // letting it nearly snap to the captured joint reproduces the bounciness without
+      // the depth-axis noise distorting proportions.
+      const POSITION_GAIN_XZ = 0.6
+      const POSITION_GAIN_Y = 0.95
 
       // Full orientation of the torso (pelvis) as a world-space quaternion, built from
       // an orthonormal basis: up = hips->shoulders, right = hip/shoulder line, forward =
@@ -2892,10 +2899,12 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // closely so the whole body moves up/down with the video rhythm. Z from world hips
       // adds toward/away depth for crossed legs and crouch.
       const ROOT_GAIN_X = 0.45
-      const ROOT_GAIN_Y = 0.95
+      const ROOT_GAIN_Y = 1.0
       const ROOT_GAIN_Z = 0.4
       const ROOT_DEADZONE_X = 0.015
-      const ROOT_DEADZONE_Y = 0.004
+      // Near-zero vertical deadzone: even small hip bounces should reach the rig so the
+      // body visibly bobs with the music instead of snapping flat between big moves.
+      const ROOT_DEADZONE_Y = 0.001
       const smoothOnTimeline = (values: Map<number, number>, win: number) => {
         const out = new Map<number, number>()
         for (const { frameIdx } of frameEntries) {
@@ -2931,7 +2940,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       for (const [frameIdx, v] of smoothOnTimeline(rawDX, 4)) {
         rootDX.set(frameIdx, shapeRoot(v, ROOT_GAIN_X, ROOT_DEADZONE_X))
       }
-      for (const [frameIdx, v] of smoothOnTimeline(rawDY, 2)) {
+      // Light smoothing on Y (win=1 → 3-frame average) preserves quick up/down bounce;
+      // a wider window (as on X) would average the bounciness out into a flat glide.
+      for (const [frameIdx, v] of smoothOnTimeline(rawDY, 1)) {
         rootDY.set(frameIdx, shapeRoot(v, ROOT_GAIN_Y, ROOT_DEADZONE_Y))
       }
       for (const [frameIdx, v] of smoothOnTimeline(rawDZ, 2)) {
@@ -3046,8 +3057,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 charPt(seg.start).sub(midHipChar).multiplyScalar(rigScale)
               )
               // Blend FK (keeps proportions) with the captured joint (adds real
-              // translation on every axis - vertical jumps, leg tucks, etc.).
-              resolvedWorldPos = fkWorldPos.clone().lerp(jointWorldPos, POSITION_GAIN)
+              // translation on every axis - vertical jumps, leg tucks, etc.). Y gets a
+              // higher gain so the rig faithfully follows the skeleton's bounce while
+              // X/Z stay restrained to protect the rig's proportions.
+              resolvedWorldPos = new THREE.Vector3(
+                THREE.MathUtils.lerp(fkWorldPos.x, jointWorldPos.x, POSITION_GAIN_XZ),
+                THREE.MathUtils.lerp(fkWorldPos.y, jointWorldPos.y, POSITION_GAIN_Y),
+                THREE.MathUtils.lerp(fkWorldPos.z, jointWorldPos.z, POSITION_GAIN_XZ),
+              )
             }
 
             // Convert the resolved world position back into parent-local space.
