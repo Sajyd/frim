@@ -87,6 +87,74 @@ interface HistoryState {
   boneStates: { [key: string]: { position: number[]; rotation: number[]; scale: number[] } }
 }
 
+function normBoneName(n: string) {
+  return n.toLowerCase().replace(/[^a-z0-9]/g, '')
+}
+
+/** Pick the shortest Mixamo/generic bone whose name ends with one of the aliases. */
+function matchNamedBone(order: string[], aliases: string[]): string | null {
+  const wants = aliases.map(normBoneName)
+  let best: string | null = null
+  let bestLen = Infinity
+  for (const boneName of order) {
+    const n = normBoneName(boneName)
+    if (/thumb|index|middle|ring|pinky|eye|end$/.test(n)) continue
+    for (const w of wants) {
+      if (n === w || n.endsWith(w)) {
+        if (n.length < bestLen) { best = boneName; bestLen = n.length }
+      }
+    }
+  }
+  return best
+}
+
+/**
+ * Analytic two-bone IK. Reaches `target` with rest lengths `len1`/`len2` and
+ * bends toward `pole` so elbows/knees come off the image plane (true depth).
+ */
+function solveTwoBoneIK(
+  origin: THREE.Vector3,
+  target: THREE.Vector3,
+  pole: THREE.Vector3,
+  len1: number,
+  len2: number,
+): { mid: THREE.Vector3; end: THREE.Vector3 } {
+  const axis = target.clone().sub(origin)
+  const distRaw = axis.length()
+  if (len1 < 1e-6 || len2 < 1e-6 || distRaw < 1e-8) {
+    return { mid: origin.clone(), end: target.clone() }
+  }
+  axis.multiplyScalar(1 / distRaw)
+  const maxLen = (len1 + len2) * 0.999
+  const minLen = Math.abs(len1 - len2) + 1e-4
+  const dist = THREE.MathUtils.clamp(distRaw, minLen, maxLen)
+  const end = origin.clone().add(axis.clone().multiplyScalar(dist))
+
+  let cosA = (len1 * len1 + dist * dist - len2 * len2) / (2 * len1 * dist)
+  cosA = THREE.MathUtils.clamp(cosA, -1, 1)
+  const a = Math.acos(cosA)
+
+  const toPole = pole.clone().sub(origin)
+  let n = new THREE.Vector3().crossVectors(axis, toPole)
+  if (n.lengthSq() < 1e-10) {
+    n.crossVectors(axis, Math.abs(axis.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0))
+  }
+  n.normalize()
+  const ortho = new THREE.Vector3().crossVectors(n, axis).normalize()
+
+  const mid = origin.clone()
+    .add(axis.clone().multiplyScalar(len1 * Math.cos(a)))
+    .add(ortho.clone().multiplyScalar(len1 * Math.sin(a)))
+  return { mid, end }
+}
+
+function slerpKeepHemisphere(a: THREE.Quaternion, b: THREE.Quaternion, t: number) {
+  const qa = a.clone()
+  const qb = b.clone()
+  if (qa.dot(qb) < 0) qb.negate()
+  return qa.slerp(qb, t)
+}
+
 export default function ThreeEditor({ projectName, onChange, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -2591,14 +2659,18 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // Child's rest direction in the bone's local frame (normalized). This is the
       // axis that gets aligned to the captured limb direction via setFromUnitVectors.
       let childPosDir = new THREE.Vector3(0, 1, 0)
+      let restLength = 0
       if (firstBoneChild) {
         const cp = firstBoneChild.position
         const len = Math.sqrt(cp.x * cp.x + cp.y * cp.y + cp.z * cp.z)
-        if (len > 1e-6) childPosDir = new THREE.Vector3(cp.x / len, cp.y / len, cp.z / len)
+        if (len > 1e-6) {
+          childPosDir = new THREE.Vector3(cp.x / len, cp.y / len, cp.z / len)
+          restLength = len
+        }
       }
       let parentName: string | null = null
       if (bone.parent && bones.has(bone.parent.name)) parentName = bone.parent.name
-      info.bones.set(bone.name, { parentName, childPosDir, restQuat })
+      info.bones.set(bone.name, { parentName, childPosDir, restQuat, restLength })
       info.order.push(bone.name)
     }
     return info
@@ -2733,21 +2805,108 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       }
 
-      // Light temporal smoothing on the video timeline (window = 3) to remove jitter
-      // without blurring fast motion or shifting the rhythm.
+      // Fill dropped frames by interpolating between the nearest valid detections so
+      // occlusions don't punch holes in the animation.
+      const lerpLmArr = (a: any[], b: any[], t: number) => a.map((p, k) => {
+        const q = b[k] || p
+        return {
+          x: p.x + (q.x - p.x) * t,
+          y: p.y + (q.y - p.y) * t,
+          z: (p.z || 0) + ((q.z || 0) - (p.z || 0)) * t,
+          visibility: (p.visibility ?? 1) + ((q.visibility ?? 1) - (p.visibility ?? 1)) * t,
+        }
+      })
+      {
+        let i = 0
+        while (i < totalAnimFrames) {
+          if (timeline[i]) { i++; continue }
+          let j = i
+          while (j < totalAnimFrames && !timeline[j]) j++
+          const prev = i > 0 ? timeline[i - 1] : null
+          const next = j < totalAnimFrames ? timeline[j] : null
+          for (let k = i; k < j; k++) {
+            if (prev && next) {
+              const t = (k - (i - 1)) / Math.max(1, j - (i - 1))
+              timeline[k] = { image: lerpLmArr(prev.image, next.image, t), world: lerpLmArr(prev.world, next.world, t) }
+            } else {
+              timeline[k] = prev || next
+            }
+          }
+          i = j
+        }
+      }
+
+      // Rebuild occluded joints (low visibility) from neighbouring confident frames
+      // instead of letting a bad 2D estimate flatten a limb.
+      const VIS_OK = 0.5
+      const lmCount = timeline.find(f => f)?.image.length ?? 33
+      for (const space of ['image', 'world'] as const) {
+        for (let k = 0; k < lmCount; k++) {
+          const good: number[] = []
+          for (let f = 0; f < totalAnimFrames; f++) {
+            const vis = timeline[f]?.[space][k]?.visibility ?? 0
+            if (timeline[f] && vis >= VIS_OK) good.push(f)
+          }
+          if (good.length === 0) continue
+          for (let f = 0; f < totalAnimFrames; f++) {
+            const cur = timeline[f]
+            if (!cur) continue
+            if ((cur[space][k]?.visibility ?? 0) >= VIS_OK) continue
+            let p = 0
+            while (p + 1 < good.length && good[p + 1] < f) p++
+            const a = good[p]
+            const b = good[Math.min(p + 1, good.length - 1)]
+            const src = cur[space]
+            if (a === b) {
+              src[k] = { ...timeline[a]![space][k], visibility: src[k]?.visibility ?? 0 }
+            } else {
+              const t = (f - a) / (b - a)
+              const pa = timeline[a]![space][k]
+              const pb = timeline[b]![space][k]
+              src[k] = {
+                x: pa.x + (pb.x - pa.x) * t,
+                y: pa.y + (pb.y - pa.y) * t,
+                z: (pa.z || 0) + ((pb.z || 0) - (pa.z || 0)) * t,
+                visibility: src[k]?.visibility ?? 0,
+              }
+            }
+          }
+        }
+      }
+
+      // Binomial [1,2,1] temporal filter: current frame stays dominant so fast motion
+      // isn't smeared, but single-frame jitter is still killed.
       const smoothedTimeline: LMSet[] = new Array(totalAnimFrames).fill(null)
+      const weightedAvg = (items: { arr: any[]; w: number }[]): any[] => {
+        const L = items[0].arr.length
+        const res: any[] = []
+        for (let k = 0; k < L; k++) {
+          let sx = 0, sy = 0, sz = 0, sw = 0, sv = 0
+          for (const { arr, w } of items) {
+            const l = arr[k]
+            const vis = l.visibility ?? 1
+            const ww = w * Math.max(0.01, vis)
+            sx += l.x * ww; sy += l.y * ww; sz += (l.z || 0) * ww
+            sw += ww; sv += vis * w
+          }
+          const wSum = items.reduce((s, it) => s + it.w, 0)
+          res.push({ x: sx / sw, y: sy / sw, z: sz / sw, visibility: sv / wSum })
+        }
+        return res
+      }
       for (let frameIdx = 0; frameIdx < totalAnimFrames; frameIdx++) {
         if (!timeline[frameIdx]) continue
-        const imgWin: any[][] = []
-        const worldWin: any[][] = []
+        const imgWin: { arr: any[]; w: number }[] = []
+        const worldWin: { arr: any[]; w: number }[] = []
         for (let d = -1; d <= 1; d++) {
           const j = frameIdx + d
           if (j >= 0 && j < totalAnimFrames && timeline[j]) {
-            imgWin.push(timeline[j]!.image)
-            worldWin.push(timeline[j]!.world)
+            const w = d === 0 ? 2 : 1
+            imgWin.push({ arr: timeline[j]!.image, w })
+            worldWin.push({ arr: timeline[j]!.world, w })
           }
         }
-        smoothedTimeline[frameIdx] = { image: avgLandmarks(imgWin), world: avgLandmarks(worldWin) }
+        smoothedTimeline[frameIdx] = { image: weightedAvg(imgWin), world: weightedAvg(worldWin) }
       }
 
       const frameEntries: { frameIdx: number; data: LMSet }[] = []
@@ -2755,7 +2914,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         const f = smoothedTimeline[frameIdx]
         if (!f) continue
         const avgVis = f.image.reduce((s, l) => s + (l.visibility ?? 1), 0) / f.image.length
-        if (avgVis >= 0.4) frameEntries.push({ frameIdx, data: f })
+        if (avgVis >= 0.35) frameEntries.push({ frameIdx, data: f })
       }
 
       if (frameEntries.length === 0) { showToast('No poses detected in video', 'warning'); return }
@@ -2795,15 +2954,12 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
       }
 
-      // Hybrid landmark space -> character space. We feed charVec "hybrid" points whose
-      // x/y come from the ACCURATE 2D image landmarks (aspect-corrected) and whose z is
-      // the world-space depth, already scaled to the screen plane and damped (see the
-      // per-frame hyb build below). MediaPipe image axes: +x right, +y down; Three.js
-      // character: +x right, +y up, +z toward viewer. So keep x, negate y and z (a 180°
-      // rotation about x, no mirroring). Driving x/y from the 2D landmarks means the
-      // model's silhouette matches the clean detected skeleton; world-z only adds a
-      // restrained sense of toward/away depth, which is the unreliable axis.
-      const Z_DEPTH = 0.72
+      // Hybrid landmark space -> character space. x/y come from the accurate 2D image
+      // landmarks (aspect-corrected) so the silhouette matches the video. z comes from
+      // MediaPipe world landmarks. MediaPipe image axes: +x right, +y down; Three.js:
+      // +x right, +y up, +z toward viewer. Keep x, negate y and z (180° about x).
+      // Torso/spine stay slightly damped on z; limbs use full world z via two-bone IK.
+      const Z_DEPTH_TORSO = 0.85
       const charVec = (a: Pt, b: Pt): THREE.Vector3 =>
         new THREE.Vector3((b.x - a.x), -(b.y - a.y), -(b.z - a.z))
 
@@ -2814,29 +2970,13 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         return v.divideScalar(len)
       }
 
-      // A single hybrid landmark -> character space (same axis convention as charVec:
-      // keep x, negate y and z). Used for per-bone positional retargeting so joints can
-      // translate, not just rotate.
       const charPt = (p: Pt): THREE.Vector3 => new THREE.Vector3(p.x, -p.y, -p.z)
 
-      // How strongly each bone's captured joint position drives its translation. 0 =
-      // pure rotation (bones keep rest length, old behaviour); 1 = joints snap exactly
-      // onto the captured skeleton (full stretch to dancer proportions). A blend keeps
-      // the rig's proportions mostly intact while letting limbs visibly move/jump on
-      // every axis instead of only rotating.
-      //
-      // The vertical axis gets a much higher gain than horizontal/depth: the user wants
-      // the model to follow the MediaPipe skeleton's up/down bounce closely (jumps,
-      // squats, limb raises), and Y is the most reliable axis from the 2D landmarks, so
-      // letting it nearly snap to the captured joint reproduces the bounciness without
-      // the depth-axis noise distorting proportions.
-      const POSITION_GAIN_XZ = 0.6
-      const POSITION_GAIN_Y = 0.95
+      // Non-IK bones still blend a little translation so spine/shoulders follow bounce.
+      // IK limbs keep rest lengths — depth comes from the 3D pole, not from stretching.
+      const POSITION_GAIN_XZ = 0.45
+      const POSITION_GAIN_Y = 0.85
 
-      // Full orientation of the torso (pelvis) as a world-space quaternion, built from
-      // an orthonormal basis: up = hips->shoulders, right = hip/shoulder line, forward =
-      // perpendicular to the torso plane. This is what lets the body actually FACE
-      // different directions (yaw/pitch/roll) instead of staying flat to the camera.
       const torsoQuatFromWorld = (lm: any[]): THREE.Quaternion | null => {
         const lHip = lm[23], rHip = lm[24], lSho = lm[11], rSho = lm[12]
         const midHip = mid(lHip, rHip)
@@ -2844,7 +2984,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         const up = charVec(midHip, midSho)
         if (up.lengthSq() < 1e-8) return null
         up.normalize()
-        // Average of hip line and shoulder line ~ body's left-right axis (more stable).
         const rightApprox = charVec(rHip, lHip).add(charVec(rSho, lSho))
         if (rightApprox.lengthSq() < 1e-8) return null
         rightApprox.normalize()
@@ -2864,6 +3003,35 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
         }
         return null
       }
+
+      type IkChain = {
+        upper: string
+        lower: string
+        poleLm: number
+        endLm: number
+      }
+      const ikChains: IkChain[] = []
+      const addChain = (upperAliases: string[], lowerAliases: string[], poleLm: number, endLm: number) => {
+        const upper = matchNamedBone(skeletonInfo.order, upperAliases)
+        const lower = matchNamedBone(skeletonInfo.order, lowerAliases)
+        if (upper && lower && upper !== lower) ikChains.push({ upper, lower, poleLm, endLm })
+      }
+      addChain(['LeftArm', 'LeftUpperArm'], ['LeftForeArm', 'LeftLowerArm'], 13, 15)
+      addChain(['RightArm', 'RightUpperArm'], ['RightForeArm', 'RightLowerArm'], 14, 16)
+      addChain(['LeftUpLeg', 'LeftUpperLeg', 'LeftThigh'], ['LeftLeg', 'LeftLowerLeg', 'LeftCalf', 'LeftShin'], 25, 27)
+      addChain(['RightUpLeg', 'RightUpperLeg', 'RightThigh'], ['RightLeg', 'RightLowerLeg', 'RightCalf', 'RightShin'], 26, 28)
+      const ikUpperOf = new Map<string, IkChain>()
+      const ikLowerOf = new Map<string, IkChain>()
+      for (const c of ikChains) {
+        ikUpperOf.set(c.upper, c)
+        ikLowerOf.set(c.lower, c)
+      }
+
+      const headBoneName = matchNamedBone(skeletonInfo.order, ['Head'])
+      const leftHandName = matchNamedBone(skeletonInfo.order, ['LeftHand'])
+      const rightHandName = matchNamedBone(skeletonInfo.order, ['RightHand'])
+      const leftFootName = matchNamedBone(skeletonInfo.order, ['LeftFoot'])
+      const rightFootName = matchNamedBone(skeletonInfo.order, ['RightFoot'])
 
       const rootBoneName = skeletonInfo.order[0]
       const rootRest = originalTransformsRef.current.get(rootBoneName)?.position
@@ -2900,7 +3068,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // adds toward/away depth for crossed legs and crouch.
       const ROOT_GAIN_X = 0.45
       const ROOT_GAIN_Y = 1.0
-      const ROOT_GAIN_Z = 0.4
+      const ROOT_GAIN_Z = 0.55
       const ROOT_DEADZONE_X = 0.015
       // Near-zero vertical deadzone: even small hip bounces should reach the rig so the
       // body visibly bobs with the music instead of snapping flat between big moves.
@@ -2952,15 +3120,17 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
       // Torso orientation is applied relative to the first valid frame so the rig's
       // bind/rest orientation is preserved and we only add the body's rotation.
       let refTorsoQuat: THREE.Quaternion | null = null
+      let refHeadQuat: THREE.Quaternion | null = null
 
       const tmpParentInv = new THREE.Quaternion()
       const tmpLocalDir = new THREE.Vector3()
+
+      const lmVis = (arr: any[], i: number) => arr[i]?.visibility ?? 0
 
       frameEntries.forEach(({ frameIdx, data: frame }) => {
         const img = frame!.image
         const wld = frame!.world
 
-        // --- Root translation: hip motion mapped 1:1 to video (bounce + depth) ---
         const deltaX = rootDX.get(frameIdx) ?? 0
         const deltaY = rootDY.get(frameIdx) ?? 0
         const deltaZ = rootDZ.get(frameIdx) ?? 0
@@ -2972,34 +3142,58 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             )
           : new THREE.Vector3(deltaX, 1 + deltaY, deltaZ)
 
-        // --- Build hybrid landmarks: accurate 2D screen position (x,y) + damped world
-        // depth (z). z is converted from metres to the screen-plane scale using the
-        // torso as a reference, then attenuated by Z_DEPTH so the unreliable depth axis
-        // can't crumple an otherwise-correct 2D pose. ---
+        // Hybrid: 2D silhouette xy + scaled world z (torso-damped). Used for spine,
+        // shoulders, and IK end-effector xy so the model still matches the video.
         const msI = mid(img[11], img[12]), mhI = mid(img[23], img[24])
         const imgTorso = Math.hypot((msI.x - mhI.x) * aspect, msI.y - mhI.y) || 1e-6
         const msW = mid(wld[11], wld[12]), mhW = mid(wld[23], wld[24])
         const worldTorso = Math.hypot(msW.x - mhW.x, msW.y - mhW.y, msW.z - mhW.z) || 1e-6
-        const zScale = (imgTorso / worldTorso) * Z_DEPTH
+        const zScale = (imgTorso / worldTorso) * Z_DEPTH_TORSO
         const hyb: Pt[] = img.map((l: any, k: number) => ({
           x: l.x * aspect, y: l.y, z: (wld[k]?.z ?? 0) * zScale,
         }))
+        // Full metric world landmarks in character space (undamped z) for IK poles.
+        const w3d: Pt[] = wld.map((l: any) => ({ x: l.x, y: l.y, z: l.z || 0 }))
 
-        // --- Bone orientation + positional retargeting from hybrid landmarks ---
         const mapping = getBoneMapping(hyb)
         const worldQuats: Record<string, THREE.Quaternion> = {}
-        // Track each bone's resolved WORLD position so children can convert their own
-        // world-space targets back into local (parent-relative) space.
         const worldPositions: Record<string, THREE.Vector3> = {}
 
-        // Scale that maps hybrid-landmark units into rig units, calibrated so the
-        // captured torso (hip->shoulder) matches the rig's spine length.
         const midHipChar = charPt(mid(hyb[23], hyb[24]))
         const midShoulderChar = charPt(mid(hyb[11], hyb[12]))
         const hybTorso = midShoulderChar.distanceTo(midHipChar) || 1e-6
         const rigScale = skeletonInfo.spineLength / hybTorso
+        const worldScale = skeletonInfo.spineLength / worldTorso
+
+        const jointFromHyb = (idx: number) =>
+          rootPos.clone().add(charPt(hyb[idx]).sub(midHipChar).multiplyScalar(rigScale))
+        const jointFromWorld = (idx: number) =>
+          rootPos.clone().add(charPt(w3d[idx]).multiplyScalar(worldScale))
+        // End effectors: video xy (silhouette) + nearly-full world z (depth).
+        const ikTarget = (idx: number) => {
+          const hy = jointFromHyb(idx)
+          const wr = jointFromWorld(idx)
+          return new THREE.Vector3(hy.x, hy.y, THREE.MathUtils.lerp(hy.z, wr.z, 0.9))
+        }
+        const ikPole = (idx: number) => {
+          const vis = Math.max(lmVis(wld, idx), lmVis(img, idx))
+          return vis >= 0.35 ? jointFromWorld(idx) : jointFromHyb(idx)
+        }
+
+        const alignBone = (
+          restDir: THREE.Vector3,
+          targetWorldDir: THREE.Vector3,
+          parentWorldQ: THREE.Quaternion,
+        ) => {
+          tmpParentInv.copy(parentWorldQ).invert()
+          tmpLocalDir.copy(targetWorldDir).applyQuaternion(tmpParentInv)
+          if (tmpLocalDir.lengthSq() < 1e-10) return null
+          tmpLocalDir.normalize()
+          return new THREE.Quaternion().setFromUnitVectors(restDir, tmpLocalDir)
+        }
 
         const frameKeyframes = new Map<string, BoneKeyframe>()
+        const solvedLower = new Set<string>()
 
         for (const boneName of skeletonInfo.order) {
           const bi = skeletonInfo.bones.get(boneName)
@@ -3020,8 +3214,6 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           let localPos = new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z)
 
           if (isRoot) {
-            // Root/pelvis: full 3D orientation from the torso basis, applied relative to
-            // the first frame so the rig's rest orientation is the baseline.
             const qTorso = torsoQuatFromWorld(hyb)
             if (qTorso) {
               if (!refTorsoQuat) refTorsoQuat = qTorso.clone()
@@ -3030,50 +3222,131 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
             }
             localPos = rootPos.clone()
             worldPositions[boneName] = rootPos.clone()
-          } else {
-            const seg = findSegment(mapping, boneName)
-            if (seg) {
-              const targetWorldDir = dirFromSeg(seg.start, seg.end)
-              if (targetWorldDir) {
-                // Bring the world target into the bone's parent-local frame, then rotate
-                // the bone's rest child-direction onto it (shortest-arc rotation).
+            worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
+            frameKeyframes.set(boneName, {
+              position: localPos,
+              rotation: localQuat,
+              scale: new THREE.Vector3(1, 1, 1),
+            })
+            continue
+          }
+
+          const chain = ikUpperOf.get(boneName)
+          if (chain) {
+            const lowerBi = skeletonInfo.bones.get(chain.lower)
+            const len1 = bi.restLength || skeletonInfo.spineLength * 0.22
+            const len2 = lowerBi?.restLength || skeletonInfo.spineLength * 0.2
+            const origin = parentWorldPos.clone().add(localPos.clone().applyQuaternion(parentWorldQ))
+            const target = ikTarget(chain.endLm)
+            const pole = ikPole(chain.poleLm)
+            const solved = solveTwoBoneIK(origin, target, pole, len1, len2)
+
+            const upperDir = solved.mid.clone().sub(origin)
+            const upperQ = alignBone(bi.childPosDir, upperDir, parentWorldQ)
+            if (upperQ) localQuat = upperQ
+
+            worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
+            worldPositions[boneName] = origin
+            frameKeyframes.set(boneName, {
+              position: localPos,
+              rotation: localQuat,
+              scale: new THREE.Vector3(1, 1, 1),
+            })
+
+            if (lowerBi) {
+              const lowerBone = bones.get(chain.lower)
+              const lowerRest = originalTransformsRef.current.get(chain.lower)?.position
+                ?? lowerBone?.position
+              const lowerLocalPos = lowerRest
+                ? new THREE.Vector3(lowerRest.x, lowerRest.y, lowerRest.z)
+                : new THREE.Vector3(0, len1, 0)
+              const elbowWorld = origin.clone().add(lowerLocalPos.clone().applyQuaternion(worldQuats[boneName]))
+              const lowerDir = target.clone().sub(elbowWorld)
+              let lowerLocalQ: THREE.Quaternion = lowerBi.restQuat.clone()
+              const lq = alignBone(lowerBi.childPosDir, lowerDir, worldQuats[boneName])
+              if (lq) lowerLocalQ = lq
+              worldQuats[chain.lower] = worldQuats[boneName].clone().multiply(lowerLocalQ)
+              worldPositions[chain.lower] = elbowWorld
+              frameKeyframes.set(chain.lower, {
+                position: lowerLocalPos,
+                rotation: lowerLocalQ,
+                scale: new THREE.Vector3(1, 1, 1),
+              })
+              solvedLower.add(chain.lower)
+            }
+            continue
+          }
+
+          if (solvedLower.has(boneName)) continue
+
+          const seg = findSegment(mapping, boneName)
+          if (seg) {
+            let targetWorldDir = dirFromSeg(seg.start, seg.end)
+
+            // Head: ears + nose give yaw/pitch instead of a single nose point.
+            if (boneName === headBoneName && img[7] && img[8] && img[0]) {
+              const midEar = mid(hyb[7], hyb[8])
+              const fwd = charVec(midEar, hyb[0])
+              const up = charVec(mid(hyb[23], hyb[24]), mid(hyb[11], hyb[12]))
+              if (fwd.lengthSq() > 1e-8 && up.lengthSq() > 1e-8) {
+                fwd.normalize()
+                up.normalize()
+                const right = new THREE.Vector3().crossVectors(up, fwd).normalize()
+                const upOrtho = new THREE.Vector3().crossVectors(fwd, right).normalize()
+                const qHead = new THREE.Quaternion().setFromRotationMatrix(
+                  new THREE.Matrix4().makeBasis(right, upOrtho, fwd)
+                )
+                if (!refHeadQuat) refHeadQuat = qHead.clone()
+                const delta = qHead.clone().multiply(refHeadQuat.clone().invert())
                 tmpParentInv.copy(parentWorldQ).invert()
-                tmpLocalDir.copy(targetWorldDir).applyQuaternion(tmpParentInv)
-                localQuat = new THREE.Quaternion().setFromUnitVectors(bi.childPosDir, tmpLocalDir)
+                localQuat = tmpParentInv.clone().multiply(delta).multiply(parentWorldQ).multiply(bi.restQuat)
+                targetWorldDir = null
               }
             }
 
-            // Where rotation alone (rest bone length) would place this bone's head.
-            const fkWorldPos = parentWorldPos.clone().add(
-              localPos.clone().applyQuaternion(parentWorldQ)
-            )
-
-            // Where the captured skeleton places this joint: hip-relative landmark
-            // offset, scaled to rig units, added onto the moving root. seg.start is the
-            // bone's head joint (e.g. elbow for the forearm).
-            let resolvedWorldPos = fkWorldPos
-            if (seg) {
-              const jointWorldPos = rootPos.clone().add(
-                charPt(seg.start).sub(midHipChar).multiplyScalar(rigScale)
-              )
-              // Blend FK (keeps proportions) with the captured joint (adds real
-              // translation on every axis - vertical jumps, leg tucks, etc.). Y gets a
-              // higher gain so the rig faithfully follows the skeleton's bounce while
-              // X/Z stay restrained to protect the rig's proportions.
-              resolvedWorldPos = new THREE.Vector3(
-                THREE.MathUtils.lerp(fkWorldPos.x, jointWorldPos.x, POSITION_GAIN_XZ),
-                THREE.MathUtils.lerp(fkWorldPos.y, jointWorldPos.y, POSITION_GAIN_Y),
-                THREE.MathUtils.lerp(fkWorldPos.z, jointWorldPos.z, POSITION_GAIN_XZ),
-              )
+            // Hands: aim at the palm centre (index/pinky), not just the index tip.
+            if (boneName === leftHandName && hyb[15] && hyb[17] && hyb[19]) {
+              const palm = mid(hyb[17], hyb[19])
+              targetWorldDir = dirFromSeg(hyb[15], palm)
+            }
+            if (boneName === rightHandName && hyb[16] && hyb[18] && hyb[20]) {
+              const palm = mid(hyb[18], hyb[20])
+              targetWorldDir = dirFromSeg(hyb[16], palm)
+            }
+            // Feet: heel → toe so the sole follows the captured foot, not just the ankle.
+            if (boneName === leftFootName && hyb[29] && hyb[31]) {
+              targetWorldDir = dirFromSeg(hyb[29], hyb[31]) || targetWorldDir
+            }
+            if (boneName === rightFootName && hyb[30] && hyb[32]) {
+              targetWorldDir = dirFromSeg(hyb[30], hyb[32]) || targetWorldDir
             }
 
-            // Convert the resolved world position back into parent-local space.
-            localPos = resolvedWorldPos.clone().sub(parentWorldPos).applyQuaternion(
-              parentWorldQ.clone().invert()
-            )
-            worldPositions[boneName] = resolvedWorldPos
+            if (targetWorldDir) {
+              const q = alignBone(bi.childPosDir, targetWorldDir, parentWorldQ)
+              if (q) localQuat = q
+            }
           }
 
+          const fkWorldPos = parentWorldPos.clone().add(
+            localPos.clone().applyQuaternion(parentWorldQ)
+          )
+
+          let resolvedWorldPos = fkWorldPos
+          if (seg) {
+            const jointWorldPos = rootPos.clone().add(
+              charPt(seg.start).sub(midHipChar).multiplyScalar(rigScale)
+            )
+            resolvedWorldPos = new THREE.Vector3(
+              THREE.MathUtils.lerp(fkWorldPos.x, jointWorldPos.x, POSITION_GAIN_XZ),
+              THREE.MathUtils.lerp(fkWorldPos.y, jointWorldPos.y, POSITION_GAIN_Y),
+              THREE.MathUtils.lerp(fkWorldPos.z, jointWorldPos.z, POSITION_GAIN_XZ),
+            )
+          }
+
+          localPos = resolvedWorldPos.clone().sub(parentWorldPos).applyQuaternion(
+            parentWorldQ.clone().invert()
+          )
+          worldPositions[boneName] = resolvedWorldPos
           worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
 
           frameKeyframes.set(boneName, {
@@ -3085,6 +3358,46 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
         newAnim.keyframes.set(frameIdx, frameKeyframes)
       })
+
+      // Quaternion/position temporal filter on the finished animation. Landmark
+      // averaging can still leave bone-level jitter; a 3-tap slerp (current-frame
+      // weighted) kills that without flattening IK depth or bounce.
+      {
+        const frames = [...newAnim.keyframes.keys()].sort((a, b) => a - b)
+        if (frames.length >= 3) {
+          const orig = frames.map(f => {
+            const src = newAnim.keyframes.get(f)!
+            const copy = new Map<string, BoneKeyframe>()
+            src.forEach((kf, name) => {
+              copy.set(name, {
+                position: kf.position.clone(),
+                rotation: kf.rotation.clone(),
+                scale: kf.scale.clone(),
+              })
+            })
+            return copy
+          })
+          for (let i = 0; i < frames.length; i++) {
+            const prev = orig[Math.max(0, i - 1)]
+            const cur = orig[i]
+            const next = orig[Math.min(orig.length - 1, i + 1)]
+            const out = newAnim.keyframes.get(frames[i])!
+            out.forEach((kf, name) => {
+              const p = prev.get(name)
+              const c = cur.get(name)
+              const n = next.get(name)
+              if (!p || !c || !n) return
+              const midQ = slerpKeepHemisphere(p.rotation, n.rotation, 0.5)
+              kf.rotation.copy(slerpKeepHemisphere(midQ, c.rotation, 0.7))
+              kf.position.set(
+                p.position.x * 0.15 + c.position.x * 0.7 + n.position.x * 0.15,
+                p.position.y * 0.1 + c.position.y * 0.8 + n.position.y * 0.1,
+                p.position.z * 0.15 + c.position.z * 0.7 + n.position.z * 0.15,
+              )
+            })
+          }
+        }
+      }
 
       setAnimations(prev => new Map(prev).set(id, newAnim))
       setCurrentAnimationId(id)
