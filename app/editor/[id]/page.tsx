@@ -42,6 +42,12 @@ interface Subscription {
   limits: {
     animationsPerProject: number | 'unlimited'
     videoAnalysis: boolean
+    gpuCapture?: boolean
+    gpuCapturesPerMonth?: number
+  }
+  usage?: {
+    gpuCapturesRemaining?: number
+    gpuCapturesLimit?: number
   }
 }
 
@@ -231,7 +237,7 @@ export default function EditorPage() {
     )
   }
 
-  const isPro = subscription?.plan === 'pro'
+  const isPaid = subscription?.plan === 'pro' || subscription?.plan === 'studio'
   const animationLimit = subscription?.limits?.animationsPerProject === 'unlimited' 
     ? Infinity 
     : (subscription?.limits?.animationsPerProject || 2)
@@ -268,7 +274,7 @@ export default function EditorPage() {
           {hasUnsavedChanges && (
             <span className="text-xs text-yellow-500">• Unsaved</span>
           )}
-          {!isPro && (
+          {!isPaid && (
             <Link
               href="/pricing"
               className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors"
@@ -326,8 +332,11 @@ export default function EditorPage() {
             modelName: project.modelName
           } : undefined}
           animationLimit={animationLimit}
-          isPro={isPro}
+          isPro={isPaid}
           canUseVideoAnalysis={subscription?.limits?.videoAnalysis || false}
+          canUseGpuCapture={subscription?.limits?.gpuCapture || false}
+          gpuCapturesRemaining={subscription?.usage?.gpuCapturesRemaining ?? 0}
+          gpuCapturesLimit={subscription?.limits?.gpuCapturesPerMonth ?? 0}
         />
       </div>
 

@@ -27,6 +27,9 @@ interface Subscription {
     projects: number
     projectLimit: number | 'unlimited'
     canCreateProject: boolean
+    gpuCapturesUsed?: number
+    gpuCapturesLimit?: number
+    gpuCapturesRemaining?: number
   }
 }
 
@@ -203,7 +206,9 @@ function DashboardContent() {
     )
   }
 
-  const isPro = subscription?.plan === 'pro'
+  const isPaid = subscription?.plan === 'pro' || subscription?.plan === 'studio'
+  const isStudio = subscription?.plan === 'studio'
+  const planLabel = isStudio ? 'Studio' : isPaid ? 'Pro' : 'Free plan'
 
   return (
     <div className="min-h-screen bg-dark-950">
@@ -213,7 +218,7 @@ function DashboardContent() {
           <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
             <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
           </svg>
-          Welcome to Pro! Your subscription is now active.
+          Welcome! Your subscription is now active.
         </div>
       )}
 
@@ -245,7 +250,7 @@ function DashboardContent() {
               </svg>
               Discord
             </a>
-            {!isPro && (
+            {!isPaid && (
               <Link
                 href="/pricing"
                 className="hidden sm:flex items-center gap-2 text-sm text-frim-400 hover:text-frim-300 transition-colors"
@@ -253,7 +258,15 @@ function DashboardContent() {
                 <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                Upgrade to Pro
+                Upgrade
+              </Link>
+            )}
+            {subscription?.plan === 'pro' && (
+              <Link
+                href="/pricing"
+                className="hidden sm:flex items-center gap-2 text-sm text-frim-400 hover:text-frim-300 transition-colors"
+              >
+                Upgrade to Studio
               </Link>
             )}
             <button
@@ -279,10 +292,10 @@ function DashboardContent() {
               <div className="hidden sm:block">
                 <p className="text-sm font-medium">{session?.user?.name || session?.user?.email}</p>
                 <p className="text-xs text-dark-500 flex items-center gap-1">
-                  {isPro ? (
+                  {isPaid ? (
                     <>
                       <span className="w-1.5 h-1.5 rounded-full bg-frim-400" />
-                      Pro
+                      {planLabel}
                     </>
                   ) : (
                     'Free plan'
@@ -325,7 +338,7 @@ function DashboardContent() {
                     </span>
                   </p>
                 </div>
-                {!isPro && subscription.usage.projects >= 2 && (
+                {!isPaid && subscription.usage.projects >= 2 && (
                   <Link
                     href="/pricing"
                     className="text-xs bg-frim-500/10 text-frim-400 px-3 py-1.5 rounded-lg hover:bg-frim-500/20 transition-colors"
@@ -333,7 +346,7 @@ function DashboardContent() {
                     Need more?
                   </Link>
                 )}
-                {isPro && (
+                {isPaid && (
                   <button
                     onClick={() => setShowSubscriptionModal(true)}
                     className="text-xs text-dark-400 hover:text-dark-200 px-3 py-1.5 rounded-lg hover:bg-dark-800 transition-colors"
@@ -533,7 +546,7 @@ function DashboardContent() {
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
-                Upgrade to Pro - $12/month
+                View plans
               </Link>
               <button
                 onClick={() => setShowUpgradeModal(false)}
@@ -570,8 +583,8 @@ function DashboardContent() {
                   </svg>
                 </div>
                 <div>
-                  <p className="font-semibold text-frim-400">Pro Plan</p>
-                  <p className="text-sm text-dark-500">$12/month</p>
+                  <p className="font-semibold text-frim-400">{isStudio ? 'Studio Plan' : 'Pro Plan'}</p>
+                  <p className="text-sm text-dark-500">{isStudio ? '$39/month' : '$12/month'}</p>
                 </div>
               </div>
               {subscription?.currentPeriodEnd && (
@@ -581,6 +594,11 @@ function DashboardContent() {
                     day: 'numeric', 
                     year: 'numeric' 
                   })}
+                </p>
+              )}
+              {isStudio && (
+                <p className="text-sm text-dark-400 mt-2">
+                  GPU captures: {subscription?.usage.gpuCapturesUsed ?? 0} / {subscription?.usage.gpuCapturesLimit ?? 40} this period
                 </p>
               )}
             </div>

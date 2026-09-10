@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { headers } from 'next/headers'
-import { stripe } from '@/lib/stripe'
+import { stripe, planFromPriceId, isPaidPlan } from '@/lib/stripe'
 import prisma from '@/lib/prisma'
 import Stripe from 'stripe'
 
-// Allow raw body for webhook verification
 export const dynamic = 'force-dynamic'
+
+function priceIdFromSubscription(subscription: Stripe.Subscription) {
+  return subscription.items.data[0]?.price?.id ?? null
+}
 
 export async function POST(request: NextRequest) {
   const body = await request.text()
@@ -37,32 +40,29 @@ export async function POST(request: NextRequest) {
       case 'checkout.session.completed': {
         const session = event.data.object as Stripe.Checkout.Session
         console.log('Checkout session completed:', session.id, 'Mode:', session.mode)
-        
+
         if (session.mode === 'subscription' && session.subscription) {
-          const subscriptionId = typeof session.subscription === 'string' 
-            ? session.subscription 
+          const subscriptionId = typeof session.subscription === 'string'
+            ? session.subscription
             : session.subscription.id
-          
+
           const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-          
-          console.log('Subscription retrieved:', subscription.id, 'Status:', subscription.status)
-          console.log('Customer ID:', session.customer)
-          
-          // Get current period end from subscription
           const periodEnd = (subscription as any).current_period_end
-          
-          // Update user with subscription details
+          const priceId = priceIdFromSubscription(subscription)
+          const plan = planFromPriceId(priceId)
+
           const updatedUser = await prisma.user.update({
             where: { stripeCustomerId: session.customer as string },
             data: {
-              plan: 'pro',
+              plan,
               stripeSubscriptionId: subscription.id,
-              stripePriceId: subscription.items.data[0].price.id,
+              stripePriceId: priceId,
               stripeCurrentPeriodEnd: periodEnd ? new Date(periodEnd * 1000) : null,
+              gpuCapturesUsed: 0,
             },
           })
-          
-          console.log('User updated to pro:', updatedUser.id, updatedUser.email)
+
+          console.log('User updated to', plan, updatedUser.id, updatedUser.email)
         }
         break
       }
@@ -70,15 +70,18 @@ export async function POST(request: NextRequest) {
       case 'customer.subscription.updated': {
         const subscription = event.data.object as Stripe.Subscription
         console.log('Subscription updated:', subscription.id, 'Status:', subscription.status)
-        
-        // Get current period end from subscription
+
         const periodEnd = (subscription as any).current_period_end
-        
+        const priceId = priceIdFromSubscription(subscription)
+        const plan = subscription.status === 'active' || subscription.status === 'trialing'
+          ? planFromPriceId(priceId)
+          : 'free'
+
         await prisma.user.update({
           where: { stripeCustomerId: subscription.customer as string },
           data: {
-            plan: subscription.status === 'active' ? 'pro' : 'free',
-            stripePriceId: subscription.items.data[0].price.id,
+            plan,
+            stripePriceId: priceId,
             stripeCurrentPeriodEnd: periodEnd ? new Date(periodEnd * 1000) : null,
           },
         })
@@ -88,7 +91,7 @@ export async function POST(request: NextRequest) {
       case 'customer.subscription.deleted': {
         const subscription = event.data.object as Stripe.Subscription
         console.log('Subscription deleted:', subscription.id)
-        
+
         await prisma.user.update({
           where: { stripeCustomerId: subscription.customer as string },
           data: {
@@ -96,6 +99,7 @@ export async function POST(request: NextRequest) {
             stripeSubscriptionId: null,
             stripePriceId: null,
             stripeCurrentPeriodEnd: null,
+            gpuCapturesUsed: 0,
           },
         })
         break
@@ -104,25 +108,27 @@ export async function POST(request: NextRequest) {
       case 'invoice.payment_succeeded': {
         const invoice = event.data.object as Stripe.Invoice
         console.log('Invoice payment succeeded:', invoice.id)
-        
-        // Get subscription from the invoice - handle both string and object
+
         const invoiceSubscription = (invoice as any).subscription
-        
+
         if (invoiceSubscription) {
-          const subscriptionId = typeof invoiceSubscription === 'string' 
-            ? invoiceSubscription 
+          const subscriptionId = typeof invoiceSubscription === 'string'
+            ? invoiceSubscription
             : invoiceSubscription.id
-          
+
           const subscription = await stripe.subscriptions.retrieve(subscriptionId)
-          
-          // Get current period end from subscription
           const periodEnd = (subscription as any).current_period_end
-          
+          const priceId = priceIdFromSubscription(subscription)
+          const plan = planFromPriceId(priceId)
+          const billingReason = (invoice as any).billing_reason as string | undefined
+          const resetQuota = billingReason === 'subscription_cycle' || billingReason === 'subscription_create'
+
           await prisma.user.update({
             where: { stripeCustomerId: invoice.customer as string },
             data: {
-              plan: 'pro',
+              plan: isPaidPlan(plan) ? plan : 'pro',
               stripeCurrentPeriodEnd: periodEnd ? new Date(periodEnd * 1000) : null,
+              ...(resetQuota ? { gpuCapturesUsed: 0 } : {}),
             },
           })
         }
@@ -139,9 +145,6 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({ received: true })
   } catch (error) {
     console.error('Webhook handler error:', error)
-    return NextResponse.json(
-      { error: 'Webhook handler failed' },
-      { status: 500 }
-    )
+    return NextResponse.json({ error: 'Webhook handler failed' }, { status: 500 })
   }
 }

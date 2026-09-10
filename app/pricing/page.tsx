@@ -22,11 +22,12 @@ const plans = [
     ],
     notIncluded: [
       'AI Video Motion Capture',
-      'Priority cloud saves',
+      'Studio 3D GPU Capture',
       'Priority support',
     ],
     cta: 'Get Started',
     popular: false,
+    highlight: null as string | null,
   },
   {
     id: 'pro',
@@ -39,13 +40,36 @@ const plans = [
       'Unlimited animations per project',
       'GLB/GLTF import & export',
       'Advanced animation tools',
-      'AI Video Motion Capture',
+      'AI Video Motion Capture (Fast)',
       'Priority cloud saves',
       'Priority support',
     ],
-    notIncluded: [],
+    notIncluded: [
+      'Studio 3D GPU Capture',
+    ],
     cta: 'Upgrade to Pro',
     popular: true,
+    highlight: null as string | null,
+  },
+  {
+    id: 'studio',
+    name: 'Studio',
+    description: 'GPU 3D capture for production',
+    price: 39,
+    period: '/month',
+    features: [
+      'Everything in Pro',
+      'Studio 3D GPU motion capture',
+      'True 3D rotations on your GLB',
+      '40 GPU captures per month',
+      'Unlimited projects & animations',
+      'Priority cloud saves',
+      'Priority support',
+    ],
+    notIncluded: [] as string[],
+    cta: 'Upgrade to Studio',
+    popular: false,
+    highlight: '3D GPU',
   },
 ]
 
@@ -111,6 +135,7 @@ function PricingContent() {
       const res = await fetch('/api/stripe/checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ planId }),
       })
 
       const data = await res.json()
@@ -219,14 +244,16 @@ function PricingContent() {
 
       {/* Pricing Cards */}
       <section className="relative pb-24 px-6">
-        <div className="max-w-5xl mx-auto">
-          <div className="grid md:grid-cols-2 gap-8 max-w-4xl mx-auto">
+        <div className="max-w-6xl mx-auto">
+          <div className="grid md:grid-cols-3 gap-6">
             {plans.map((plan) => (
               <div
                 key={plan.id}
                 className={`relative bg-dark-900 border rounded-2xl p-8 ${
                   plan.popular
                     ? 'border-frim-500 shadow-xl shadow-frim-500/10'
+                    : plan.id === 'studio'
+                    ? 'border-emerald-500/50 shadow-xl shadow-emerald-500/10'
                     : 'border-dark-800'
                 }`}
               >
@@ -234,6 +261,13 @@ function PricingContent() {
                   <div className="absolute -top-4 left-1/2 -translate-x-1/2">
                     <span className="bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-4 py-1.5 rounded-full text-sm font-semibold">
                       Most Popular
+                    </span>
+                  </div>
+                )}
+                {plan.highlight && !plan.popular && (
+                  <div className="absolute -top-4 left-1/2 -translate-x-1/2">
+                    <span className="bg-gradient-to-r from-emerald-400 to-frim-400 text-dark-950 px-4 py-1.5 rounded-full text-sm font-semibold">
+                      {plan.highlight}
                     </span>
                   </div>
                 )}
@@ -255,7 +289,7 @@ function PricingContent() {
                     <div className="bg-frim-500/10 border border-frim-500/30 text-frim-400 px-4 py-3 rounded-xl text-center font-medium">
                       ✓ Current Plan
                     </div>
-                    {plan.id === 'pro' && (
+                    {plan.id !== 'free' && (
                       <button
                         onClick={handleManageBilling}
                         disabled={loading === 'portal'}
@@ -265,12 +299,18 @@ function PricingContent() {
                       </button>
                     )}
                   </div>
+                ) : currentPlan === 'studio' && plan.id === 'pro' ? (
+                  <div className="mb-8">
+                    <div className="bg-dark-800 border border-dark-700 text-dark-400 px-4 py-3 rounded-xl text-center font-medium">
+                      Included in Studio
+                    </div>
+                  </div>
                 ) : (
                   <button
                     onClick={() => handleUpgrade(plan.id)}
                     disabled={loading === plan.id}
                     className={`w-full py-3.5 rounded-xl font-semibold mb-8 transition-all ${
-                      plan.popular
+                      plan.popular || plan.id === 'studio'
                         ? 'bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 hover:shadow-lg hover:shadow-frim-500/25'
                         : 'bg-dark-800 text-dark-200 hover:bg-dark-700'
                     } disabled:opacity-50`}
@@ -280,6 +320,8 @@ function PricingContent() {
                         <span className="spinner w-4 h-4" />
                         Processing...
                       </span>
+                    ) : currentPlan === 'pro' && plan.id === 'studio' ? (
+                      'Upgrade to Studio'
                     ) : (
                       plan.cta
                     )}
@@ -322,6 +364,10 @@ function PricingContent() {
           </h2>
           <div className="space-y-6">
             {[
+              {
+                q: 'What is Studio 3D capture?',
+                a: 'Studio adds GPU motion capture: a 3D body solver that retargets onto the GLB you load in the editor. Pro includes unlimited Fast (in-browser) capture. Studio includes 40 GPU jobs per month.',
+              },
               {
                 q: 'Can I cancel anytime?',
                 a: 'Yes! You can cancel your subscription at any time. You\'ll continue to have access to Pro features until the end of your billing period.',

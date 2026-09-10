@@ -48,11 +48,12 @@ model User {
   updatedAt     DateTime  @updatedAt
   
   // Subscription fields
-  plan              String    @default("free") // free, pro
+  plan              String    @default("free") // free, pro, studio
   stripeCustomerId  String?   @unique
   stripeSubscriptionId String?
   stripePriceId     String?
   stripeCurrentPeriodEnd DateTime?
+  gpuCapturesUsed   Int       @default(0)
 }
 
 model VerificationToken {

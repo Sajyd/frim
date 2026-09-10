@@ -59,6 +59,9 @@ interface EditorProps {
   animationLimit?: number
   isPro?: boolean
   canUseVideoAnalysis?: boolean
+  canUseGpuCapture?: boolean
+  gpuCapturesRemaining?: number
+  gpuCapturesLimit?: number
 }
 
 interface ProjectData {
@@ -155,7 +158,18 @@ function slerpKeepHemisphere(a: THREE.Quaternion, b: THREE.Quaternion, t: number
   return qa.slerp(qb, t)
 }
 
-export default function ThreeEditor({ projectName, onChange, saving, initialData, animationLimit = 2, isPro = false, canUseVideoAnalysis = false }: EditorProps) {
+export default function ThreeEditor({
+  projectName,
+  onChange,
+  saving,
+  initialData,
+  animationLimit = 2,
+  isPro = false,
+  canUseVideoAnalysis = false,
+  canUseGpuCapture = false,
+  gpuCapturesRemaining = 0,
+  gpuCapturesLimit = 0,
+}: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
   
@@ -207,13 +221,14 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
   // Upgrade modal
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
-  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis'>('animation_limit')
+  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis' | 'gpu_capture'>('animation_limit')
 
   // Video analysis modal
   const [showVideoModal, setShowVideoModal] = useState(false)
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const [videoAnalyzing, setVideoAnalyzing] = useState(false)
   const [videoProgress, setVideoProgress] = useState(0)
+  const [captureEngine, setCaptureEngine] = useState<'fast' | 'studio'>('fast')
   const videoInputRef = useRef<HTMLInputElement>(null)
 
   // GLB export modal
@@ -3415,6 +3430,43 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
     }
   }, [videoFile, bones, analyzeSkeletonHierarchy, loadPoseModel, showToast, setAnimations, setCurrentAnimationId, setCurrentFrame])
 
+  const handleProcessCapture = useCallback(async () => {
+    if (captureEngine === 'studio') {
+      if (!canUseGpuCapture) {
+        setUpgradeModalReason('gpu_capture')
+        setShowUpgradeModal(true)
+        return
+      }
+      try {
+        const res = await fetch('/api/capture/gpu', { method: 'POST' })
+        const data = await res.json().catch(() => ({}))
+        if (res.status === 403) {
+          setUpgradeModalReason('gpu_capture')
+          setShowUpgradeModal(true)
+          return
+        }
+        if (res.status === 429) {
+          showToast(data.error || 'GPU capture quota reached this period', 'warning')
+          return
+        }
+        if (res.status === 503) {
+          showToast('GPU worker is connecting — running Fast capture on your model', 'info')
+          await processVideoCapture()
+          return
+        }
+        if (!res.ok) {
+          showToast(data.error || 'Studio 3D capture failed', 'error')
+          return
+        }
+        showToast('GPU capture job accepted. Worker integration is next.', 'info')
+      } catch {
+        showToast('Studio 3D capture failed', 'error')
+      }
+      return
+    }
+    await processVideoCapture()
+  }, [captureEngine, canUseGpuCapture, processVideoCapture, showToast])
+
   // TEMPORARY (testing): live MediaPipe skeleton overlaid on the source video so testers
   // can compare the detected pose against the captured animation. Remove later.
   useEffect(() => {
@@ -3709,6 +3761,9 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
           <Video className="w-5 h-5" />
           {!canUseVideoAnalysis && (
             <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">PRO</span>
+          )}
+          {canUseGpuCapture && (
+            <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">3D</span>
           )}
         </button>
       </div>
@@ -4393,36 +4448,50 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
 
       {/* Upgrade Modal */}
       {showUpgradeModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2100] p-4">
           <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
             <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              {upgradeModalReason === 'video_analysis' ? (
+              {upgradeModalReason === 'video_analysis' || upgradeModalReason === 'gpu_capture' ? (
                 <Video className="w-8 h-8 text-[#22c55e]" />
               ) : (
                 <Zap className="w-8 h-8 text-[#22c55e]" />
               )}
             </div>
             <h2 className="text-xl font-semibold mb-2">
-              {upgradeModalReason === 'video_analysis' 
-                ? 'AI Video Motion Capture' 
+              {upgradeModalReason === 'gpu_capture'
+                ? 'Studio 3D GPU Capture'
+                : upgradeModalReason === 'video_analysis'
+                ? 'AI Video Motion Capture'
                 : 'Animation Limit Reached'}
             </h2>
             <p className="text-[#a1a1aa] mb-6">
-              {upgradeModalReason === 'video_analysis' 
-                ? 'Extract animations from videos with AI pose detection. Upgrade to Pro to unlock this powerful feature.'
+              {upgradeModalReason === 'gpu_capture'
+                ? 'Studio 3D uses a GPU body solver and applies the animation onto the GLB you loaded. Upgrade to Studio for 40 GPU captures per month.'
+                : upgradeModalReason === 'video_analysis'
+                ? 'Extract animations from videos with AI pose detection. Upgrade to Pro to unlock Fast capture, or Studio for GPU 3D.'
                 : `You've reached the limit of ${animationLimit} animation${animationLimit !== 1 ? 's' : ''} on the Free plan. Upgrade to Pro for unlimited animations.`}
             </p>
             
             {/* Feature highlights */}
             <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6 text-left">
-              <p className="text-xs font-semibold text-[#71717a] mb-3">PRO INCLUDES:</p>
+              <p className="text-xs font-semibold text-[#71717a] mb-3">
+                {upgradeModalReason === 'gpu_capture' ? 'STUDIO INCLUDES:' : 'PRO INCLUDES:'}
+              </p>
               <ul className="space-y-2">
-                {[
-                  'Unlimited animations per project',
-                  'AI Video Motion Capture',
-                  'Unlimited projects',
-                  'Priority support'
-                ].map((feature, i) => (
+                {(upgradeModalReason === 'gpu_capture'
+                  ? [
+                      'Everything in Pro',
+                      'Studio 3D GPU motion capture',
+                      'True 3D rotations on your GLB',
+                      '40 GPU captures per month',
+                    ]
+                  : [
+                      'Unlimited animations per project',
+                      'AI Video Motion Capture (Fast)',
+                      'Unlimited projects',
+                      'Priority support',
+                    ]
+                ).map((feature, i) => (
                   <li key={i} className="flex items-center gap-2 text-sm text-[#a1a1aa]">
                     <Check className="w-4 h-4 text-[#22c55e] shrink-0" />
                     {feature}
@@ -4437,7 +4506,7 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                 className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
               >
                 <Zap className="w-5 h-5" />
-                Upgrade to Pro - $12/month
+                {upgradeModalReason === 'gpu_capture' ? 'Upgrade to Studio - $39/month' : 'Upgrade to Pro - $12/month'}
               </a>
               <button
                 onClick={() => setShowUpgradeModal(false)}
@@ -4491,11 +4560,57 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     PREVIEW · detected skeleton
                   </span>
                 </div>
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => setCaptureEngine('fast')}
+                    className={`text-left rounded-xl border p-3 transition-colors ${
+                      captureEngine === 'fast'
+                        ? 'border-[#22c55e] bg-[#22c55e]/10'
+                        : 'border-[#252b3d] bg-[#0f1117] hover:border-[#3f3f46]'
+                    }`}
+                  >
+                    <p className="text-sm font-semibold text-[#f4f4f5]">Fast</p>
+                    <p className="text-[11px] text-[#71717a] mt-1">In-browser · unlimited on Pro</p>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (!canUseGpuCapture) {
+                        setUpgradeModalReason('gpu_capture')
+                        setShowUpgradeModal(true)
+                        return
+                      }
+                      setCaptureEngine('studio')
+                    }}
+                    className={`text-left rounded-xl border p-3 transition-colors relative ${
+                      captureEngine === 'studio'
+                        ? 'border-[#22c55e] bg-[#22c55e]/10'
+                        : 'border-[#252b3d] bg-[#0f1117] hover:border-[#3f3f46]'
+                    }`}
+                  >
+                    {!canUseGpuCapture && (
+                      <span className="absolute top-2 right-2 text-[9px] font-bold bg-[#22c55e]/20 text-[#22c55e] px-1.5 py-0.5 rounded">
+                        STUDIO
+                      </span>
+                    )}
+                    <p className="text-sm font-semibold text-[#f4f4f5]">Studio 3D</p>
+                    <p className="text-[11px] text-[#71717a] mt-1">
+                      {canUseGpuCapture
+                        ? `${gpuCapturesRemaining}/${gpuCapturesLimit || 40} GPU jobs left`
+                        : 'GPU 3D on your GLB · $39/mo'}
+                    </p>
+                  </button>
+                </div>
                 <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-3">
-                  <p className="text-xs text-[#71717a]">Frim AI will detect body poses frame-by-frame and map them to your skeleton.</p>
+                  <p className="text-xs text-[#71717a]">
+                    {captureEngine === 'studio'
+                      ? 'Studio 3D solves a full 3D skeleton and retargets it onto the model you loaded.'
+                      : 'Frim AI will detect body poses frame-by-frame and map them to your skeleton.'}
+                  </p>
                   <div className="flex items-center gap-2 text-xs text-[#a1a1aa]">
                     <span className="w-2 h-2 bg-[#22c55e] rounded-full" />
-                    Processes entirely in your browser
+                    {captureEngine === 'studio' ? 'GPU job · applied to your mesh' : 'Processes entirely in your browser'}
                   </div>
                 </div>
                 <div className="flex gap-3">
@@ -4506,11 +4621,11 @@ export default function ThreeEditor({ projectName, onChange, saving, initialData
                     Cancel
                   </button>
                   <button
-                    onClick={processVideoCapture}
+                    onClick={handleProcessCapture}
                     className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
                   >
                     <Video className="w-4 h-4" />
-                    Process Video
+                    {captureEngine === 'studio' ? 'Process Studio 3D' : 'Process Video'}
                   </button>
                 </div>
               </>

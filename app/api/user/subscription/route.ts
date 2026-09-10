@@ -7,7 +7,7 @@ import { PLANS } from '@/lib/stripe'
 export async function GET() {
   try {
     const session = await getServerSession(authOptions)
-    
+
     if (!session?.user?.id) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
@@ -17,6 +17,7 @@ export async function GET() {
       select: {
         plan: true,
         stripeCurrentPeriodEnd: true,
+        gpuCapturesUsed: true,
         _count: {
           select: { projects: true }
         }
@@ -32,6 +33,9 @@ export async function GET() {
     const projectLimit = plan.limits.projects
     const animationLimit = plan.limits.animationsPerProject
     const canCreateProject = projectCount < projectLimit
+    const gpuCapturesUsed = user.gpuCapturesUsed ?? 0
+    const gpuCapturesLimit = plan.limits.gpuCapturesPerMonth
+    const gpuCapturesRemaining = Math.max(0, gpuCapturesLimit - gpuCapturesUsed)
 
     return NextResponse.json({
       plan: user.plan,
@@ -41,10 +45,15 @@ export async function GET() {
         projects: projectCount,
         projectLimit: projectLimit === Infinity ? 'unlimited' : projectLimit,
         canCreateProject,
+        gpuCapturesUsed,
+        gpuCapturesLimit,
+        gpuCapturesRemaining,
       },
       limits: {
         animationsPerProject: animationLimit === Infinity ? 'unlimited' : animationLimit,
         videoAnalysis: plan.limits.videoAnalysis,
+        gpuCapture: plan.limits.gpuCapture,
+        gpuCapturesPerMonth: gpuCapturesLimit,
       },
     })
   } catch (error) {
