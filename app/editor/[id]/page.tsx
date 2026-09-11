@@ -6,6 +6,9 @@ import { useRouter, useParams } from 'next/navigation'
 import Link from 'next/link'
 import dynamic from 'next/dynamic'
 import { ChevronLeft, Cloud, Save, Check, X } from 'lucide-react'
+import { startPlanCheckout, buyGpuCredits } from '@/lib/checkout'
+import Celebration, { type CelebrationKind } from '@/components/Celebration'
+import GpuUsageMeter from '@/components/GpuUsageMeter'
 
 // Dynamically import the editor with no SSR
 const ThreeEditor = dynamic(() => import('@/components/Editor/ThreeEditor'), {
@@ -46,6 +49,9 @@ interface Subscription {
     gpuCapturesPerMonth?: number
   }
   usage?: {
+    gpuCapturesUsed?: number
+    gpuCapturesBonus?: number
+    gpuCapturesIncluded?: number
     gpuCapturesRemaining?: number
     gpuCapturesLimit?: number
   }
@@ -65,6 +71,9 @@ export default function EditorPage() {
   const [hasUnsavedChanges, setHasUnsavedChanges] = useState(false)
   const autoSaveTimerRef = useRef<NodeJS.Timeout | null>(null)
   const pendingDataRef = useRef<ProjectData | null>(null)
+  const [celebration, setCelebration] = useState<CelebrationKind>(null)
+  const [celebrationCredits, setCelebrationCredits] = useState(0)
+  const [upgradingStudio, setUpgradingStudio] = useState(false)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -78,6 +87,23 @@ export default function EditorPage() {
       fetchSubscription()
     }
   }, [session, projectId])
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const params = new URLSearchParams(window.location.search)
+    const upgraded = params.get('upgraded')
+    const credits = params.get('credits')
+    if (upgraded === 'studio' || upgraded === 'pro') setCelebration(upgraded)
+    if (credits) {
+      const n = Math.max(1, parseInt(credits, 10) || 1)
+      setCelebrationCredits(n)
+      setCelebration('credits')
+    }
+    if (upgraded || credits) {
+      window.history.replaceState({}, '', `/editor/${projectId}`)
+      fetchSubscription()
+    }
+  }, [projectId])
 
   // Warn user before leaving with unsaved changes
   useEffect(() => {
@@ -117,6 +143,33 @@ export default function EditorPage() {
       }
     } catch (error) {
       console.error('Failed to fetch subscription:', error)
+    }
+  }
+
+  const handleUpgradeToStudio = async () => {
+    setUpgradingStudio(true)
+    try {
+      const result = await startPlanCheckout('studio', `/editor/${projectId}`)
+      if ('error' in result) throw new Error(result.error)
+      if ('upgraded' in result && result.upgraded) {
+        setCelebration('studio')
+        await fetchSubscription()
+      }
+    } catch (error) {
+      console.error('Studio upgrade error:', error)
+      alert('Failed to upgrade. Please try again.')
+    } finally {
+      setUpgradingStudio(false)
+    }
+  }
+
+  const handleBuyGpuCredits = async (quantity: number) => {
+    try {
+      const result = await buyGpuCredits(quantity, `/editor/${projectId}`)
+      if ('error' in result) throw new Error(result.error)
+    } catch (error) {
+      console.error('Credit purchase error:', error)
+      alert('Failed to start payment.')
     }
   }
 
@@ -238,6 +291,8 @@ export default function EditorPage() {
   }
 
   const isPaid = subscription?.plan === 'pro' || subscription?.plan === 'studio'
+  const isStudio = subscription?.plan === 'studio'
+  const isPro = subscription?.plan === 'pro'
   const animationLimit = subscription?.limits?.animationsPerProject === 'unlimited' 
     ? Infinity 
     : (subscription?.limits?.animationsPerProject || 2)
@@ -273,6 +328,26 @@ export default function EditorPage() {
           <span className="text-sm font-medium">{project?.name || 'Untitled Project'}</span>
           {hasUnsavedChanges && (
             <span className="text-xs text-yellow-500">• Unsaved</span>
+          )}
+          {isStudio && (
+            <div className="hidden md:block w-40">
+              <GpuUsageMeter
+                used={subscription?.usage?.gpuCapturesUsed ?? 0}
+                included={subscription?.usage?.gpuCapturesIncluded ?? 40}
+                bonus={subscription?.usage?.gpuCapturesBonus ?? 0}
+                remaining={subscription?.usage?.gpuCapturesRemaining ?? 0}
+                compact
+              />
+            </div>
+          )}
+          {isPro && (
+            <button
+              onClick={handleUpgradeToStudio}
+              disabled={upgradingStudio}
+              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors disabled:opacity-50"
+            >
+              {upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio'}
+            </button>
           )}
           {!isPaid && (
             <Link
@@ -336,10 +411,21 @@ export default function EditorPage() {
           canUseVideoAnalysis={subscription?.limits?.videoAnalysis || false}
           canUseGpuCapture={subscription?.limits?.gpuCapture || false}
           gpuCapturesRemaining={subscription?.usage?.gpuCapturesRemaining ?? 0}
-          gpuCapturesLimit={subscription?.limits?.gpuCapturesPerMonth ?? 0}
+          gpuCapturesLimit={subscription?.usage?.gpuCapturesLimit ?? subscription?.limits?.gpuCapturesPerMonth ?? 0}
+          gpuCapturesUsed={subscription?.usage?.gpuCapturesUsed ?? 0}
+          gpuCapturesBonus={subscription?.usage?.gpuCapturesBonus ?? 0}
+          gpuCapturesIncluded={subscription?.usage?.gpuCapturesIncluded ?? 40}
+          onUpgradeToStudio={handleUpgradeToStudio}
+          onBuyGpuCredits={handleBuyGpuCredits}
+          upgradingStudio={upgradingStudio}
         />
       </div>
 
+      <Celebration
+        kind={celebration}
+        credits={celebrationCredits}
+        onClose={() => setCelebration(null)}
+      />
       <div id="toast-container" className="fixed bottom-4 right-4 flex flex-col-reverse gap-3 z-[1001]" />
 
       <style jsx global>{`

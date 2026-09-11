@@ -4,6 +4,8 @@ import { Suspense, useState, useEffect } from 'react'
 import { useSession } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
+import { startPlanCheckout } from '@/lib/checkout'
+import Celebration, { type CelebrationKind } from '@/components/Celebration'
 
 const plans = [
   {
@@ -62,6 +64,7 @@ const plans = [
       'Studio 3D GPU motion capture',
       'True 3D rotations on your GLB',
       '40 GPU captures per month',
+      'Then $1 per extra capture',
       'Unlimited projects & animations',
       'Priority cloud saves',
       'Priority support',
@@ -92,6 +95,7 @@ function PricingContent() {
   const [loading, setLoading] = useState<string | null>(null)
   const [currentPlan, setCurrentPlan] = useState<string>('free')
   const [showCanceled, setShowCanceled] = useState(false)
+  const [celebration, setCelebration] = useState<CelebrationKind>(null)
 
   useEffect(() => {
     if (searchParams.get('canceled') === 'true') {
@@ -132,18 +136,11 @@ function PricingContent() {
     setLoading(planId)
 
     try {
-      const res = await fetch('/api/stripe/checkout', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ planId }),
-      })
-
-      const data = await res.json()
-
-      if (data.url) {
-        window.location.href = data.url
-      } else {
-        throw new Error(data.error || 'Failed to create checkout session')
+      const result = await startPlanCheckout(planId === 'studio' ? 'studio' : 'pro', '/dashboard')
+      if ('error' in result) throw new Error(result.error)
+      if ('upgraded' in result && result.upgraded) {
+        setCurrentPlan(result.planId)
+        setCelebration(result.planId)
       }
     } catch (error) {
       console.error('Upgrade error:', error)
@@ -225,6 +222,10 @@ function PricingContent() {
           Checkout was canceled. No charges were made.
         </div>
       )}
+      <Celebration kind={celebration} onClose={() => {
+        setCelebration(null)
+        router.push('/dashboard')
+      }} />
 
       {/* Header */}
       <section className="relative pt-20 pb-16 px-6">
@@ -237,7 +238,7 @@ function PricingContent() {
             Choose your <span className="gradient-text">plan</span>
           </h1>
           <p className="text-lg text-dark-400 max-w-2xl mx-auto">
-            Start free and upgrade when you need more. No hidden fees, cancel anytime.
+            Start free, upgrade to Pro for Fast capture, or Studio for GPU 3D. Extra Studio captures are $1 each.
           </p>
         </div>
       </section>
@@ -366,7 +367,7 @@ function PricingContent() {
             {[
               {
                 q: 'What is Studio 3D capture?',
-                a: 'Studio adds GPU motion capture: a 3D body solver that retargets onto the GLB you load in the editor. Pro includes unlimited Fast (in-browser) capture. Studio includes 40 GPU jobs per month.',
+                a: 'Studio adds GPU motion capture: a 3D body solver that retargets onto the GLB you load in the editor. Pro includes unlimited Fast (in-browser) capture. Studio includes 40 GPU jobs per month, then $1 per extra capture.',
               },
               {
                 q: 'Can I cancel anytime?',

@@ -54,6 +54,17 @@ model User {
   stripePriceId     String?
   stripeCurrentPeriodEnd DateTime?
   gpuCapturesUsed   Int       @default(0)
+  gpuCapturesBonus  Int       @default(0)
+}
+
+model GpuCreditPurchase {
+  id              String   @id @default(cuid())
+  stripeSessionId String   @unique
+  userId          String
+  quantity        Int
+  createdAt       DateTime @default(now())
+
+  @@index([userId])
 }
 
 model VerificationToken {

@@ -8,6 +8,9 @@ export const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
 const PRO_PRICE_ID = process.env.STRIPE_PRO_PRICE_ID || null
 const STUDIO_PRICE_ID = process.env.STRIPE_STUDIO_PRICE_ID || 'price_1UEHdOGDZFhJlM8nhafjO2xh'
 
+export const GPU_OVERAGE_CENTS = 100
+export const GPU_OVERAGE_USD = 1
+
 export const PLANS = {
   free: {
     name: 'Free',
@@ -63,6 +66,7 @@ export const PLANS = {
       'Studio 3D GPU motion capture',
       'True 3D rotations on your GLB',
       '40 GPU captures per month',
+      'Then $1 per extra capture',
       'Unlimited projects & animations',
       'Priority cloud saves',
       'Priority support',
@@ -93,4 +97,27 @@ export function planFromPriceId(priceId: string | null | undefined): PlanType {
   if (priceId === STUDIO_PRICE_ID) return 'studio'
   if (PRO_PRICE_ID && priceId === PRO_PRICE_ID) return 'pro'
   return 'pro'
+}
+
+export function studioGpuQuota(
+  used: number,
+  bonus = 0,
+  included = PLANS.studio.limits.gpuCapturesPerMonth,
+) {
+  const safeUsed = Math.max(0, used)
+  const safeBonus = Math.max(0, bonus)
+  const limit = included + safeBonus
+  return {
+    used: safeUsed,
+    bonus: safeBonus,
+    included,
+    limit,
+    remaining: Math.max(0, limit - safeUsed),
+  }
+}
+
+export function safeReturnPath(raw: unknown, fallback = '/dashboard') {
+  if (typeof raw !== 'string') return fallback
+  if (!raw.startsWith('/') || raw.startsWith('//')) return fallback
+  return raw
 }

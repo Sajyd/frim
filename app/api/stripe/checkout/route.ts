@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
-import { stripe, PLANS, type PaidPlanType } from '@/lib/stripe'
+import { stripe, PLANS, safeReturnPath, type PaidPlanType } from '@/lib/stripe'
 import prisma from '@/lib/prisma'
 
 export async function POST(request: NextRequest) {
@@ -14,6 +14,7 @@ export async function POST(request: NextRequest) {
 
     const body = await request.json().catch(() => ({}))
     const planId: PaidPlanType = body.planId === 'studio' ? 'studio' : 'pro'
+    const returnPath = safeReturnPath(body.returnUrl, '/dashboard')
     const target = PLANS[planId]
 
     if (!target.priceId) {
@@ -31,8 +32,13 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
+    const origin = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+    const joiner = returnPath.includes('?') ? '&' : '?'
+    const successUrl = `${origin}${returnPath}${joiner}upgraded=${planId}`
+    const cancelUrl = `${origin}${returnPath}${joiner}canceled=true`
+
     if (user.plan === planId && user.stripeSubscriptionId) {
-      return NextResponse.json({ url: `${process.env.NEXTAUTH_URL}/dashboard` })
+      return NextResponse.json({ url: `${origin}${returnPath}` })
     }
 
     let customerId = user.stripeCustomerId
@@ -54,7 +60,6 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Existing subscriber: switch price in place (Pro ↔ Studio) instead of a second subscription.
     if (user.stripeSubscriptionId) {
       try {
         const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId)
@@ -73,9 +78,10 @@ export async function POST(request: NextRequest) {
             data: {
               plan: planId,
               stripePriceId: target.priceId,
+              ...(planId === 'studio' && user.plan !== 'studio' ? { gpuCapturesUsed: 0 } : {}),
             },
           })
-          return NextResponse.json({ url: `${process.env.NEXTAUTH_URL}/dashboard?success=true` })
+          return NextResponse.json({ upgraded: true, planId })
         }
       } catch (err) {
         console.error('Subscription update failed, falling back to checkout:', err)
@@ -93,8 +99,8 @@ export async function POST(request: NextRequest) {
         },
       ],
       allow_promotion_codes: true,
-      success_url: `${process.env.NEXTAUTH_URL}/dashboard?success=true`,
-      cancel_url: `${process.env.NEXTAUTH_URL}/pricing?canceled=true`,
+      success_url: successUrl,
+      cancel_url: cancelUrl,
       metadata: {
         userId: user.id,
         planId,

@@ -5,6 +5,9 @@ import { useSession, signOut } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import Image from 'next/image'
+import { startPlanCheckout, buyGpuCredits } from '@/lib/checkout'
+import Celebration, { type CelebrationKind } from '@/components/Celebration'
+import GpuUsageMeter from '@/components/GpuUsageMeter'
 
 interface Project {
   id: string
@@ -28,6 +31,8 @@ interface Subscription {
     projectLimit: number | 'unlimited'
     canCreateProject: boolean
     gpuCapturesUsed?: number
+    gpuCapturesBonus?: number
+    gpuCapturesIncluded?: number
     gpuCapturesLimit?: number
     gpuCapturesRemaining?: number
   }
@@ -62,6 +67,11 @@ function DashboardContent() {
   const [showSuccessToast, setShowSuccessToast] = useState(false)
   const [showSubscriptionModal, setShowSubscriptionModal] = useState(false)
   const [cancelingSubscription, setCancelingSubscription] = useState(false)
+  const [celebration, setCelebration] = useState<CelebrationKind>(null)
+  const [celebrationCredits, setCelebrationCredits] = useState(0)
+  const [upgradingStudio, setUpgradingStudio] = useState(false)
+  const [buyingCredits, setBuyingCredits] = useState(false)
+  const [creditQty, setCreditQty] = useState(5)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -70,10 +80,20 @@ function DashboardContent() {
   }, [status, router])
 
   useEffect(() => {
-    if (searchParams.get('success') === 'true') {
+    const upgraded = searchParams.get('upgraded') || (searchParams.get('success') === 'true' ? 'pro' : null)
+    const credits = searchParams.get('credits')
+    if (upgraded === 'studio' || upgraded === 'pro') {
+      setCelebration(upgraded)
+    } else if (searchParams.get('success') === 'true') {
       setShowSuccessToast(true)
       setTimeout(() => setShowSuccessToast(false), 5000)
-      // Clean URL
+    }
+    if (credits) {
+      const n = Math.max(1, parseInt(credits, 10) || 1)
+      setCelebrationCredits(n)
+      setCelebration('credits')
+    }
+    if (upgraded || credits || searchParams.get('success') === 'true') {
       window.history.replaceState({}, '', '/dashboard')
     }
   }, [searchParams])
@@ -178,6 +198,37 @@ function DashboardContent() {
     }
   }
 
+  const handleUpgradeToStudio = async () => {
+    setUpgradingStudio(true)
+    try {
+      const result = await startPlanCheckout('studio', '/dashboard')
+      if ('error' in result) throw new Error(result.error)
+      if ('upgraded' in result && result.upgraded) {
+        setCelebration('studio')
+        setShowSubscriptionModal(false)
+        await fetchSubscription()
+      }
+    } catch (error) {
+      console.error('Studio upgrade error:', error)
+      alert('Failed to upgrade. Please try again.')
+    } finally {
+      setUpgradingStudio(false)
+    }
+  }
+
+  const handleBuyCredits = async (quantity = creditQty) => {
+    setBuyingCredits(true)
+    try {
+      const result = await buyGpuCredits(quantity, '/dashboard')
+      if ('error' in result) throw new Error(result.error)
+    } catch (error) {
+      console.error('Credit purchase error:', error)
+      alert('Failed to start payment. Please try again.')
+    } finally {
+      setBuyingCredits(false)
+    }
+  }
+
   const handleManageSubscription = async () => {
     setCancelingSubscription(true)
     try {
@@ -212,6 +263,11 @@ function DashboardContent() {
 
   return (
     <div className="min-h-screen bg-dark-950">
+      <Celebration
+        kind={celebration}
+        credits={celebrationCredits}
+        onClose={() => setCelebration(null)}
+      />
       {/* Success Toast */}
       {showSuccessToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-frim-500/10 border border-frim-500/30 text-frim-400 px-6 py-3 rounded-xl z-50 animate-slide-down flex items-center gap-3">
@@ -262,12 +318,13 @@ function DashboardContent() {
               </Link>
             )}
             {subscription?.plan === 'pro' && (
-              <Link
-                href="/pricing"
-                className="hidden sm:flex items-center gap-2 text-sm text-frim-400 hover:text-frim-300 transition-colors"
+              <button
+                onClick={handleUpgradeToStudio}
+                disabled={upgradingStudio}
+                className="hidden sm:flex items-center gap-2 text-sm text-frim-400 hover:text-frim-300 transition-colors disabled:opacity-50"
               >
-                Upgrade to Studio
-              </Link>
+                {upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio'}
+              </button>
             )}
             <button
               onClick={handleNewProjectClick}
@@ -338,6 +395,17 @@ function DashboardContent() {
                     </span>
                   </p>
                 </div>
+                {isStudio && (
+                  <div className="min-w-[160px]">
+                    <GpuUsageMeter
+                      used={subscription.usage.gpuCapturesUsed ?? 0}
+                      included={subscription.usage.gpuCapturesIncluded ?? 40}
+                      bonus={subscription.usage.gpuCapturesBonus ?? 0}
+                      remaining={subscription.usage.gpuCapturesRemaining ?? 0}
+                      compact
+                    />
+                  </div>
+                )}
                 {!isPaid && subscription.usage.projects >= 2 && (
                   <Link
                     href="/pricing"
@@ -597,11 +665,54 @@ function DashboardContent() {
                 </p>
               )}
               {isStudio && (
-                <p className="text-sm text-dark-400 mt-2">
-                  GPU captures: {subscription?.usage.gpuCapturesUsed ?? 0} / {subscription?.usage.gpuCapturesLimit ?? 40} this period
-                </p>
+                <div className="mt-4">
+                  <GpuUsageMeter
+                    used={subscription?.usage.gpuCapturesUsed ?? 0}
+                    included={subscription?.usage.gpuCapturesIncluded ?? 40}
+                    bonus={subscription?.usage.gpuCapturesBonus ?? 0}
+                    remaining={subscription?.usage.gpuCapturesRemaining ?? 0}
+                  />
+                </div>
               )}
             </div>
+
+            {subscription?.plan === 'pro' && (
+              <button
+                onClick={handleUpgradeToStudio}
+                disabled={upgradingStudio}
+                className="w-full mb-3 btn-primary py-3 flex items-center justify-center gap-2 disabled:opacity-50"
+              >
+                {upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio — $39/mo'}
+              </button>
+            )}
+
+            {isStudio && (
+              <div className="bg-dark-950 border border-dark-800 rounded-xl p-4 mb-3">
+                <p className="text-sm font-medium mb-2">Buy extra captures · $1 each</p>
+                <div className="flex items-center gap-2 mb-3">
+                  {[1, 5, 10, 20].map((n) => (
+                    <button
+                      key={n}
+                      onClick={() => setCreditQty(n)}
+                      className={`flex-1 py-2 rounded-lg text-sm font-medium ${
+                        creditQty === n
+                          ? 'bg-frim-500/20 text-frim-400 border border-frim-500/40'
+                          : 'bg-dark-800 text-dark-400 hover:bg-dark-700'
+                      }`}
+                    >
+                      {n}
+                    </button>
+                  ))}
+                </div>
+                <button
+                  onClick={() => handleBuyCredits(creditQty)}
+                  disabled={buyingCredits}
+                  className="w-full py-2.5 bg-frim-500 text-dark-950 rounded-xl font-semibold hover:bg-frim-400 transition-colors disabled:opacity-50"
+                >
+                  {buyingCredits ? 'Redirecting…' : `Pay $${creditQty} for ${creditQty} capture${creditQty === 1 ? '' : 's'}`}
+                </button>
+              </div>
+            )}
 
             <div className="space-y-3">
               <button

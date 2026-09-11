@@ -62,6 +62,12 @@ interface EditorProps {
   canUseGpuCapture?: boolean
   gpuCapturesRemaining?: number
   gpuCapturesLimit?: number
+  gpuCapturesUsed?: number
+  gpuCapturesBonus?: number
+  gpuCapturesIncluded?: number
+  onUpgradeToStudio?: () => Promise<void> | void
+  onBuyGpuCredits?: (quantity: number) => Promise<void> | void
+  upgradingStudio?: boolean
 }
 
 interface ProjectData {
@@ -169,6 +175,12 @@ export default function ThreeEditor({
   canUseGpuCapture = false,
   gpuCapturesRemaining = 0,
   gpuCapturesLimit = 0,
+  gpuCapturesUsed = 0,
+  gpuCapturesBonus = 0,
+  gpuCapturesIncluded = 40,
+  onUpgradeToStudio,
+  onBuyGpuCredits,
+  upgradingStudio = false,
 }: EditorProps) {
   const containerRef = useRef<HTMLDivElement>(null)
   const canvasRef = useRef<HTMLCanvasElement>(null)
@@ -229,6 +241,7 @@ export default function ThreeEditor({
   const [videoAnalyzing, setVideoAnalyzing] = useState(false)
   const [videoProgress, setVideoProgress] = useState(0)
   const [captureEngine, setCaptureEngine] = useState<'fast' | 'studio'>('fast')
+  const [showBuyCredits, setShowBuyCredits] = useState(false)
   const videoInputRef = useRef<HTMLInputElement>(null)
 
   // GLB export modal
@@ -3447,6 +3460,7 @@ export default function ThreeEditor({
         }
         if (res.status === 429) {
           showToast(data.error || 'GPU capture quota reached this period', 'warning')
+          setShowBuyCredits(true)
           return
         }
         if (res.status === 503) {
@@ -4484,6 +4498,7 @@ export default function ThreeEditor({
                       'Studio 3D GPU motion capture',
                       'True 3D rotations on your GLB',
                       '40 GPU captures per month',
+                      'Then $1 per extra capture',
                     ]
                   : [
                       'Unlimited animations per project',
@@ -4501,13 +4516,23 @@ export default function ThreeEditor({
             </div>
             
             <div className="flex flex-col gap-3">
-              <a
-                href="/pricing"
-                className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
+              <button
+                onClick={async () => {
+                  if (upgradeModalReason === 'gpu_capture' && onUpgradeToStudio) {
+                    await onUpgradeToStudio()
+                    setShowUpgradeModal(false)
+                    return
+                  }
+                  window.location.href = '/pricing'
+                }}
+                disabled={upgradingStudio}
+                className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Zap className="w-5 h-5" />
-                {upgradeModalReason === 'gpu_capture' ? 'Upgrade to Studio - $39/month' : 'Upgrade to Pro - $12/month'}
-              </a>
+                {upgradeModalReason === 'gpu_capture'
+                  ? (upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio — $39/mo')
+                  : 'Upgrade to Pro - $12/month'}
+              </button>
               <button
                 onClick={() => setShowUpgradeModal(false)}
                 className="w-full py-2 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
@@ -4597,15 +4622,56 @@ export default function ThreeEditor({
                     <p className="text-sm font-semibold text-[#f4f4f5]">Studio 3D</p>
                     <p className="text-[11px] text-[#71717a] mt-1">
                       {canUseGpuCapture
-                        ? `${gpuCapturesRemaining}/${gpuCapturesLimit || 40} GPU jobs left`
+                        ? `${gpuCapturesUsed} used · ${gpuCapturesRemaining} left`
                         : 'GPU 3D on your GLB · $39/mo'}
                     </p>
                   </button>
                 </div>
+                {canUseGpuCapture && (
+                  <div className="mb-4 bg-[#0f1117] border border-[#252b3d] rounded-xl p-3">
+                    <div className="flex items-center justify-between mb-1.5">
+                      <span className="text-[11px] text-[#71717a]">Studio 3D this period</span>
+                      <span className="font-mono text-xs text-[#4ade80]">
+                        {gpuCapturesUsed} / {(gpuCapturesLimit || gpuCapturesIncluded + gpuCapturesBonus || 40)}
+                      </span>
+                    </div>
+                    <div className="h-1.5 bg-[#252b3d] rounded-full overflow-hidden mb-2">
+                      <div
+                        className="h-full bg-[#22c55e] rounded-full"
+                        style={{
+                          width: `${Math.min(100, (gpuCapturesUsed / Math.max(1, gpuCapturesLimit || gpuCapturesIncluded + gpuCapturesBonus || 40)) * 100)}%`,
+                        }}
+                      />
+                    </div>
+                    <p className="text-[10px] text-[#71717a]">
+                      {gpuCapturesIncluded} included
+                      {gpuCapturesBonus > 0 ? ` · ${gpuCapturesBonus} extra purchased` : ''}
+                      {gpuCapturesRemaining <= 0 ? ' · $1 per extra capture' : ` · ${gpuCapturesRemaining} remaining`}
+                    </p>
+                    {(showBuyCredits || gpuCapturesRemaining <= 0) && (
+                      <div className="mt-3 flex gap-2">
+                        <button
+                          type="button"
+                          onClick={() => onBuyGpuCredits?.(1)}
+                          className="flex-1 py-2 text-xs font-semibold rounded-lg bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]"
+                        >
+                          Pay $1 for 1 more
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => onBuyGpuCredits?.(10)}
+                          className="flex-1 py-2 text-xs font-semibold rounded-lg bg-[#252b3d] text-[#a1a1aa] hover:bg-[#2f3649]"
+                        >
+                          Buy 10 for $10
+                        </button>
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-3">
                   <p className="text-xs text-[#71717a]">
                     {captureEngine === 'studio'
-                      ? 'Studio 3D solves a full 3D skeleton and retargets it onto the model you loaded.'
+                      ? 'Studio 3D solves a full 3D skeleton and retargets it onto the model you loaded. Then $1 per extra capture after your included jobs.'
                       : 'Frim AI will detect body poses frame-by-frame and map them to your skeleton.'}
                   </p>
                   <div className="flex items-center gap-2 text-xs text-[#a1a1aa]">
@@ -4621,11 +4687,19 @@ export default function ThreeEditor({
                     Cancel
                   </button>
                   <button
-                    onClick={handleProcessCapture}
+                    onClick={() => {
+                      if (captureEngine === 'studio' && gpuCapturesRemaining <= 0) {
+                        onBuyGpuCredits?.(1)
+                        return
+                      }
+                      handleProcessCapture()
+                    }}
                     className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
                   >
                     <Video className="w-4 h-4" />
-                    {captureEngine === 'studio' ? 'Process Studio 3D' : 'Process Video'}
+                    {captureEngine === 'studio'
+                      ? (gpuCapturesRemaining <= 0 ? 'Pay $1 for this capture' : 'Process Studio 3D')
+                      : 'Process Video'}
                   </button>
                 </div>
               </>

@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { PLANS, isStudioPlan } from '@/lib/stripe'
+import { PLANS, isStudioPlan, studioGpuQuota } from '@/lib/stripe'
 
 export async function POST() {
   try {
@@ -14,7 +14,7 @@ export async function POST() {
 
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },
-      select: { plan: true, gpuCapturesUsed: true },
+      select: { plan: true, gpuCapturesUsed: true, gpuCapturesBonus: true },
     })
 
     if (!user) {
@@ -28,11 +28,21 @@ export async function POST() {
       )
     }
 
-    const limit = PLANS.studio.limits.gpuCapturesPerMonth
-    const used = user.gpuCapturesUsed ?? 0
-    if (used >= limit) {
+    const quota = studioGpuQuota(
+      user.gpuCapturesUsed ?? 0,
+      user.gpuCapturesBonus ?? 0,
+      PLANS.studio.limits.gpuCapturesPerMonth,
+    )
+
+    if (quota.remaining <= 0) {
       return NextResponse.json(
-        { error: `You've used all ${limit} GPU captures this billing period.`, code: 'QUOTA_EXCEEDED' },
+        {
+          error: `You've used all ${quota.limit} GPU captures. Buy more at $1 each.`,
+          code: 'QUOTA_EXCEEDED',
+          used: quota.used,
+          limit: quota.limit,
+          remaining: 0,
+        },
         { status: 429 }
       )
     }
@@ -42,14 +52,28 @@ export async function POST() {
         {
           error: 'Studio 3D GPU worker is not connected yet. Fast capture is still available.',
           code: 'WORKER_NOT_CONFIGURED',
+          remaining: quota.remaining,
         },
         { status: 503 }
       )
     }
 
+    const updated = await prisma.user.update({
+      where: { id: session.user.id },
+      data: { gpuCapturesUsed: { increment: 1 } },
+      select: { gpuCapturesUsed: true, gpuCapturesBonus: true },
+    })
+    const next = studioGpuQuota(
+      updated.gpuCapturesUsed,
+      updated.gpuCapturesBonus,
+      PLANS.studio.limits.gpuCapturesPerMonth,
+    )
+
     return NextResponse.json({
       ok: true,
-      remaining: limit - used,
+      remaining: next.remaining,
+      used: next.used,
+      limit: next.limit,
     })
   } catch (error) {
     console.error('GPU capture error:', error)

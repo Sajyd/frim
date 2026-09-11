@@ -41,6 +41,29 @@ export async function POST(request: NextRequest) {
         const session = event.data.object as Stripe.Checkout.Session
         console.log('Checkout session completed:', session.id, 'Mode:', session.mode)
 
+        if (session.mode === 'payment' && session.metadata?.type === 'gpu_credits') {
+          const quantity = Math.max(1, parseInt(session.metadata.quantity || '1', 10) || 1)
+          const userId = session.metadata.userId
+          if (userId && session.payment_status === 'paid') {
+            try {
+              await prisma.gpuCreditPurchase.create({
+                data: {
+                  stripeSessionId: session.id,
+                  userId,
+                  quantity,
+                },
+              })
+              await prisma.user.update({
+                where: { id: userId },
+                data: { gpuCapturesBonus: { increment: quantity } },
+              })
+              console.log('Added', quantity, 'GPU credits for', userId)
+            } catch (err: any) {
+              if (err?.code !== 'P2002') throw err
+            }
+          }
+        }
+
         if (session.mode === 'subscription' && session.subscription) {
           const subscriptionId = typeof session.subscription === 'string'
             ? session.subscription

@@ -179,6 +179,7 @@ export default function Home() {
                     'Upload MP4, MOV, or WebM videos',
                     'AI detects body pose frame by frame',
                     'Auto-generates keyframes for bones',
+                    'Studio 3D GPU capture on your GLB',
                     'Works with any rigged humanoid model'
                   ].map((item, i) => (
                     <li key={i} className="flex items-center gap-3 text-sm text-dark-300">
@@ -196,7 +197,7 @@ export default function Home() {
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                     <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                   </svg>
-                  Upgrade to Pro
+                  See Pro and Studio
                 </Link>
               </div>
               

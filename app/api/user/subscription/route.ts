@@ -2,7 +2,7 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { PLANS } from '@/lib/stripe'
+import { PLANS, studioGpuQuota } from '@/lib/stripe'
 
 export async function GET() {
   try {
@@ -18,6 +18,7 @@ export async function GET() {
         plan: true,
         stripeCurrentPeriodEnd: true,
         gpuCapturesUsed: true,
+        gpuCapturesBonus: true,
         _count: {
           select: { projects: true }
         }
@@ -33,9 +34,11 @@ export async function GET() {
     const projectLimit = plan.limits.projects
     const animationLimit = plan.limits.animationsPerProject
     const canCreateProject = projectCount < projectLimit
-    const gpuCapturesUsed = user.gpuCapturesUsed ?? 0
-    const gpuCapturesLimit = plan.limits.gpuCapturesPerMonth
-    const gpuCapturesRemaining = Math.max(0, gpuCapturesLimit - gpuCapturesUsed)
+    const quota = studioGpuQuota(
+      user.gpuCapturesUsed ?? 0,
+      user.gpuCapturesBonus ?? 0,
+      plan.limits.gpuCapturesPerMonth,
+    )
 
     return NextResponse.json({
       plan: user.plan,
@@ -45,15 +48,17 @@ export async function GET() {
         projects: projectCount,
         projectLimit: projectLimit === Infinity ? 'unlimited' : projectLimit,
         canCreateProject,
-        gpuCapturesUsed,
-        gpuCapturesLimit,
-        gpuCapturesRemaining,
+        gpuCapturesUsed: quota.used,
+        gpuCapturesBonus: quota.bonus,
+        gpuCapturesIncluded: quota.included,
+        gpuCapturesLimit: quota.limit,
+        gpuCapturesRemaining: quota.remaining,
       },
       limits: {
         animationsPerProject: animationLimit === Infinity ? 'unlimited' : animationLimit,
         videoAnalysis: plan.limits.videoAnalysis,
         gpuCapture: plan.limits.gpuCapture,
-        gpuCapturesPerMonth: gpuCapturesLimit,
+        gpuCapturesPerMonth: quota.included,
       },
     })
   } catch (error) {
