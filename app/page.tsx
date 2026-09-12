@@ -4,6 +4,7 @@ import Link from 'next/link'
 import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
+import { HeroEditorPreview, MocapCapturePreview } from '@/components/Landing/MotionPreviews'
 
 export default function Home() {
   const { data: session, status } = useSession()
@@ -118,31 +119,7 @@ export default function Home() {
 
           {/* Visual Preview */}
           <div className="hidden lg:flex justify-center">
-            <div className="w-full max-w-lg bg-dark-900 rounded-2xl border border-dark-800 overflow-hidden shadow-2xl">
-              <div className="flex items-center gap-2 px-4 py-3 bg-dark-950 border-b border-dark-800">
-                <div className="flex gap-1.5">
-                  <span className="w-3 h-3 rounded-full bg-red-500" />
-                  <span className="w-3 h-3 rounded-full bg-yellow-500" />
-                  <span className="w-3 h-3 rounded-full bg-frim-500" />
-                </div>
-                <span className="text-xs text-dark-500 font-mono">frim editor</span>
-              </div>
-              <div className="p-10 flex flex-col items-center">
-                {/* Animated Skeleton Preview */}
-                <div className="relative w-32 h-48 mb-8">
-                  <SkeletonPreview />
-                </div>
-                {/* Timeline Preview */}
-                <div className="w-full bg-dark-950 rounded-lg p-4 relative">
-                  <div className="h-1 bg-dark-800 rounded relative">
-                    <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-frim-500 rounded-sm rotate-45" style={{ left: '15%' }} />
-                    <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-frim-500 rounded-sm rotate-45" style={{ left: '45%' }} />
-                    <div className="absolute top-1/2 -translate-y-1/2 w-3 h-3 bg-frim-500 rounded-sm rotate-45" style={{ left: '80%' }} />
-                    <div className="absolute top-0 -translate-y-1 w-0.5 h-4 bg-frim-400 playhead-animate" />
-                  </div>
-                </div>
-              </div>
-            </div>
+            <HeroEditorPreview />
           </div>
         </div>
       </section>
@@ -203,48 +180,7 @@ export default function Home() {
               
               {/* Visual */}
               <div className="relative">
-                <div className="bg-dark-950 rounded-2xl border border-dark-800 overflow-hidden shadow-2xl">
-                  <div className="flex items-center gap-2 px-4 py-3 bg-dark-900 border-b border-dark-800">
-                    <div className="flex gap-1.5">
-                      <span className="w-2.5 h-2.5 rounded-full bg-red-500/80" />
-                      <span className="w-2.5 h-2.5 rounded-full bg-yellow-500/80" />
-                      <span className="w-2.5 h-2.5 rounded-full bg-frim-500/80" />
-                    </div>
-                    <span className="text-xs text-dark-500 font-mono">video-analysis.mp4</span>
-                  </div>
-                  <div className="p-6">
-                    <div className="flex gap-6 items-center">
-                      {/* Video frame */}
-                      <div className="flex-1 aspect-video bg-dark-800 rounded-lg relative overflow-hidden">
-                        <div className="absolute inset-0 flex items-center justify-center">
-                          <VideoAnalysisPreview />
-                        </div>
-                        <div className="absolute bottom-2 left-2 right-2 h-1 bg-dark-700 rounded">
-                          <div className="h-full w-2/3 bg-frim-500 rounded video-progress-animate" />
-                        </div>
-                      </div>
-                      {/* Arrow */}
-                      <div className="shrink-0">
-                        <svg className="w-8 h-8 text-frim-500 pulse-arrow" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
-                        </svg>
-                      </div>
-                      {/* Skeleton output */}
-                      <div className="w-20 h-28 shrink-0">
-                        <MiniSkeletonPreview />
-                      </div>
-                    </div>
-                    
-                    {/* Progress indicators */}
-                    <div className="mt-4 flex items-center gap-3">
-                      <div className="flex-1 h-1.5 bg-dark-800 rounded-full overflow-hidden">
-                        <div className="h-full bg-gradient-to-r from-frim-500 to-frim-400 analysis-bar-animate" />
-                      </div>
-                      <span className="text-xs text-frim-400 font-mono tabular-nums analysis-percent">87%</span>
-                    </div>
-                    <p className="text-xs text-dark-500 mt-2">Extracting pose data from video frames...</p>
-                  </div>
-                </div>
+                <MocapCapturePreview />
               </div>
             </div>
           </div>
@@ -305,37 +241,6 @@ export default function Home() {
         </div>
       </footer>
 
-      <style jsx>{`
-        .playhead-animate {
-          animation: playhead 3s ease-in-out infinite;
-        }
-        @keyframes playhead {
-          0%, 100% { left: 15%; }
-          50% { left: 80%; }
-        }
-        .video-progress-animate {
-          animation: video-progress 4s ease-in-out infinite;
-        }
-        @keyframes video-progress {
-          0% { width: 0%; }
-          100% { width: 100%; }
-        }
-        .analysis-bar-animate {
-          animation: analysis-bar 3s ease-in-out infinite;
-        }
-        @keyframes analysis-bar {
-          0% { width: 20%; }
-          50% { width: 90%; }
-          100% { width: 20%; }
-        }
-        .pulse-arrow {
-          animation: pulse-arrow 1.5s ease-in-out infinite;
-        }
-        @keyframes pulse-arrow {
-          0%, 100% { opacity: 0.5; transform: translateX(0); }
-          50% { opacity: 1; transform: translateX(4px); }
-        }
-      `}</style>
     </div>
   )
 }
@@ -350,163 +255,6 @@ function FrimLogo({ className }: { className?: string }) {
       <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
       <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
       <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  )
-}
-
-function SkeletonPreview() {
-  return (
-    <svg viewBox="0 0 120 200" className="w-full h-full">
-      <style>{`
-        .joint { fill: #4ade80; }
-        .bone { stroke: #22c55e; stroke-width: 4; stroke-linecap: round; }
-        .head { fill: #4ade80; }
-        .arm-l { animation: wave-l 2s ease-in-out infinite; transform-origin: 30px 60px; }
-        .arm-r { animation: wave-r 2s ease-in-out infinite; transform-origin: 90px 60px; }
-        .leg-l { animation: step-l 2s ease-in-out infinite; transform-origin: 50px 100px; }
-        .leg-r { animation: step-r 2s ease-in-out infinite; transform-origin: 70px 100px; }
-        @keyframes wave-l { 0%, 100% { transform: rotate(-15deg); } 50% { transform: rotate(15deg); } }
-        @keyframes wave-r { 0%, 100% { transform: rotate(15deg); } 50% { transform: rotate(-15deg); } }
-        @keyframes step-l { 0%, 100% { transform: rotate(-5deg); } 50% { transform: rotate(5deg); } }
-        @keyframes step-r { 0%, 100% { transform: rotate(5deg); } 50% { transform: rotate(-5deg); } }
-      `}</style>
-      {/* Head */}
-      <circle className="head" cx="60" cy="20" r="12" />
-      {/* Neck */}
-      <line className="bone" x1="60" y1="32" x2="60" y2="50" />
-      {/* Spine */}
-      <line className="bone" x1="60" y1="50" x2="60" y2="100" />
-      {/* Arms */}
-      <g className="arm-l">
-        <line className="bone" x1="30" y1="60" x2="60" y2="55" />
-        <line className="bone" x1="10" y1="80" x2="30" y2="60" />
-        <circle className="joint" cx="30" cy="60" r="5" />
-        <circle className="joint" cx="10" cy="80" r="4" />
-      </g>
-      <g className="arm-r">
-        <line className="bone" x1="90" y1="60" x2="60" y2="55" />
-        <line className="bone" x1="110" y1="80" x2="90" y2="60" />
-        <circle className="joint" cx="90" cy="60" r="5" />
-        <circle className="joint" cx="110" cy="80" r="4" />
-      </g>
-      {/* Legs */}
-      <g className="leg-l">
-        <line className="bone" x1="50" y1="100" x2="45" y2="150" />
-        <line className="bone" x1="45" y1="150" x2="40" y2="190" />
-        <circle className="joint" cx="50" cy="100" r="5" />
-        <circle className="joint" cx="45" cy="150" r="4" />
-        <circle className="joint" cx="40" cy="190" r="3" />
-      </g>
-      <g className="leg-r">
-        <line className="bone" x1="70" y1="100" x2="75" y2="150" />
-        <line className="bone" x1="75" y1="150" x2="80" y2="190" />
-        <circle className="joint" cx="70" cy="100" r="5" />
-        <circle className="joint" cx="75" cy="150" r="4" />
-        <circle className="joint" cx="80" cy="190" r="3" />
-      </g>
-    </svg>
-  )
-}
-
-function VideoAnalysisPreview() {
-  return (
-    <svg viewBox="0 0 160 90" className="w-full h-full">
-      <style>{`
-        .person-fill { fill: #3f3f46; }
-        .pose-line { stroke: #22c55e; stroke-width: 2; stroke-linecap: round; opacity: 0.8; }
-        .pose-dot { fill: #4ade80; }
-        .scan-line { 
-          stroke: #22c55e; 
-          stroke-width: 1; 
-          opacity: 0.6;
-          animation: scan 2s ease-in-out infinite;
-        }
-        @keyframes scan {
-          0%, 100% { transform: translateY(-30px); opacity: 0; }
-          50% { transform: translateY(30px); opacity: 0.8; }
-        }
-        .pose-pulse {
-          animation: pose-pulse 1.5s ease-in-out infinite;
-        }
-        @keyframes pose-pulse {
-          0%, 100% { opacity: 0.6; }
-          50% { opacity: 1; }
-        }
-      `}</style>
-      {/* Background person silhouette */}
-      <ellipse className="person-fill" cx="80" cy="25" rx="12" ry="14" />
-      <rect className="person-fill" x="65" y="38" width="30" height="35" rx="4" />
-      <rect className="person-fill" x="50" y="40" width="14" height="6" rx="2" />
-      <rect className="person-fill" x="96" y="40" width="14" height="6" rx="2" />
-      <rect className="person-fill" x="68" y="72" width="10" height="18" rx="2" />
-      <rect className="person-fill" x="82" y="72" width="10" height="18" rx="2" />
-      
-      {/* Pose detection overlay */}
-      <g className="pose-pulse">
-        {/* Head */}
-        <circle className="pose-dot" cx="80" cy="22" r="3" />
-        {/* Shoulders */}
-        <line className="pose-line" x1="60" y1="42" x2="100" y2="42" />
-        <circle className="pose-dot" cx="60" cy="42" r="2.5" />
-        <circle className="pose-dot" cx="100" cy="42" r="2.5" />
-        <circle className="pose-dot" cx="80" cy="42" r="2" />
-        {/* Spine */}
-        <line className="pose-line" x1="80" y1="42" x2="80" y2="70" />
-        {/* Hips */}
-        <line className="pose-line" x1="70" y1="70" x2="90" y2="70" />
-        <circle className="pose-dot" cx="70" cy="70" r="2.5" />
-        <circle className="pose-dot" cx="90" cy="70" r="2.5" />
-        {/* Arms */}
-        <line className="pose-line" x1="60" y1="42" x2="48" y2="46" />
-        <circle className="pose-dot" cx="48" cy="46" r="2" />
-        <line className="pose-line" x1="100" y1="42" x2="112" y2="46" />
-        <circle className="pose-dot" cx="112" cy="46" r="2" />
-        {/* Legs */}
-        <line className="pose-line" x1="70" y1="70" x2="72" y2="88" />
-        <circle className="pose-dot" cx="72" cy="88" r="2" />
-        <line className="pose-line" x1="90" y1="70" x2="88" y2="88" />
-        <circle className="pose-dot" cx="88" cy="88" r="2" />
-      </g>
-      
-      {/* Scanning line */}
-      <line className="scan-line" x1="30" y1="45" x2="130" y2="45" />
-    </svg>
-  )
-}
-
-function MiniSkeletonPreview() {
-  return (
-    <svg viewBox="0 0 60 100" className="w-full h-full">
-      <style>{`
-        .mini-joint { fill: #4ade80; }
-        .mini-bone { stroke: #22c55e; stroke-width: 3; stroke-linecap: round; }
-        .mini-head { fill: #4ade80; }
-        .mini-arm-l { animation: mini-wave-l 1.5s ease-in-out infinite; transform-origin: 15px 30px; }
-        .mini-arm-r { animation: mini-wave-r 1.5s ease-in-out infinite; transform-origin: 45px 30px; }
-        @keyframes mini-wave-l { 0%, 100% { transform: rotate(-20deg); } 50% { transform: rotate(10deg); } }
-        @keyframes mini-wave-r { 0%, 100% { transform: rotate(20deg); } 50% { transform: rotate(-10deg); } }
-      `}</style>
-      <circle className="mini-head" cx="30" cy="12" r="8" />
-      <line className="mini-bone" x1="30" y1="20" x2="30" y2="28" />
-      <line className="mini-bone" x1="30" y1="28" x2="30" y2="55" />
-      <g className="mini-arm-l">
-        <line className="mini-bone" x1="15" y1="35" x2="30" y2="30" />
-        <line className="mini-bone" x1="5" y1="45" x2="15" y2="35" />
-        <circle className="mini-joint" cx="15" cy="35" r="3" />
-      </g>
-      <g className="mini-arm-r">
-        <line className="mini-bone" x1="45" y1="35" x2="30" y2="30" />
-        <line className="mini-bone" x1="55" y1="45" x2="45" y2="35" />
-        <circle className="mini-joint" cx="45" cy="35" r="3" />
-      </g>
-      <line className="mini-bone" x1="25" y1="55" x2="22" y2="78" />
-      <line className="mini-bone" x1="22" y1="78" x2="20" y2="95" />
-      <line className="mini-bone" x1="35" y1="55" x2="38" y2="78" />
-      <line className="mini-bone" x1="38" y1="78" x2="40" y2="95" />
-      <circle className="mini-joint" cx="25" cy="55" r="3" />
-      <circle className="mini-joint" cx="35" cy="55" r="3" />
-      <circle className="mini-joint" cx="22" cy="78" r="2.5" />
-      <circle className="mini-joint" cx="38" cy="78" r="2.5" />
     </svg>
   )
 }
