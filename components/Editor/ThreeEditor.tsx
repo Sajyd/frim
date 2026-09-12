@@ -160,7 +160,7 @@ function solveTwoBoneIK(
 function slerpKeepHemisphere(a: THREE.Quaternion, b: THREE.Quaternion, t: number) {
   const qa = a.clone()
   const qb = b.clone()
-  if (qa.dot(qb) < 0) qb.negate()
+  if (qa.dot(qb) < 0) qb.set(-qb.x, -qb.y, -qb.z, -qb.w)
   return qa.slerp(qb, t)
 }
 
