@@ -47,6 +47,9 @@ export const authOptions: NextAuthOptions = {
             clientId: githubId,
             clientSecret: githubSecret,
             allowDangerousEmailAccountLinking: true,
+            // GitHub now sends RFC 9207 `iss` on the callback; openid-client
+            // requires a matching issuer or GitHub sign-in throws OAUTH_CALLBACK_ERROR.
+            issuer: "https://github.com/login/oauth",
           }),
         ]
       : []),
