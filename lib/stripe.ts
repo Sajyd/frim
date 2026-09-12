@@ -102,7 +102,7 @@ export function planFromPriceId(priceId: string | null | undefined): PlanType {
 export function studioGpuQuota(
   used: number,
   bonus = 0,
-  included = PLANS.studio.limits.gpuCapturesPerMonth,
+  included: number = PLANS.studio.limits.gpuCapturesPerMonth,
 ) {
   const safeUsed = Math.max(0, used)
   const safeBonus = Math.max(0, bonus)
