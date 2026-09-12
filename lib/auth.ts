@@ -6,17 +6,59 @@ import GoogleProvider from "next-auth/providers/google"
 import bcrypt from "bcryptjs"
 import prisma from "./prisma"
 
+const ACCOUNT_FIELDS = [
+  "userId",
+  "type",
+  "provider",
+  "providerAccountId",
+  "refresh_token",
+  "access_token",
+  "expires_at",
+  "token_type",
+  "scope",
+  "id_token",
+  "session_state",
+] as const
+
+function prismaAdapter() {
+  const adapter = PrismaAdapter(prisma) as any
+  const linkAccount = adapter.linkAccount?.bind(adapter)
+  adapter.linkAccount = (account: Record<string, unknown>) => {
+    const data: Record<string, unknown> = {}
+    for (const key of ACCOUNT_FIELDS) {
+      if (account[key] !== undefined) data[key] = account[key]
+    }
+    return linkAccount(data)
+  }
+  return adapter
+}
+
+const githubId = process.env.GITHUB_CLIENT_ID
+const githubSecret = process.env.GITHUB_CLIENT_SECRET
+const googleId = process.env.GOOGLE_CLIENT_ID
+const googleSecret = process.env.GOOGLE_CLIENT_SECRET
+
 export const authOptions: NextAuthOptions = {
-  adapter: PrismaAdapter(prisma) as any,
+  adapter: prismaAdapter(),
   providers: [
-    GitHubProvider({
-      clientId: process.env.GITHUB_CLIENT_ID ?? "",
-      clientSecret: process.env.GITHUB_CLIENT_SECRET ?? "",
-    }),
-    GoogleProvider({
-      clientId: process.env.GOOGLE_CLIENT_ID ?? "",
-      clientSecret: process.env.GOOGLE_CLIENT_SECRET ?? "",
-    }),
+    ...(githubId && githubSecret
+      ? [
+          GitHubProvider({
+            clientId: githubId,
+            clientSecret: githubSecret,
+            allowDangerousEmailAccountLinking: true,
+          }),
+        ]
+      : []),
+    ...(googleId && googleSecret
+      ? [
+          GoogleProvider({
+            clientId: googleId,
+            clientSecret: googleSecret,
+            allowDangerousEmailAccountLinking: true,
+          }),
+        ]
+      : []),
     CredentialsProvider({
       name: "credentials",
       credentials: {
@@ -73,4 +115,3 @@ export const authOptions: NextAuthOptions = {
     },
   },
 }
-

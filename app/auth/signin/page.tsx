@@ -4,6 +4,7 @@ import { Suspense, useState } from 'react'
 import { signIn } from 'next-auth/react'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { authErrorMessage } from '@/lib/auth-errors'
 
 function SignInForm() {
   const router = useRouter()
@@ -14,7 +15,7 @@ function SignInForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [loading, setLoading] = useState(false)
-  const [errorMsg, setErrorMsg] = useState(error ? 'Invalid credentials' : '')
+  const [errorMsg, setErrorMsg] = useState(authErrorMessage(error))
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
