@@ -87,67 +87,67 @@ function swapLR(p: WalkPose): WalkPose {
 }
 
 const CONTACT: WalkPose = {
-  hipY: 2,
-  lean: 10,
-  head: -6,
-  thighR: 36,
-  shinR: 6,
-  footR: -24,
-  thighL: -28,
-  shinL: 24,
-  footL: 32,
-  armR: -38,
-  forearmR: 16,
-  armL: 34,
-  forearmL: 42,
+  hipY: 1,
+  lean: 8,
+  head: -5,
+  thighR: 26,
+  shinR: 8,
+  footR: 14,
+  thighL: -20,
+  shinL: 16,
+  footL: -16,
+  armR: -28,
+  forearmR: 14,
+  armL: 26,
+  forearmL: 34,
 }
 
 const DOWN: WalkPose = {
-  hipY: 8,
-  lean: 12,
-  head: -4,
-  thighR: 16,
-  shinR: 44,
-  footR: 8,
-  thighL: -10,
-  shinL: 64,
-  footL: 14,
-  armR: -18,
-  forearmR: 26,
-  armL: 16,
-  forearmL: 50,
+  hipY: 5,
+  lean: 10,
+  head: -3,
+  thighR: 12,
+  shinR: 26,
+  footR: 2,
+  thighL: -8,
+  shinL: 38,
+  footL: -6,
+  armR: -14,
+  forearmR: 22,
+  armL: 12,
+  forearmL: 40,
 }
 
 const PASS: WalkPose = {
-  hipY: 2,
-  lean: 10,
-  head: -6,
-  thighR: 6,
-  shinR: 12,
-  footR: 2,
+  hipY: 1,
+  lean: 8,
+  head: -5,
+  thighR: 4,
+  shinR: 10,
+  footR: 0,
   thighL: 16,
-  shinL: 92,
-  footL: -18,
-  armR: 8,
-  forearmR: 22,
-  armL: -10,
-  forearmL: 28,
+  shinL: 46,
+  footL: 12,
+  armR: 6,
+  forearmR: 18,
+  armL: -8,
+  forearmL: 24,
 }
 
 const HIGH: WalkPose = {
-  hipY: -5,
-  lean: 8,
-  head: -8,
-  thighR: -16,
-  shinR: 8,
-  footR: 26,
-  thighL: 44,
-  shinL: 22,
-  footL: -14,
-  armR: 32,
-  forearmR: 38,
-  armL: -36,
-  forearmL: 18,
+  hipY: -3,
+  lean: 7,
+  head: -6,
+  thighR: -12,
+  shinR: 6,
+  footR: -14,
+  thighL: 32,
+  shinL: 16,
+  footL: 10,
+  armR: 26,
+  forearmR: 32,
+  armL: -28,
+  forearmL: 16,
 }
 
 const WALK_KEYS: { at: number; pose: WalkPose }[] = [
@@ -172,9 +172,28 @@ function sampleWalk(time: number): WalkPose {
   return lerpPose(a.pose, b.pose, u)
 }
 
+function plantToFloor(ankle: Pt, toe: Pt, floorY: number) {
+  const lowest = Math.max(ankle.y, toe.y)
+  if (lowest <= floorY) return { ankle, toe }
+  const dy = lowest - floorY
+  return {
+    ankle: { x: ankle.x, y: ankle.y - dy },
+    toe: { x: toe.x, y: toe.y - dy },
+  }
+}
+
+function solveLeg(hip: Pt, thigh: number, shin: number, foot: number, scale: number, floorY: number) {
+  const knee = polar(hip, deg(thigh), 28 * scale)
+  const ankle = polar(knee, deg(thigh + shin), 26 * scale)
+  const toe = polar(ankle, Math.PI / 2 + deg(foot), 10 * scale)
+  const planted = plantToFloor(ankle, toe, floorY)
+  return { knee, ankle: planted.ankle, toe: planted.toe }
+}
+
 function solveSide(pose: WalkPose, origin: Pt, scale: number): Rig {
   const s = scale
   const hip = { x: origin.x, y: origin.y + pose.hipY * s }
+  const floorY = origin.y + 54 * s
   const lean = deg(pose.lean)
   const chest = { x: hip.x + Math.sin(lean) * 26 * s, y: hip.y - Math.cos(lean) * 26 * s }
   const neck = { x: chest.x + Math.sin(lean) * 9 * s, y: chest.y - Math.cos(lean) * 9 * s }
@@ -182,34 +201,24 @@ function solveSide(pose: WalkPose, origin: Pt, scale: number): Rig {
   const head = { x: neck.x + Math.sin(headAng) * 11 * s, y: neck.y - Math.cos(headAng) * 11 * s }
   const nose = { x: head.x + Math.cos(headAng) * 8 * s, y: head.y + Math.sin(headAng) * 8 * s }
 
-  const shoulderR = { x: chest.x + 4 * s, y: chest.y + 2 * s }
-  const shoulderL = { x: chest.x - 6 * s, y: chest.y + 4 * s }
+  const shoulderR = { x: chest.x + 5 * s, y: chest.y + 2 * s }
+  const shoulderL = { x: chest.x - 7 * s, y: chest.y + 4 * s }
   const elbowR = polar(shoulderR, deg(pose.armR), 20 * s)
   const wristR = polar(elbowR, deg(pose.armR + pose.forearmR), 18 * s)
   const elbowL = polar(shoulderL, deg(pose.armL), 20 * s)
   const wristL = polar(elbowL, deg(pose.armL + pose.forearmL), 18 * s)
 
-  const hipR = { x: hip.x + 4 * s, y: hip.y + 1 * s }
-  const hipL = { x: hip.x - 5 * s, y: hip.y + 2 * s }
-  const kneeR = polar(hipR, deg(pose.thighR), 28 * s)
-  const ankleR = polar(kneeR, deg(pose.thighR + pose.shinR), 26 * s)
-  const toeR = {
-    x: ankleR.x + Math.cos(deg(pose.thighR + pose.shinR + pose.footR)) * 11 * s,
-    y: ankleR.y + Math.sin(deg(pose.thighR + pose.shinR + pose.footR)) * 11 * s,
-  }
-  const kneeL = polar(hipL, deg(pose.thighL), 28 * s)
-  const ankleL = polar(kneeL, deg(pose.thighL + pose.shinL), 26 * s)
-  const toeL = {
-    x: ankleL.x + Math.cos(deg(pose.thighL + pose.shinL + pose.footL)) * 11 * s,
-    y: ankleL.y + Math.sin(deg(pose.thighL + pose.shinL + pose.footL)) * 11 * s,
-  }
+  const hipR = { x: hip.x + 5 * s, y: hip.y + 1 * s }
+  const hipL = { x: hip.x - 6 * s, y: hip.y + 2 * s }
+  const right = solveLeg(hipR, pose.thighR, pose.shinR, pose.footR, s, floorY)
+  const left = solveLeg(hipL, pose.thighL, pose.shinL, pose.footL, s, floorY)
 
   return {
     hip, chest, neck, head, nose,
     shoulderL, elbowL, wristL,
     shoulderR, elbowR, wristR,
-    hipL, kneeL, ankleL, toeL,
-    hipR, kneeR, ankleR, toeR,
+    hipL, kneeL: left.knee, ankleL: left.ankle, toeL: left.toe,
+    hipR, kneeR: right.knee, ankleR: right.ankle, toeR: right.toe,
   }
 }
 
@@ -399,30 +408,32 @@ function PoseOverlay({ rig, scale }: { rig: Rig; scale: number }) {
       <Bone a={rig.elbowL} b={rig.wristL} width={w} color={left} />
       <Bone a={rig.hipL} b={rig.kneeL} width={w} color={left} />
       <Bone a={rig.kneeL} b={rig.ankleL} width={w} color={left} />
-      <Bone a={rig.ankleL} b={rig.toeL} width={w} color={left} />
+      <Bone a={rig.ankleL} b={rig.toeL} width={w * 1.15} color={left} />
       <Bone a={rig.shoulderR} b={rig.elbowR} width={w} color={right} />
       <Bone a={rig.elbowR} b={rig.wristR} width={w} color={right} />
       <Bone a={rig.hipR} b={rig.kneeR} width={w} color={right} />
       <Bone a={rig.kneeR} b={rig.ankleR} width={w} color={right} />
-      <Bone a={rig.ankleR} b={rig.toeR} width={w} color={right} />
+      <Bone a={rig.ankleR} b={rig.toeR} width={w * 1.15} color={right} />
       {[
-        [rig.head, torso],
-        [rig.neck, torso],
-        [rig.hip, torso],
-        [rig.shoulderL, left],
-        [rig.elbowL, left],
-        [rig.wristL, left],
-        [rig.hipL, left],
-        [rig.kneeL, left],
-        [rig.ankleL, left],
-        [rig.shoulderR, right],
-        [rig.elbowR, right],
-        [rig.wristR, right],
-        [rig.hipR, right],
-        [rig.kneeR, right],
-        [rig.ankleR, right],
-      ].map(([p, color], i) => (
-        <Joint key={i} p={p as Pt} r={2.1 * scale} color={color as string} glow={false} />
+        [rig.head, torso, 2.2],
+        [rig.neck, torso, 1.8],
+        [rig.hip, torso, 2.2],
+        [rig.shoulderL, left, 2.1],
+        [rig.elbowL, left, 1.9],
+        [rig.wristL, left, 1.8],
+        [rig.hipL, left, 2.1],
+        [rig.kneeL, left, 2.2],
+        [rig.ankleL, left, 2],
+        [rig.toeL, left, 1.5],
+        [rig.shoulderR, right, 2.1],
+        [rig.elbowR, right, 1.9],
+        [rig.wristR, right, 1.8],
+        [rig.hipR, right, 2.1],
+        [rig.kneeR, right, 2.2],
+        [rig.ankleR, right, 2],
+        [rig.toeR, right, 1.5],
+      ].map(([p, color, r], i) => (
+        <Joint key={i} p={p as Pt} r={(r as number) * scale} color={color as string} glow={false} />
       ))}
     </g>
   )
@@ -475,7 +486,7 @@ export function HeroEditorPreview() {
   const reduced = usePrefersReducedMotion()
   const t = useRafTime(reduced)
   const pose = sampleWave(reduced ? 0.9 : t)
-  const rig = solveWave(pose, { x: 88, y: 118 }, 1.12)
+  const rig = solveWave(pose, { x: 96, y: 118 }, 1.12)
   const cycle = ((t / WAVE_PERIOD) % 1 + 1) % 1
   const frame = Math.floor(cycle * 48)
   const shadowW = 40 + pose.hipY * 0.4
@@ -503,11 +514,11 @@ export function HeroEditorPreview() {
           }}
         />
         <div
-          className="absolute left-1/2 bottom-8 -translate-x-1/2 w-[70%] h-24 opacity-50"
+          className="absolute left-1/2 bottom-7 w-[82%] h-28 opacity-50"
           style={{
             background:
               'repeating-linear-gradient(90deg, transparent, transparent 18px, rgba(34,197,94,0.12) 18px, rgba(34,197,94,0.12) 19px), repeating-linear-gradient(0deg, transparent, transparent 14px, rgba(34,197,94,0.08) 14px, rgba(34,197,94,0.08) 15px)',
-            transform: 'perspective(420px) rotateX(68deg)',
+            transform: 'translateX(-50%) perspective(520px) rotateX(66deg)',
             transformOrigin: 'center bottom',
           }}
         />
@@ -576,8 +587,12 @@ export function MocapCapturePreview() {
   const reduced = usePrefersReducedMotion()
   const t = useRafTime(reduced)
   const pose = sampleWalk(reduced ? 0.08 : t)
-  const videoRig = solveSide(pose, { x: 148, y: 96 }, 1.02)
-  const outRig = solveSide(pose, { x: 70, y: 88 }, 0.9)
+  const videoOrigin = { x: 152, y: 96 }
+  const videoScale = 1.02
+  const videoRig = solveSide(pose, videoOrigin, videoScale)
+  const videoFloor = videoOrigin.y + 54 * videoScale
+  const outRig = solveSide(pose, { x: 70, y: 86 }, 0.88)
+  const outFloor = 86 + 54 * 0.88
   const cycle = ((t / WALK_PERIOD) % 1 + 1) % 1
   const frame = Math.floor((t * 24) % 240)
   const progress = 0.62 + Math.sin(t * 0.7) * 0.12
@@ -628,11 +643,11 @@ export function MocapCapturePreview() {
                 </defs>
                 <rect width="320" height="180" fill="url(#studioWall)" />
                 <rect width="320" height="180" fill="url(#spot)" />
-                <rect y="148" width="320" height="32" fill="url(#floorFade)" />
-                <line x1="0" y1="148" x2="320" y2="148" stroke="#2a3140" strokeWidth="1" />
+                <rect y={videoFloor} width="320" height={180 - videoFloor} fill="url(#floorFade)" />
+                <line x1="0" y1={videoFloor} x2="320" y2={videoFloor} stroke="#2a3140" strokeWidth="1" />
                 {Array.from({ length: 6 }).map((_, i) => {
                   const u = i / 5
-                  const y = 148 + u * u * 32
+                  const y = videoFloor + u * u * (180 - videoFloor)
                   return (
                     <line
                       key={`h${i}`}
@@ -652,7 +667,7 @@ export function MocapCapturePreview() {
                     <line
                       key={`v${i}`}
                       x1={x}
-                      y1="148"
+                      y1={videoFloor}
                       x2={(x - 160) * 1.35 + 160}
                       y2="180"
                       stroke="#243044"
@@ -661,7 +676,7 @@ export function MocapCapturePreview() {
                     />
                   )
                 })}
-                <ellipse cx={videoRig.hip.x} cy={162} rx={30} ry={5} fill="#000" opacity={0.45} />
+                <ellipse cx={videoRig.hip.x} cy={videoFloor + 4} rx={28} ry={4.5} fill="#000" opacity={0.4} />
                 <ActorSilhouette rig={videoRig} scale={1} />
                 <rect
                   x={minX - 8}
@@ -721,7 +736,7 @@ export function MocapCapturePreview() {
                     strokeWidth="1"
                   />
                 ))}
-                <ellipse cx={outRig.hip.x} cy={158} rx={24} ry={4.5} fill="#14532d" opacity={0.45} />
+                <ellipse cx={outRig.hip.x} cy={outFloor + 3} rx={22} ry={4} fill="#14532d" opacity={0.45} />
                 <RigFigure rig={outRig} scale={0.95} />
               </svg>
             </div>
