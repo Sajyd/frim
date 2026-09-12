@@ -240,6 +240,7 @@ export default function ThreeEditor({
   const [videoFile, setVideoFile] = useState<File | null>(null)
   const [videoAnalyzing, setVideoAnalyzing] = useState(false)
   const [videoProgress, setVideoProgress] = useState(0)
+  const [videoProgressLabel, setVideoProgressLabel] = useState('')
   const [captureEngine, setCaptureEngine] = useState<'fast' | 'studio'>('fast')
   const [showBuyCredits, setShowBuyCredits] = useState(false)
   const videoInputRef = useRef<HTMLInputElement>(null)
@@ -2707,22 +2708,48 @@ export default function ThreeEditor({
     return info
   }, [bones])
 
-  const processVideoCapture = useCallback(async () => {
-    if (!videoFile || bones.size === 0) return
+  const processVideoCapture = useCallback(async (gpuTimeline?: {
+    fps: number
+    aspect: number
+    frames: { image: any[]; world: any[] }[]
+  }) => {
+    if (bones.size === 0) return
+    if (!gpuTimeline?.frames?.length && !videoFile) return
 
     const skeletonInfo = analyzeSkeletonHierarchy()
     if (!skeletonInfo) { showToast('No skeleton found to map to', 'error'); return }
 
     setVideoAnalyzing(true)
-    setVideoProgress(0)
+    if (!gpuTimeline?.frames?.length) {
+      setVideoProgress(0)
+      setVideoProgressLabel('')
+    }
 
     try {
+      type LMSet = { image: any[]; world: any[] } | null
+
+      let captureFps = 30
+      let aspect = 1
+      let totalAnimFrames = 0
+      let timeline: LMSet[] = []
+
+      if (gpuTimeline?.frames?.length) {
+        captureFps = Math.max(1, Math.round(Number(gpuTimeline.fps) || 30))
+        aspect = gpuTimeline.aspect || 1
+        totalAnimFrames = gpuTimeline.frames.length
+        timeline = gpuTimeline.frames.map(f => ({
+          image: f.image,
+          world: (f.world && f.world.length) ? f.world : f.image,
+        }))
+        setVideoProgress(88)
+        setVideoProgressLabel('Building keyframes on your model...')
+      } else {
       const pose = await loadPoseModel()
 
       const video = document.createElement('video')
       video.muted = true
       video.playsInline = true
-      video.src = URL.createObjectURL(videoFile)
+      video.src = URL.createObjectURL(videoFile!)
       await new Promise<void>(r => { video.onloadedmetadata = () => r() })
 
       const canvas = document.createElement('canvas')
@@ -2731,10 +2758,10 @@ export default function ThreeEditor({
       const ctx = canvas.getContext('2d')!
       // Image landmarks are normalized to width/height separately; multiply x by the
       // aspect ratio so screen-space directions are measured in consistent units.
-      const aspect = (video.videoWidth || 1) / (video.videoHeight || 1)
+      aspect = (video.videoWidth || 1) / (video.videoHeight || 1)
 
-      const captureFps = 30
-      const totalAnimFrames = Math.max(1, Math.round(video.duration * captureFps))
+      captureFps = 30
+      totalAnimFrames = Math.max(1, Math.round(video.duration * captureFps))
       // Interleaved passes: even frames (0,2,4…) and odd frames (1,3,5…) each get a
       // forward + backward pass averaged together → full 30 fps coverage with 4 passes.
       const evenIndices: number[] = []
@@ -2750,7 +2777,6 @@ export default function ThreeEditor({
       // A captured frame keeps BOTH landmark sets:
       //  - image:  normalized screen coords (used for root/screen placement + depth)
       //  - world:  metric 3D coords centred on the hips (used for bone orientation)
-      type LMSet = { image: any[]; world: any[] } | null
 
       // Visibility-weighted average of several landmark arrays into one.
       const avgLandmarks = (arrays: any[][]): any[] => {
@@ -2824,7 +2850,7 @@ export default function ThreeEditor({
 
       URL.revokeObjectURL(video.src)
 
-      const timeline: LMSet[] = new Array(totalAnimFrames).fill(null)
+      timeline = new Array(totalAnimFrames).fill(null)
       if (evenIndices.length) {
         for (const [frameIdx, data] of mergePassPair(evenFwd, evenBwd, evenIndices)) {
           timeline[frameIdx] = data
@@ -2835,6 +2861,7 @@ export default function ThreeEditor({
           timeline[frameIdx] = data
         }
       }
+      } // end Fast MediaPipe path
 
       // Fill dropped frames by interpolating between the nearest valid detections so
       // occlusions don't punch holes in the animation.
@@ -3443,6 +3470,7 @@ export default function ThreeEditor({
     } finally {
       setVideoAnalyzing(false)
       setVideoProgress(0)
+      setVideoProgressLabel('')
     }
   }, [videoFile, bones, analyzeSkeletonHierarchy, loadPoseModel, showToast, setAnimations, setCurrentAnimationId, setCurrentFrame])
 
@@ -3453,15 +3481,31 @@ export default function ThreeEditor({
         setShowUpgradeModal(true)
         return
       }
+      if (!videoFile) return
+      setVideoAnalyzing(true)
+      setVideoProgress(2)
+      setVideoProgressLabel('Creating GPU job…')
       try {
-        const res = await fetch('/api/capture/gpu', { method: 'POST' })
+        const res = await fetch('/api/capture/gpu', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            filename: videoFile.name,
+            contentType: videoFile.type || 'video/mp4',
+            size: videoFile.size,
+          }),
+        })
         const data = await res.json().catch(() => ({}))
         if (res.status === 403) {
+          setVideoAnalyzing(false)
           setUpgradeModalReason('gpu_capture')
           setShowUpgradeModal(true)
           return
         }
         if (res.status === 429) {
+          setVideoAnalyzing(false)
+          setVideoProgress(0)
+          setVideoProgressLabel('')
           showToast(data.error || 'GPU capture quota reached this period', 'warning')
           setShowBuyCredits(true)
           return
@@ -3472,17 +3516,71 @@ export default function ThreeEditor({
           return
         }
         if (!res.ok) {
+          setVideoAnalyzing(false)
+          setVideoProgress(0)
+          setVideoProgressLabel('')
           showToast(data.error || 'Studio 3D capture failed', 'error')
           return
         }
-        showToast('GPU capture job accepted. Worker integration is next.', 'info')
-      } catch {
-        showToast('Studio 3D capture failed', 'error')
+
+        setVideoProgress(8)
+        setVideoProgressLabel('Uploading video…')
+        const put = await fetch(data.uploadUrl, {
+          method: 'PUT',
+          headers: { 'Content-Type': videoFile.type || 'video/mp4' },
+          body: videoFile,
+        })
+        if (!put.ok) throw new Error('Video upload to GPU storage failed')
+
+        setVideoProgress(12)
+        setVideoProgressLabel('Waking GPU (Spot, billed per minute)…')
+        const startRes = await fetch(`/api/capture/gpu/${data.jobId}/start`, { method: 'POST' })
+        const startData = await startRes.json().catch(() => ({}))
+        if (startRes.status === 429) {
+          setVideoAnalyzing(false)
+          setVideoProgress(0)
+          setVideoProgressLabel('')
+          showToast(startData.error || 'GPU capture quota reached this period', 'warning')
+          setShowBuyCredits(true)
+          return
+        }
+        if (!startRes.ok) throw new Error(startData.error || 'Failed to start GPU worker')
+
+        const deadline = Date.now() + 12 * 60 * 1000
+        while (Date.now() < deadline) {
+          const poll = await fetch(`/api/capture/gpu/${data.jobId}`)
+          const job = await poll.json().catch(() => ({}))
+          if (!poll.ok) throw new Error(job.error || 'Lost GPU job')
+          setVideoProgress(Math.max(12, Math.min(88, Number(job.progress) || 12)))
+          setVideoProgressLabel(job.label || 'Reconstructing 3D pose…')
+          if (job.status === 'complete') {
+            if (!job.result?.frames?.length) {
+              throw new Error('GPU returned no pose frames')
+            }
+            await processVideoCapture({
+              fps: job.result.fps,
+              aspect: job.result.aspect,
+              frames: job.result.frames,
+            })
+            return
+          }
+          if (job.status === 'failed') {
+            throw new Error(job.error || 'GPU capture failed')
+          }
+          await new Promise(r => setTimeout(r, 2000))
+        }
+        throw new Error('GPU capture timed out. The instance will stop itself to protect credits.')
+      } catch (err: any) {
+        console.error('Studio GPU capture error:', err)
+        showToast(err?.message || 'Studio 3D capture failed', 'error')
+        setVideoAnalyzing(false)
+        setVideoProgress(0)
+        setVideoProgressLabel('')
       }
       return
     }
     await processVideoCapture()
-  }, [captureEngine, canUseGpuCapture, processVideoCapture, showToast])
+  }, [captureEngine, canUseGpuCapture, processVideoCapture, showToast, videoFile])
 
   // TEMPORARY (testing): live MediaPipe skeleton overlaid on the source video so testers
   // can compare the detected pose against the captured animation. Remove later.
@@ -4721,12 +4819,14 @@ export default function ThreeEditor({
                   </div>
                   <p className="text-xs text-[#71717a] mt-2">
                     {
-                      videoProgress < 5 ? 'Loading AI model...' :
-                      videoProgress < 22 ? 'Pass 1/4: even frames forward...' :
-                      videoProgress < 44 ? 'Pass 2/4: even frames backward...' :
-                      videoProgress < 66 ? 'Pass 3/4: odd frames forward...' :
-                      videoProgress < 88 ? 'Pass 4/4: odd frames backward...' :
-                      'Building keyframes at video pace...'
+                      videoProgressLabel || (
+                        videoProgress < 5 ? 'Loading AI model...' :
+                        videoProgress < 22 ? 'Pass 1/4: even frames forward...' :
+                        videoProgress < 44 ? 'Pass 2/4: even frames backward...' :
+                        videoProgress < 66 ? 'Pass 3/4: odd frames forward...' :
+                        videoProgress < 88 ? 'Pass 4/4: odd frames backward...' :
+                        'Building keyframes at video pace...'
+                      )
                     }
                   </p>
                 </div>

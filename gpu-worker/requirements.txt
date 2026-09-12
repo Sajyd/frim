@@ -1,0 +1,7 @@
+boto3==1.35.36
+numpy==1.26.4
+opencv-python-headless==4.10.0.84
+onnxruntime-gpu==1.19.2
+rtmlib==0.0.13
+requests==2.32.3
+onnx==1.16.2

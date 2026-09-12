@@ -55,6 +55,28 @@ model User {
   stripeCurrentPeriodEnd DateTime?
   gpuCapturesUsed   Int       @default(0)
   gpuCapturesBonus  Int       @default(0)
+  gpuJobs           GpuJob[]
+}
+
+model GpuJob {
+  id            String    @id @default(cuid())
+  userId        String
+  user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  status        String    @default("uploading") // uploading, queued, waking, running, complete, failed
+  progress      Int       @default(0)
+  s3InputKey    String
+  s3ResultKey   String?
+  error         String?   @db.Text
+  durationMs    Int?
+  instanceId    String?
+  billedUsd     Float?
+  quotaCharged  Boolean   @default(false)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+  completedAt   DateTime?
+
+  @@index([userId, createdAt])
+  @@index([status])
 }
 
 model GpuCreditPurchase {

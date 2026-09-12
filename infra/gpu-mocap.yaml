@@ -1,0 +1,521 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >
+  Frim GPU motion capture — one Spot T4 per concurrent capture. Idle instances
+  terminate after 900 seconds (disk deleted). Cost alerts go to the webapp (Resend),
+  not SNS email.
+
+Parameters:
+  MonthlyBudgetUsd:
+    Type: Number
+    Default: 80
+    Description: Monthly spend cap. The webapp cron emails via Resend and terminates GPUs at 100%.
+  IdleSeconds:
+    Type: Number
+    Default: 900
+    Description: Worker self-terminates after this many idle seconds (max 900). Disk is deleted.
+  MaxInstances:
+    Type: Number
+    Default: 100
+    Description: Max concurrent Spot GPUs (one per in-flight capture). Extra users wait in SQS.
+  CallbackUrl:
+    Type: String
+    Description: Public app origin, e.g. https://frim.app (no trailing slash)
+  VercelProjectName:
+    Type: String
+    Default: frim
+    Description: Vercel project name used in the OIDC subject (no access keys)
+  InstanceType:
+    Type: String
+    Default: g4dn.xlarge
+    Description: Cheapest NVIDIA T4 instance that can run RTMO/RTMPose
+  VolumeSize:
+    Type: Number
+    Default: 40
+    Description: gp3 GB while the instance is running. Deleted on terminate — not kept per user.
+
+Resources:
+  Bucket:
+    Type: AWS::S3::Bucket
+    Properties:
+      BucketName: !Sub 'frim-gpu-mocap-${AWS::AccountId}-${AWS::Region}'
+      LifecycleConfiguration:
+        Rules:
+          - Id: expire-uploads
+            Status: Enabled
+            Prefix: uploads/
+            ExpirationInDays: 1
+          - Id: expire-results
+            Status: Enabled
+            Prefix: results/
+            ExpirationInDays: 3
+          - Id: abort-mpu
+            Status: Enabled
+            AbortIncompleteMultipartUpload:
+              DaysAfterInitiation: 1
+      CorsConfiguration:
+        CorsRules:
+          - AllowedOrigins: ['*']
+            AllowedMethods: [GET, PUT, HEAD]
+            AllowedHeaders: ['*']
+            ExposedHeaders: [ETag]
+            MaxAge: 3000
+      PublicAccessBlockConfiguration:
+        BlockPublicAcls: true
+        BlockPublicPolicy: true
+        IgnorePublicAcls: true
+        RestrictPublicBuckets: true
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+
+  Dlq:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: frim-gpu-mocap-dlq
+      MessageRetentionPeriod: 1209600
+
+  JobQueue:
+    Type: AWS::SQS::Queue
+    Properties:
+      QueueName: frim-gpu-mocap
+      VisibilityTimeout: 900
+      MessageRetentionPeriod: 86400
+      ReceiveMessageWaitTimeSeconds: 20
+      RedrivePolicy:
+        deadLetterTargetArn: !GetAtt Dlq.Arn
+        maxReceiveCount: 3
+
+  LogGroup:
+    Type: AWS::Logs::LogGroup
+    Properties:
+      LogGroupName: /frim/gpu-mocap
+      RetentionInDays: 14
+
+  WorkerRepo:
+    Type: AWS::ECR::Repository
+    Properties:
+      RepositoryName: frim-gpu-mocap
+      ImageScanningConfiguration:
+        ScanOnPush: false
+      LifecyclePolicy:
+        LifecyclePolicyText: '{"rules":[{"rulePriority":1,"description":"keep last 5","selection":{"tagStatus":"any","countType":"imageCountMoreThan","countNumber":5},"action":{"type":"expire"}}]}'
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+
+  WorkerRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: frim-gpu-mocap-worker
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: ec2.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore
+      Policies:
+        - PolicyName: worker
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:DeleteObject, s3:ListBucket]
+                Resource:
+                  - !GetAtt Bucket.Arn
+                  - !Sub '${Bucket.Arn}/*'
+              - Effect: Allow
+                Action: [sqs:ReceiveMessage, sqs:DeleteMessage, sqs:ChangeMessageVisibility, sqs:GetQueueAttributes]
+                Resource: !GetAtt JobQueue.Arn
+              - Effect: Allow
+                Action: [cloudwatch:PutMetricData]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    cloudwatch:namespace: Frim/GpuMocap
+              - Effect: Allow
+                Action: [logs:CreateLogStream, logs:PutLogEvents, logs:CreateLogGroup]
+                Resource: '*'
+              - Effect: Allow
+                Action: [ec2:TerminateInstances]
+                Resource: '*'
+                Condition:
+                  StringEquals:
+                    ec2:ResourceTag/Application: frim-gpu-mocap
+              - Effect: Allow
+                Action:
+                  - ecr:GetAuthorizationToken
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ecr:BatchCheckLayerAvailability
+                  - ecr:GetDownloadUrlForLayer
+                  - ecr:BatchGetImage
+                Resource: !GetAtt WorkerRepo.Arn
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource: !Ref WorkerCallbackSecret
+
+  WorkerProfile:
+    Type: AWS::IAM::InstanceProfile
+    Properties:
+      Roles: [!Ref WorkerRole]
+
+  WorkerCallbackSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: frim/gpu-mocap/worker
+      Description: HMAC between GPU workers and the Frim webapp. Not an IAM access key.
+      GenerateSecretString:
+        PasswordLength: 48
+        ExcludePunctuation: true
+        RequireEachIncludedType: false
+
+  VercelOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://oidc.vercel.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 91d89f33169baa11a2e810804f8d25f5639aa440
+
+  AppRole:
+    Type: AWS::IAM::Role
+    DependsOn: VercelOidcProvider
+    Properties:
+      RoleName: frim-gpu-mocap-web
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                oidc.vercel.com:aud: sts.amazonaws.com
+              StringLike:
+                oidc.vercel.com:sub: !Sub 'owner:*:project:${VercelProjectName}:environment:*'
+      Policies:
+        - PolicyName: app
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject, s3:HeadObject, s3:ListBucket]
+                Resource:
+                  - !GetAtt Bucket.Arn
+                  - !Sub '${Bucket.Arn}/*'
+              - Effect: Allow
+                Action: [sqs:SendMessage, sqs:GetQueueAttributes]
+                Resource: !GetAtt JobQueue.Arn
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeInstances
+                  - ec2:RunInstances
+                  - ec2:CreateTags
+                  - ec2:DescribeLaunchTemplates
+                  - ec2:DescribeLaunchTemplateVersions
+                  - ec2:TerminateInstances
+                Resource: '*'
+              - Effect: Allow
+                Action: [cloudwatch:PutMetricData]
+                Resource: '*'
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource: !Ref WorkerCallbackSecret
+              - Effect: Allow
+                Action: [iam:PassRole]
+                Resource: !GetAtt WorkerRole.Arn
+
+  WatchdogRole:
+    Type: AWS::IAM::Role
+    Properties:
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Effect: Allow
+            Principal: { Service: lambda.amazonaws.com }
+            Action: sts:AssumeRole
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole
+      Policies:
+        - PolicyName: stop-gpu
+          PolicyDocument:
+            Version: '2012-10-17'
+            Statement:
+              - Effect: Allow
+                Action: [ec2:DescribeInstances, ec2:TerminateInstances, ec2:StopInstances]
+                Resource: '*'
+              - Effect: Allow
+                Action: [sqs:GetQueueAttributes]
+                Resource: !GetAtt JobQueue.Arn
+              - Effect: Allow
+                Action: [cloudwatch:PutMetricData]
+                Resource: '*'
+              - Effect: Allow
+                Action: [sts:GetCallerIdentity]
+                Resource: '*'
+              - Effect: Allow
+                Action: [s3:GetObject, s3:PutObject]
+                Resource: !Sub '${Bucket.Arn}/*'
+              - Effect: Allow
+                Action: [secretsmanager:GetSecretValue]
+                Resource: !Ref WorkerCallbackSecret
+
+  WatchdogFn:
+    Type: AWS::Lambda::Function
+    Properties:
+      FunctionName: frim-gpu-mocap-watchdog
+      Runtime: python3.12
+      Handler: index.handler
+      Role: !GetAtt WatchdogRole.Arn
+      Timeout: 60
+      Environment:
+        Variables:
+          QUEUE_URL: !Ref JobQueue
+          CALLBACK_URL: !Ref CallbackUrl
+          SECRET_ARN: !Ref WorkerCallbackSecret
+          GPU_S3_BUCKET: !Ref Bucket
+          MAX_RUN_MINUTES: '25'
+          IDLE_TERMINATE_MINUTES: '16'
+          MAX_INSTANCES: !Ref MaxInstances
+          BUDGET_LIMIT: !Ref MonthlyBudgetUsd
+          SPOT_USD: '0.20'
+      Code:
+        ZipFile: |
+          import json,os,time,boto3
+          from urllib.request import Request,urlopen
+          E=os.environ
+          ec2,sqs,cw,s3=boto3.client('ec2'),boto3.client('sqs'),boto3.client('cloudwatch'),boto3.client('s3')
+          Q,CB,BKT=E['QUEUE_URL'],E.get('CALLBACK_URL','').rstrip('/'),E['GPU_S3_BUCKET']
+          MX,IDLE,CAP=int(E.get('MAX_RUN_MINUTES','25')),int(E.get('IDLE_TERMINATE_MINUTES','16')),int(E.get('MAX_INSTANCES','100'))
+          LIM,RATE=float(E.get('BUDGET_LIMIT','80')),float(E.get('SPOT_USD','0.20'))
+          TAG={'Name':'tag:Application','Values':['frim-gpu-mocap']}
+          def metric(n,v):
+            cw.put_metric_data(Namespace='Frim/GpuMocap',MetricData=[{'MetricName':n,'Value':v,'Unit':'Count'}])
+          def secret():
+            return boto3.client('secretsmanager').get_secret_value(SecretId=E['SECRET_ARN'])['SecretString']
+          def insts(st):
+            r=ec2.describe_instances(Filters=[TAG,{'Name':'instance-state-name','Values':st}])
+            return [i for x in r.get('Reservations',[]) for i in x.get('Instances',[])]
+          def ping(reason, ids):
+            if not CB or not ids: return
+            sec=secret(); body=json.dumps({'type':'gpu_terminated','reason':reason,'instanceIds':ids,'secret':sec}).encode()
+            try: urlopen(Request(CB+'/api/gpu/alerts',data=body,headers={'Content-Type':'application/json','x-gpu-worker-secret':sec},method='POST'),timeout=8)
+            except Exception: pass
+          def kill(ids, reason):
+            if not ids: return
+            ec2.terminate_instances(InstanceIds=ids); metric('WatchdogTerminate',len(ids)); ping(reason, ids)
+          def add_spend(n):
+            m,key=time.strftime('%Y-%m'),'ops/eu-north-1-spend.json'
+            try: st=json.loads(s3.get_object(Bucket=BKT,Key=key)['Body'].read())
+            except Exception: st={'month':m,'usd':0}
+            if st.get('month')!=m: st={'month':m,'usd':0}
+            st['usd']=float(st.get('usd') or 0)+n*(5/60.0)*RATE
+            s3.put_object(Bucket=BKT,Key=key,Body=json.dumps(st),ContentType='application/json'); return st['usd']
+          def handler(event, context):
+            live=insts(['pending','running']); live.sort(key=lambda i: i.get('LaunchTime').timestamp() if i.get('LaunchTime') else 0)
+            ids=[i['InstanceId'] for i in live]; metric('GpuInstancesRunning',len(ids)); usd=add_spend(len(ids))
+            leftover=insts(['stopped','stopping'])
+            if leftover: kill([i['InstanceId'] for i in leftover],'idle stopped leftover')
+            if usd>=LIM and ids: kill(ids,'eu-north-1 budget halt'); return {'halt':1,'usd':usd}
+            if not ids: return {'ok':1,'usd':usd}
+            a=sqs.get_queue_attributes(QueueUrl=Q,AttributeNames=['ApproximateNumberOfMessages','ApproximateNumberOfMessagesNotVisible'])['Attributes']
+            pending=int(a.get('ApproximateNumberOfMessages','0'))+int(a.get('ApproximateNumberOfMessagesNotVisible','0'))
+            now=time.time(); extra=ids[CAP:] if len(ids)>CAP else []; skip=set(extra); idle,stuck=[],[]
+            for i in live:
+              iid=i['InstanceId']
+              if iid in skip: continue
+              age=(now-i['LaunchTime'].timestamp())/60 if i.get('LaunchTime') else 0
+              (stuck if age>=MX else idle if pending==0 and age>=IDLE else []).append(iid)
+            kill(extra,'over cap'); kill(stuck,'max runtime'); kill(idle,'idle 900s'); return {'usd':usd,'pending':pending}
+
+  WatchdogSchedule:
+    Type: AWS::Events::Rule
+    Properties:
+      ScheduleExpression: rate(5 minutes)
+      State: ENABLED
+      Targets:
+        - Arn: !GetAtt WatchdogFn.Arn
+          Id: watchdog
+
+  WatchdogInvoke:
+    Type: AWS::Lambda::Permission
+    Properties:
+      FunctionName: !Ref WatchdogFn
+      Action: lambda:InvokeFunction
+      Principal: events.amazonaws.com
+      SourceArn: !GetAtt WatchdogSchedule.Arn
+
+  GpuVpc:
+    Type: AWS::EC2::VPC
+    Properties:
+      CidrBlock: 10.42.0.0/16
+      EnableDnsSupport: true
+      EnableDnsHostnames: true
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+        - Key: Name
+          Value: frim-gpu-mocap-vpc
+
+  GpuIgw:
+    Type: AWS::EC2::InternetGateway
+    Properties:
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+
+  GpuIgwAttach:
+    Type: AWS::EC2::VPCGatewayAttachment
+    Properties:
+      VpcId: !Ref GpuVpc
+      InternetGatewayId: !Ref GpuIgw
+
+  GpuSubnet:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GpuVpc
+      CidrBlock: 10.42.0.0/24
+      MapPublicIpOnLaunch: true
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+        - Key: Name
+          Value: frim-gpu-mocap-public
+
+  GpuRouteTable:
+    Type: AWS::EC2::RouteTable
+    Properties:
+      VpcId: !Ref GpuVpc
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+
+  GpuDefaultRoute:
+    Type: AWS::EC2::Route
+    DependsOn: GpuIgwAttach
+    Properties:
+      RouteTableId: !Ref GpuRouteTable
+      DestinationCidrBlock: 0.0.0.0/0
+      GatewayId: !Ref GpuIgw
+
+  GpuSubnetRoute:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref GpuSubnet
+      RouteTableId: !Ref GpuRouteTable
+
+  WorkerSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Frim GPU worker egress only
+      VpcId: !Ref GpuVpc
+      SecurityGroupEgress:
+        - IpProtocol: -1
+          CidrIp: 0.0.0.0/0
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+
+  LaunchTemplate:
+    Type: AWS::EC2::LaunchTemplate
+    Properties:
+      LaunchTemplateName: frim-gpu-mocap
+      LaunchTemplateData:
+        InstanceType: !Ref InstanceType
+        ImageId: '{{resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id}}'
+        IamInstanceProfile:
+          Arn: !GetAtt WorkerProfile.Arn
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            DeleteOnTermination: true
+            Groups: [!Ref WorkerSg]
+            SubnetId: !Ref GpuSubnet
+        EbsOptimized: true
+        InstanceInitiatedShutdownBehavior: terminate
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: one-time
+            InstanceInterruptionBehavior: terminate
+        BlockDeviceMappings:
+          - DeviceName: /dev/sda1
+            Ebs:
+              VolumeSize: !Ref VolumeSize
+              VolumeType: gp3
+              DeleteOnTermination: true
+        TagSpecifications:
+          - ResourceType: instance
+            Tags:
+              - Key: Application
+                Value: frim-gpu-mocap
+              - Key: Name
+                Value: frim-gpu-mocap-worker
+          - ResourceType: volume
+            Tags:
+              - Key: Application
+                Value: frim-gpu-mocap
+        UserData:
+          Fn::Base64: !Sub |
+            #!/bin/bash
+            set -euxo pipefail
+            export AWS_DEFAULT_REGION=${AWS::Region}
+            export GPU_S3_BUCKET=${Bucket}
+            export GPU_SQS_QUEUE_URL=${JobQueue}
+            export GPU_WORKER_SECRET=$(aws secretsmanager get-secret-value --secret-id ${WorkerCallbackSecret} --region ${AWS::Region} --query SecretString --output text)
+            export GPU_CALLBACK_URL=${CallbackUrl}
+            export IDLE_SECONDS=${IdleSeconds}
+            export GPU_ECR_IMAGE=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${WorkerRepo}:latest
+            apt-get update
+            apt-get install -y awscli docker.io || true
+            systemctl enable --now docker || true
+            mkdir -p /opt/frim-gpu-mocap
+            cat >/etc/frim-gpu.env <<EOF
+            AWS_REGION=${AWS::Region}
+            AWS_DEFAULT_REGION=${AWS::Region}
+            GPU_S3_BUCKET=${Bucket}
+            GPU_SQS_QUEUE_URL=${JobQueue}
+            GPU_WORKER_SECRET=$GPU_WORKER_SECRET
+            GPU_CALLBACK_URL=${CallbackUrl}
+            IDLE_SECONDS=${IdleSeconds}
+            GPU_ECR_IMAGE=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${WorkerRepo}:latest
+            EOF
+            aws s3 sync s3://${Bucket}/worker/ /opt/frim-gpu-worker/ --region ${AWS::Region} || true
+            if [ -f /opt/frim-gpu-worker/bootstrap.sh ]; then
+              set -a
+              source /etc/frim-gpu.env
+              set +a
+              bash /opt/frim-gpu-worker/bootstrap.sh
+            fi
+
+Outputs:
+  BucketName:
+    Value: !Ref Bucket
+  QueueUrl:
+    Value: !Ref JobQueue
+  LaunchTemplateId:
+    Value: !Ref LaunchTemplate
+  AwsRegion:
+    Value: !Ref AWS::Region
+  AppRoleArn:
+    Value: !GetAtt AppRole.Arn
+  WorkerSecretArn:
+    Value: !Ref WorkerCallbackSecret
+  MonthlyBudgetUsd:
+    Value: !Ref MonthlyBudgetUsd
+  VercelEnv:
+    Value: !Sub |
+      AWS_REGION=${AWS::Region}
+      AWS_ROLE_ARN=${AppRole.Arn}
+      GPU_S3_BUCKET=${Bucket}
+      GPU_SQS_QUEUE_URL=${JobQueue}
+      GPU_EC2_LAUNCH_TEMPLATE_ID=${LaunchTemplate}
+      GPU_WORKER_SECRET_ARN=${WorkerCallbackSecret}
+      GPU_CALLBACK_URL=${CallbackUrl}
+      AWS_BUDGET_LIMIT=${MonthlyBudgetUsd}
+      GPU_MAX_INSTANCES=${MaxInstances}
