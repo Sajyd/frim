@@ -2656,9 +2656,12 @@ export default function ThreeEditor({
     const info: { bones: Map<string, any>; order: string[]; spineLength: number } = { bones: new Map(), order: [], spineLength: 0 }
 
     let rootBone: THREE.Bone | null = null
-    bones.forEach((bone) => {
-      if (!rootBone && (!bone.parent || !bones.has(bone.parent.name))) rootBone = bone
-    })
+    for (const bone of bones.values()) {
+      if (!bone.parent || !bones.has(bone.parent.name)) {
+        rootBone = bone
+        break
+      }
+    }
     if (!rootBone) return null
 
     // Measure the main spine chain length (first child at each level) for scale calibration
