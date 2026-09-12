@@ -13,22 +13,6 @@ const nextConfig = {
       },
     ],
   },
-  async redirects() {
-    return [
-      {
-        source: '/',
-        has: [{ type: 'host', value: 'www.frim.app' }],
-        destination: 'https://frim.app/',
-        permanent: true,
-      },
-      {
-        source: '/:path*',
-        has: [{ type: 'host', value: 'www.frim.app' }],
-        destination: 'https://frim.app/:path*',
-        permanent: true,
-      },
-    ]
-  },
   transpilePackages: ['three'],
   webpack: (config) => {
     config.externals = config.externals || []

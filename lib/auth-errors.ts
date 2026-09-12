@@ -6,7 +6,7 @@ export function authErrorMessage(error?: string | null) {
     case 'OAuthSignin':
     case 'OAuthCreateAccount':
     case 'Callback':
-      return 'GitHub/Google sign-in failed. Open https://frim.app (not www.frim.app) and try again.'
+      return 'GitHub/Google sign-in failed. Please try again.'
     case 'AccessDenied':
       return 'Access was denied. Try another account.'
     case 'Configuration':
