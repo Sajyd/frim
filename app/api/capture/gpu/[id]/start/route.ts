@@ -58,6 +58,18 @@ export async function POST(
       resultKey: job.s3ResultKey || `results/${job.id}.json`,
     })
 
+    const claimed = await prisma.gpuJob.findUnique({ where: { id: job.id } })
+    if (claimed && ['running', 'complete', 'failed'].includes(claimed.status)) {
+      return NextResponse.json({
+        ok: true,
+        jobId: job.id,
+        status: claimed.status,
+        instanceId: claimed.instanceId,
+        progress: claimed.progress,
+        label: claimed.status === 'running' ? 'Warm GPU is picking up your capture…' : claimed.status,
+      })
+    }
+
     let cap = {
       launchedId: null as string | null,
       reused: false,
@@ -79,12 +91,12 @@ export async function POST(
     }
 
     const status = cap.launchedId ? 'waking' : 'queued'
-    await prisma.gpuJob.update({
-      where: { id: job.id },
+    await prisma.gpuJob.updateMany({
+      where: { id: job.id, status: { notIn: ['running', 'complete', 'failed'] } },
       data: {
         status,
         progress: 5,
-        instanceId: cap.launchedId,
+        instanceId: cap.launchedId || undefined,
         error: null,
       },
     })

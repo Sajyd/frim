@@ -1,7 +1,7 @@
 import prisma from '@/lib/prisma'
 import { PLANS, isStudioPlan, studioGpuQuota } from '@/lib/stripe'
 
-export const GPU_JOB_TIMEOUT_MS = 25 * 60 * 1000
+export const GPU_JOB_TIMEOUT_MS = 40 * 60 * 1000
 export const GPU_MAX_UPLOAD_BYTES = 80 * 1024 * 1024
 export const GPU_MAX_DURATION_SEC = 90
 

@@ -42,10 +42,12 @@ if [ -n "$ECR_IMAGE" ]; then
   fi
 fi
 
+BUILT_LOCAL=0
 if [ "$IMAGE" = "frim-gpu-worker" ]; then
   aws s3 sync "s3://${BUCKET}/worker/" /opt/frim-gpu-worker/ --region "$REGION"
   cd /opt/frim-gpu-worker
   docker build -t frim-gpu-worker .
+  BUILT_LOCAL=1
 fi
 
 docker rm -f frim-gpu-worker 2>/dev/null || true
@@ -60,3 +62,12 @@ docker run -d --name frim-gpu-worker $GPU_FLAGS --restart unless-stopped \
   -e GPU_CALLBACK_URL="$CALLBACK_URL" \
   -e IDLE_SECONDS="$IDLE_SECONDS" \
   "$IMAGE"
+
+# Cache a first-boot image in ECR so the next Spot GPU can pull instead of rebuild.
+if [ "$BUILT_LOCAL" = "1" ] && [ -n "$ECR_IMAGE" ]; then
+  (
+    aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${ECR_IMAGE%%/*}"
+    docker tag frim-gpu-worker "$ECR_IMAGE"
+    docker push "$ECR_IMAGE"
+  ) >/var/log/frim-ecr-push.log 2>&1 &
+fi

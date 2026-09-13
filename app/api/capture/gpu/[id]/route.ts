@@ -7,7 +7,12 @@ import {
   getGpuResultJson,
   gpuResultExists,
   isGpuAwsConfigured,
+  countLiveGpuInstances,
   ensureGpuCapacity,
+  describeGpuInstance,
+  isGpuInstanceLive,
+  wakingLabel,
+  wakingProgress,
 } from '@/lib/aws-gpu'
 
 const LABELS: Record<string, string> = {
@@ -36,9 +41,18 @@ export async function GET(
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
 
+    let instanceState: string | null = null
     if (['queued', 'waking'].includes(job.status) && isGpuAwsConfigured()) {
+      const inst = job.instanceId ? await describeGpuInstance(job.instanceId) : null
+      instanceState = inst?.state || null
+      const live = isGpuInstanceLive(instanceState)
       const ageMs = Date.now() - job.updatedAt.getTime()
-      if (ageMs > 20_000) {
+      // Only launch another GPU if this job's box is dead. A pending/running
+      // instance is usually still installing Docker — extras burn credits.
+      const shouldRetry = job.instanceId
+        ? !live && ageMs > 25_000
+        : ageMs > 45_000 && (await countLiveGpuInstances()).length === 0
+      if (shouldRetry) {
         try {
           const cap = await ensureGpuCapacity({ queuedJustNow: true })
           if (cap.launchedId) {
@@ -46,6 +60,7 @@ export async function GET(
               where: { id: job.id },
               data: { instanceId: cap.launchedId, status: 'waking' },
             })
+            instanceState = 'pending'
           }
         } catch (err) {
           console.error('capacity retry failed:', err)
@@ -72,15 +87,21 @@ export async function GET(
       }
     }
 
+    const waking = job.status === 'waking' || (job.status === 'queued' && Boolean(job.instanceId))
+    const progress = waking ? Math.max(job.progress, wakingProgress(job.updatedAt)) : job.progress
+    const label = waking
+      ? wakingLabel(instanceState)
+      : (LABELS[job.status] || job.status)
+
     return NextResponse.json({
       jobId: job.id,
       status: job.status,
-      progress: job.progress,
+      progress,
       error: job.error,
       instanceId: job.instanceId,
       billedUsd: job.billedUsd,
       durationMs: job.durationMs,
-      label: LABELS[job.status] || job.status,
+      label,
       result,
     })
   } catch (error) {

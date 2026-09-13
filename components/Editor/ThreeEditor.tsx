@@ -164,6 +164,33 @@ function slerpKeepHemisphere(a: THREE.Quaternion, b: THREE.Quaternion, t: number
   return qa.slerp(qb, t)
 }
 
+/** Catmull-Rom (cubic Hermite) on a scalar — C1-smooth, no ease that flattens motion. */
+function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number) {
+  const t2 = t * t
+  const t3 = t2 * t
+  return 0.5 * (
+    2 * p1 +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  )
+}
+
+function catmullRomVec(p0: THREE.Vector3, p1: THREE.Vector3, p2: THREE.Vector3, p3: THREE.Vector3, t: number) {
+  return new THREE.Vector3(
+    catmullRom(p0.x, p1.x, p2.x, p3.x, t),
+    catmullRom(p0.y, p1.y, p2.y, p3.y, t),
+    catmullRom(p0.z, p1.z, p2.z, p3.z, t),
+  )
+}
+
+/** Cubic Bézier-style squad between q1→q2 using neighbors q0, q3 as handles. */
+function cubicQuat(q0: THREE.Quaternion, q1: THREE.Quaternion, q2: THREE.Quaternion, q3: THREE.Quaternion, t: number) {
+  const a = slerpKeepHemisphere(q1, q2, t)
+  const b = slerpKeepHemisphere(q0, q3, t)
+  return slerpKeepHemisphere(a, b, 2 * t * (1 - t) * 0.35)
+}
+
 export default function ThreeEditor({
   projectName,
   onChange,
@@ -268,8 +295,14 @@ export default function ThreeEditor({
   // Original bone transforms
   const originalTransformsRef = useRef<Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>>(new Map())
 
-  // Playback
+  // Playback — clock lives in a ref so rAF can interpolate fractional frames
+  // without restarting the loop on every React currentFrame update.
   const playbackTimeRef = useRef(0)
+  const isPlayingRef = useRef(false)
+  const currentAnimationRef = useRef<Animation | null>(null)
+  const currentFrameRef = useRef(0)
+  const playbackClockRef = useRef(0)
+  const applyPoseAtFrameRef = useRef<(frame: number) => void>(() => {})
 
   // Get current animation
   const currentAnimation = currentAnimationId ? animations.get(currentAnimationId) : null
@@ -277,6 +310,8 @@ export default function ThreeEditor({
   const fps = currentAnimation?.fps || 24
   const speed = currentAnimation?.speed || 1
   const loop = currentAnimation?.loop !== false
+  currentAnimationRef.current = currentAnimation ?? null
+  currentFrameRef.current = currentFrame
 
   // Serialize animations for saving
   const serializeAnimations = useCallback(() => {
@@ -526,42 +561,50 @@ export default function ThreeEditor({
     }
   }, [])
 
-  // Apply pose interpolation at a specific frame
+  // Apply pose interpolation at a specific (possibly fractional) frame.
+  // Integer frames stay exact; in-between frames use Catmull-Rom / cubic Bézier.
   const applyPoseAtFrame = useCallback((frame: number) => {
     if (!currentAnimation || currentAnimation.keyframes.size === 0) return
 
     const sortedFrames = Array.from(currentAnimation.keyframes.keys()).sort((a, b) => a - b)
+    if (sortedFrames.length === 0) return
 
     bones.forEach((bone, boneName) => {
-      let prevFrame: number | null = null
-      let nextFrame: number | null = null
-
-      for (const f of sortedFrames) {
-        if (currentAnimation.keyframes.get(f)?.has(boneName)) {
-          if (f <= frame) prevFrame = f
-          if (f >= frame && nextFrame === null) nextFrame = f
+      const keyed = sortedFrames.filter(f => currentAnimation.keyframes.get(f)?.has(boneName))
+      if (keyed.length === 0) return
+      let i2 = keyed.length - 1
+      if (frame <= keyed[0]) i2 = 0
+      else if (frame < keyed[i2]) {
+        let lo = 0
+        let hi = i2
+        while (lo < hi) {
+          const mid = (lo + hi) >> 1
+          if (keyed[mid] <= frame) lo = mid + 1
+          else hi = mid
         }
+        i2 = Math.max(1, lo)
+      }
+      const i1 = Math.max(0, i2 - 1)
+      const i0 = Math.max(0, i1 - 1)
+      const i3 = Math.min(keyed.length - 1, i2 + 1)
+      const f1 = keyed[i1]
+      const f2 = keyed[i2]
+      const k0 = currentAnimation.keyframes.get(keyed[i0])!.get(boneName)!
+      const k1 = currentAnimation.keyframes.get(f1)!.get(boneName)!
+      const k2 = currentAnimation.keyframes.get(f2)!.get(boneName)!
+      const k3 = currentAnimation.keyframes.get(keyed[i3])!.get(boneName)!
+
+      if (f1 === f2 || frame <= f1) {
+        bone.position.copy(k1.position)
+        bone.rotation.setFromQuaternion(k1.rotation)
+        bone.scale.copy(k1.scale)
+        return
       }
 
-      if (prevFrame === null && nextFrame === null) return
-      if (prevFrame === null) prevFrame = nextFrame!
-      if (nextFrame === null) nextFrame = prevFrame!
-
-      const prevData = currentAnimation.keyframes.get(prevFrame)?.get(boneName)
-      const nextData = currentAnimation.keyframes.get(nextFrame)?.get(boneName)
-
-      if (!prevData || !nextData) return
-
-      let t = 0
-      if (prevFrame !== nextFrame) {
-        t = (frame - prevFrame) / (nextFrame - prevFrame)
-      }
-
-      bone.position.lerpVectors(prevData.position, nextData.position, t)
-      const quat = new THREE.Quaternion()
-      quat.slerpQuaternions(prevData.rotation, nextData.rotation, t)
-      bone.rotation.setFromQuaternion(quat)
-      bone.scale.lerpVectors(prevData.scale, nextData.scale, t)
+      const t = THREE.MathUtils.clamp((frame - f1) / (f2 - f1), 0, 1)
+      bone.position.copy(catmullRomVec(k0.position, k1.position, k2.position, k3.position, t))
+      bone.rotation.setFromQuaternion(cubicQuat(k0.rotation, k1.rotation, k2.rotation, k3.rotation, t))
+      bone.scale.lerpVectors(k1.scale, k2.scale, t)
     })
   }, [currentAnimation, bones])
 
@@ -596,6 +639,17 @@ export default function ThreeEditor({
     console.log(`Auto-reset ${resetCount} bones without keyframes to T-pose`)
   }, [bones])
 
+  useEffect(() => {
+    applyPoseAtFrameRef.current = applyPoseAtFrame
+  }, [applyPoseAtFrame])
+
+  useEffect(() => {
+    isPlayingRef.current = isPlaying
+    if (isPlaying) {
+      playbackClockRef.current = currentFrameRef.current / Math.max(fps, 1)
+    }
+  }, [isPlaying, fps])
+
   // Apply pose when animation changes or is loaded
   useEffect(() => {
     if (currentAnimation && !isPlaying) {
@@ -612,33 +666,45 @@ export default function ThreeEditor({
   const goToFrame = useCallback((frame: number) => {
     const clampedFrame = Math.max(0, Math.min(frame, totalFrames))
     setCurrentFrame(clampedFrame)
+    currentFrameRef.current = clampedFrame
+    playbackClockRef.current = clampedFrame / Math.max(fps, 1)
     applyPoseAtFrame(clampedFrame)
-  }, [totalFrames, applyPoseAtFrame])
+  }, [totalFrames, applyPoseAtFrame, fps])
 
   // Animation loop
   useEffect(() => {
-    if (!sceneRef.current || !cameraRef.current || !rendererRef.current) return
+    if (!sceneReady || !sceneRef.current || !cameraRef.current || !rendererRef.current) return
 
     const animate = () => {
       animationIdRef.current = requestAnimationFrame(animate)
 
       const delta = clockRef.current.getDelta()
+      const anim = currentAnimationRef.current
 
-      // Playback
-      if (isPlaying && currentAnimation) {
-        playbackTimeRef.current += delta * speed
-        const frameDuration = 1 / fps
-
-        if (playbackTimeRef.current >= frameDuration) {
-          playbackTimeRef.current = 0
-          const nextFrame = currentFrame + 1
-          if (nextFrame <= totalFrames) {
-            goToFrame(nextFrame)
-          } else if (loop) {
-            goToFrame(0)
+      if (isPlayingRef.current && anim && anim.keyframes.size > 0) {
+        const animFps = Math.max(1, anim.fps || 24)
+        const animSpeed = anim.speed || 1
+        const animLoop = anim.loop !== false
+        const last = Math.max(0, anim.totalFrames - 1)
+        playbackClockRef.current += delta * animSpeed
+        let frame = playbackClockRef.current * animFps
+        if (frame > last) {
+          if (animLoop) {
+            const span = last + 1
+            frame = ((frame % span) + span) % span
+            playbackClockRef.current = frame / animFps
           } else {
+            frame = last
+            playbackClockRef.current = last / animFps
+            isPlayingRef.current = false
             setIsPlaying(false)
           }
+        }
+        applyPoseAtFrameRef.current(frame)
+        const shown = Math.round(frame)
+        if (shown !== currentFrameRef.current) {
+          currentFrameRef.current = shown
+          setCurrentFrame(shown)
         }
       }
 
@@ -663,7 +729,7 @@ export default function ThreeEditor({
     animate()
 
     return () => cancelAnimationFrame(animationIdRef.current)
-  }, [isPlaying, currentFrame, currentAnimation, fps, speed, loop, totalFrames, showBoneView, goToFrame])
+  }, [showBoneView, sceneReady])
 
   // Update transform controls mode
   useEffect(() => {
@@ -2987,6 +3053,7 @@ export default function ThreeEditor({
         fps: captureFps, totalFrames: totalAnimFrames, speed: 1, loop: true,
         keyframes: new Map()
       }
+      const rotationOnly = Boolean(gpuTimeline?.frames?.length)
 
       type Pt = { x: number; y: number; z: number }
       const mid = (a: Pt, b: Pt): Pt => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2, z: (a.z + b.z) / 2 })
@@ -3206,12 +3273,15 @@ export default function ThreeEditor({
         const imgTorso = Math.hypot((msI.x - mhI.x) * aspect, msI.y - mhI.y) || 1e-6
         const msW = mid(wld[11], wld[12]), mhW = mid(wld[23], wld[24])
         const worldTorso = Math.hypot(msW.x - mhW.x, msW.y - mhW.y, msW.z - mhW.z) || 1e-6
-        const zScale = (imgTorso / worldTorso) * Z_DEPTH_TORSO
-        const hyb: Pt[] = img.map((l: any, k: number) => ({
-          x: l.x * aspect, y: l.y, z: (wld[k]?.z ?? 0) * zScale,
-        }))
-        // Full metric world landmarks in character space (undamped z) for IK poles.
         const w3d: Pt[] = wld.map((l: any) => ({ x: l.x, y: l.y, z: l.z || 0 }))
+        // GPU: full 3D world (MotionBERT, canonical bones). Fast: 2D silhouette + z.
+        const hyb: Pt[] = rotationOnly
+          ? w3d
+          : img.map((l: any, k: number) => ({
+              x: l.x * aspect,
+              y: l.y,
+              z: (wld[k]?.z ?? 0) * (imgTorso / worldTorso) * Z_DEPTH_TORSO,
+            }))
 
         const mapping = getBoneMapping(hyb)
         const worldQuats: Record<string, THREE.Quaternion> = {}
@@ -3227,15 +3297,36 @@ export default function ThreeEditor({
           rootPos.clone().add(charPt(hyb[idx]).sub(midHipChar).multiplyScalar(rigScale))
         const jointFromWorld = (idx: number) =>
           rootPos.clone().add(charPt(w3d[idx]).multiplyScalar(worldScale))
-        // End effectors: video xy (silhouette) + nearly-full world z (depth).
-        const ikTarget = (idx: number) => {
-          const hy = jointFromHyb(idx)
-          const wr = jointFromWorld(idx)
-          return new THREE.Vector3(hy.x, hy.y, THREE.MathUtils.lerp(hy.z, wr.z, 0.9))
+        const limbStartOf = (endLm: number) =>
+          endLm === 15 ? 11 : endLm === 16 ? 12 : endLm === 27 ? 23 : 24
+        // GPU: aim along the captured 3D direction but land at the MESH rest
+        // length so the character does not stretch to the actor in the video.
+        const ikTarget = (endLm: number, origin: THREE.Vector3, len1: number, len2: number) => {
+          if (!rotationOnly) {
+            const hy = jointFromHyb(endLm)
+            const wr = jointFromWorld(endLm)
+            return new THREE.Vector3(hy.x, hy.y, THREE.MathUtils.lerp(hy.z, wr.z, 0.9))
+          }
+          const startLm = limbStartOf(endLm)
+          const dir = charPt(w3d[endLm]).sub(charPt(w3d[startLm]))
+          const captured = dir.length()
+          if (captured < 1e-6) return origin.clone()
+          dir.multiplyScalar(1 / captured)
+          const canonMax = (endLm === 15 || endLm === 16) ? 0.53 : 0.82
+          const reach = THREE.MathUtils.clamp(captured / canonMax, 0.28, 0.995)
+          return origin.clone().add(dir.multiplyScalar((len1 + len2) * reach))
         }
-        const ikPole = (idx: number) => {
-          const vis = Math.max(lmVis(wld, idx), lmVis(img, idx))
-          return vis >= 0.35 ? jointFromWorld(idx) : jointFromHyb(idx)
+        const ikPole = (endLm: number, origin: THREE.Vector3, poleLm: number) => {
+          if (!rotationOnly) {
+            const vis = Math.max(lmVis(wld, poleLm), lmVis(img, poleLm))
+            return vis >= 0.35 ? jointFromWorld(poleLm) : jointFromHyb(poleLm)
+          }
+          const startLm = limbStartOf(endLm)
+          const poleDir = charPt(w3d[poleLm]).sub(charPt(w3d[startLm]))
+          if (poleDir.lengthSq() < 1e-8) {
+            return origin.clone().add(new THREE.Vector3(0, 0, (endLm === 15 || endLm === 16) ? -1 : 1))
+          }
+          return origin.clone().add(poleDir.normalize())
         }
 
         const alignBone = (
@@ -3295,8 +3386,8 @@ export default function ThreeEditor({
             const len1 = bi.restLength || skeletonInfo.spineLength * 0.22
             const len2 = lowerBi?.restLength || skeletonInfo.spineLength * 0.2
             const origin = parentWorldPos.clone().add(localPos.clone().applyQuaternion(parentWorldQ))
-            const target = ikTarget(chain.endLm)
-            const pole = ikPole(chain.poleLm)
+            const target = ikTarget(chain.endLm, origin, len1, len2)
+            const pole = ikPole(chain.endLm, origin, chain.poleLm)
             const solved = solveTwoBoneIK(origin, target, pole, len1, len2)
 
             const upperDir = solved.mid.clone().sub(origin)
@@ -3390,7 +3481,7 @@ export default function ThreeEditor({
           )
 
           let resolvedWorldPos = fkWorldPos
-          if (seg) {
+          if (seg && !rotationOnly) {
             const jointWorldPos = rootPos.clone().add(
               charPt(seg.start).sub(midHipChar).multiplyScalar(rigScale)
             )
@@ -3401,10 +3492,12 @@ export default function ThreeEditor({
             )
           }
 
-          localPos = resolvedWorldPos.clone().sub(parentWorldPos).applyQuaternion(
-            parentWorldQ.clone().invert()
-          )
-          worldPositions[boneName] = resolvedWorldPos
+          if (!rotationOnly) {
+            localPos = resolvedWorldPos.clone().sub(parentWorldPos).applyQuaternion(
+              parentWorldQ.clone().invert()
+            )
+          }
+          worldPositions[boneName] = rotationOnly ? fkWorldPos : resolvedWorldPos
           worldQuats[boneName] = parentWorldQ.clone().multiply(localQuat)
 
           frameKeyframes.set(boneName, {
@@ -3439,12 +3532,22 @@ export default function ThreeEditor({
             const prev = orig[Math.max(0, i - 1)]
             const cur = orig[i]
             const next = orig[Math.min(orig.length - 1, i + 1)]
+            const prev2 = orig[Math.max(0, i - 2)]
+            const next2 = orig[Math.min(orig.length - 1, i + 2)]
             const out = newAnim.keyframes.get(frames[i])!
             out.forEach((kf, name) => {
               const p = prev.get(name)
               const c = cur.get(name)
               const n = next.get(name)
               if (!p || !c || !n) return
+              if (rotationOnly) {
+                const p2 = prev2.get(name) ?? p
+                const n2 = next2.get(name) ?? n
+                kf.rotation.copy(cubicQuat(p2.rotation, p.rotation, n.rotation, n2.rotation, 0.5))
+                kf.rotation.copy(slerpKeepHemisphere(kf.rotation, c.rotation, 0.55))
+                kf.position.copy(c.position)
+                return
+              }
               const midQ = slerpKeepHemisphere(p.rotation, n.rotation, 0.5)
               kf.rotation.copy(slerpKeepHemisphere(midQ, c.rotation, 0.7))
               kf.position.set(
@@ -3546,13 +3649,14 @@ export default function ThreeEditor({
         }
         if (!startRes.ok) throw new Error(startData.error || 'Failed to start GPU worker')
 
-        const deadline = Date.now() + 12 * 60 * 1000
+        const deadline = Date.now() + 35 * 60 * 1000
         while (Date.now() < deadline) {
           const poll = await fetch(`/api/capture/gpu/${data.jobId}`)
           const job = await poll.json().catch(() => ({}))
           if (!poll.ok) throw new Error(job.error || 'Lost GPU job')
-          setVideoProgress(Math.max(12, Math.min(88, Number(job.progress) || 12)))
-          setVideoProgressLabel(job.label || 'Reconstructing 3D pose…')
+          const pct = Number(job.progress)
+          setVideoProgress(Math.max(12, Math.min(88, Number.isFinite(pct) ? pct : 12)))
+          setVideoProgressLabel(job.label || 'Starting GPU…')
           if (job.status === 'complete') {
             if (!job.result?.frames?.length) {
               throw new Error('GPU returned no pose frames')

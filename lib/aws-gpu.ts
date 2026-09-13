@@ -112,6 +112,48 @@ export async function countLiveGpuInstances() {
   return (listed.Reservations || []).flatMap(r => r.Instances || [])
 }
 
+export type GpuInstanceView = {
+  id: string
+  state: string
+  launchTime: Date | null
+}
+
+const DEAD_STATES = new Set(['terminated', 'stopped', 'stopping', 'shutting-down'])
+
+export async function describeGpuInstance(instanceId: string): Promise<GpuInstanceView | null> {
+  if (!instanceId) return null
+  try {
+    const listed = await ec2().send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }))
+    const inst = listed.Reservations?.flatMap(r => r.Instances || [])[0]
+    if (!inst?.InstanceId) return null
+    return {
+      id: inst.InstanceId,
+      state: inst.State?.Name || 'unknown',
+      launchTime: inst.LaunchTime ?? null,
+    }
+  } catch (err) {
+    console.error('describe GPU instance failed:', err)
+    return null
+  }
+}
+
+export function isGpuInstanceLive(state?: string | null) {
+  return Boolean(state) && !DEAD_STATES.has(state!)
+}
+
+export function wakingLabel(state?: string | null) {
+  if (state === 'pending') return 'Waiting for a Spot GPU to come online…'
+  if (state === 'running') return 'GPU is booting — installing the capture worker…'
+  if (state && DEAD_STATES.has(state)) return 'GPU stopped — starting another…'
+  return 'Starting a Spot GPU for this capture…'
+}
+
+/** Crawl 12% → ~30% while the instance is still booting so the UI does not look frozen. */
+export function wakingProgress(updatedAt: Date) {
+  const elapsed = Math.max(0, (Date.now() - updatedAt.getTime()) / 1000)
+  return Math.min(30, 12 + Math.floor(elapsed / 15))
+}
+
 async function launchOneGpu(): Promise<string | null> {
   const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
   if (!templateId) {

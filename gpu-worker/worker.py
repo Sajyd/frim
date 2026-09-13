@@ -177,9 +177,10 @@ def main() -> None:
     put_metric('WorkerStart', 1)
     # Warm the pose model so the first job is not a 30s download.
     try:
-        from infer import get_body
+        from infer import get_body, get_motionbert
         get_body()
-        log('pose model ready')
+        get_motionbert()
+        log('pose + MotionBERT ready')
     except Exception as exc:
         log(f'model warmup failed (will retry on job): {exc}')
 

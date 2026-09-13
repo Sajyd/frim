@@ -156,6 +156,10 @@ Resources:
                   - ecr:BatchCheckLayerAvailability
                   - ecr:GetDownloadUrlForLayer
                   - ecr:BatchGetImage
+                  - ecr:PutImage
+                  - ecr:InitiateLayerUpload
+                  - ecr:UploadLayerPart
+                  - ecr:CompleteLayerUpload
                 Resource: !GetAtt WorkerRepo.Arn
               - Effect: Allow
                 Action: [secretsmanager:GetSecretValue]
@@ -376,7 +380,7 @@ Resources:
           CALLBACK_URL: !Ref CallbackUrl
           SECRET_ARN: !Ref WorkerCallbackSecret
           GPU_S3_BUCKET: !Ref Bucket
-          MAX_RUN_MINUTES: '25'
+          MAX_RUN_MINUTES: '45'
           IDLE_TERMINATE_MINUTES: '16'
           MAX_INSTANCES: !Ref MaxInstances
           BUDGET_LIMIT: !Ref MonthlyBudgetUsd
@@ -388,7 +392,7 @@ Resources:
           E=os.environ
           ec2,sqs,cw,s3=boto3.client('ec2'),boto3.client('sqs'),boto3.client('cloudwatch'),boto3.client('s3')
           Q,CB,BKT=E['QUEUE_URL'],E.get('CALLBACK_URL','').rstrip('/'),E['GPU_S3_BUCKET']
-          MX,IDLE,CAP=int(E.get('MAX_RUN_MINUTES','25')),int(E.get('IDLE_TERMINATE_MINUTES','16')),int(E.get('MAX_INSTANCES','100'))
+          MX,IDLE,CAP=int(E.get('MAX_RUN_MINUTES','45')),int(E.get('IDLE_TERMINATE_MINUTES','16')),int(E.get('MAX_INSTANCES','100'))
           LIM,RATE=float(E.get('BUDGET_LIMIT','80')),float(E.get('SPOT_USD','0.20'))
           TAG={'Name':'tag:Application','Values':['frim-gpu-mocap']}
           def metric(n,v):
@@ -421,13 +425,18 @@ Resources:
             if usd>=LIM and ids: kill(ids,'eu-north-1 budget halt'); return {'halt':1,'usd':usd}
             if not ids: return {'ok':1,'usd':usd}
             a=sqs.get_queue_attributes(QueueUrl=Q,AttributeNames=['ApproximateNumberOfMessages','ApproximateNumberOfMessagesNotVisible'])['Attributes']
-            pending=int(a.get('ApproximateNumberOfMessages','0'))+int(a.get('ApproximateNumberOfMessagesNotVisible','0'))
+            visible=int(a.get('ApproximateNumberOfMessages','0')); inflight=int(a.get('ApproximateNumberOfMessagesNotVisible','0')); pending=visible+inflight
             now=time.time(); extra=ids[CAP:] if len(ids)>CAP else []; skip=set(extra); idle,stuck=[],[]
             for i in live:
               iid=i['InstanceId']
               if iid in skip: continue
               age=(now-i['LaunchTime'].timestamp())/60 if i.get('LaunchTime') else 0
-              (stuck if age>=MX else idle if pending==0 and age>=IDLE else []).append(iid)
+              # Don't kill a first-boot GPU as "stuck" while the job is still queued
+              # (docker build / ECR pull). Only enforce max runtime once a worker
+              # has the message, or after 2x MAX_RUN as a hard cap.
+              if inflight and age>=MX: stuck.append(iid)
+              elif age>=MX*2: stuck.append(iid)
+              elif pending==0 and age>=IDLE: idle.append(iid)
             kill(extra,'over cap'); kill(stuck,'max runtime'); kill(idle,'idle 900s'); return {'usd':usd,'pending':pending}
 
   WatchdogSchedule:
