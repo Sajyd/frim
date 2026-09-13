@@ -34,8 +34,8 @@ Parameters:
     Description: Cheapest NVIDIA T4 instance that can run RTMO/RTMPose
   VolumeSize:
     Type: Number
-    Default: 40
-    Description: gp3 GB while the instance is running. Deleted on terminate — not kept per user.
+    Default: 100
+    Description: gp3 GB while the instance is running. Must be >= the Deep Learning AMI snapshot (75GB). Deleted on terminate.
 
 Resources:
   Bucket:
@@ -535,11 +535,8 @@ Resources:
             SubnetId: !Ref GpuSubnet
         EbsOptimized: true
         InstanceInitiatedShutdownBehavior: terminate
-        InstanceMarketOptions:
-          MarketType: spot
-          SpotOptions:
-            SpotInstanceType: one-time
-            InstanceInterruptionBehavior: terminate
+        # On-demand by default: this account's G/VT Spot quota is 0 until AWS
+        # approves an increase. The app still tries Spot first, then falls back.
         BlockDeviceMappings:
           - DeviceName: /dev/sda1
             Ebs:

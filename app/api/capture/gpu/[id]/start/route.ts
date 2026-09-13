@@ -70,6 +70,12 @@ export async function POST(
       await putGpuMetric('GpuInstancesRunning', cap.running)
     } catch (err) {
       console.error('ensure GPU capacity failed:', err)
+      const message = err instanceof Error ? err.message : 'Could not start a GPU'
+      await prisma.gpuJob.update({
+        where: { id: job.id },
+        data: { status: 'failed', error: message, completedAt: new Date() },
+      })
+      return NextResponse.json({ error: message, code: 'GPU_LAUNCH_FAILED' }, { status: 503 })
     }
 
     const status = cap.launchedId ? 'waking' : 'queued'
@@ -79,6 +85,7 @@ export async function POST(
         status,
         progress: 5,
         instanceId: cap.launchedId,
+        error: null,
       },
     })
     await putGpuMetric('JobsQueued', 1)

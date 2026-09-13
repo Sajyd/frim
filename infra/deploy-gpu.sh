@@ -22,6 +22,7 @@ aws cloudformation deploy \
     CallbackUrl="$CALLBACK" \
     IdleSeconds=900 \
     MaxInstances="$MAX_INSTANCES" \
+    VolumeSize=100 \
     VercelTeamSlug="$VERCEL_TEAM"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"

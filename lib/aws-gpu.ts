@@ -114,13 +114,41 @@ export async function countLiveGpuInstances() {
 
 async function launchOneGpu(): Promise<string | null> {
   const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
-  if (!templateId) return null
-  const launched = await ec2().send(new RunInstancesCommand({
+  if (!templateId) {
+    throw new Error('GPU_EC2_LAUNCH_TEMPLATE_ID is not set')
+  }
+  const base = {
     MinCount: 1,
     MaxCount: 1,
-    LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' },
-  }))
-  return launched.Instances?.[0]?.InstanceId || null
+    LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' as const },
+  }
+  try {
+    const spot = await ec2().send(new RunInstancesCommand({
+      ...base,
+      InstanceMarketOptions: {
+        MarketType: 'spot',
+        SpotOptions: {
+          SpotInstanceType: 'one-time',
+          InstanceInterruptionBehavior: 'terminate',
+        },
+      },
+    }))
+    const id = spot.Instances?.[0]?.InstanceId
+    if (id) return id
+  } catch (err: any) {
+    const code = err?.name || err?.Code || err?.code
+    const msg = String(err?.message || err)
+    const spotBlocked =
+      code === 'MaxSpotInstanceCountExceeded' ||
+      code === 'InsufficientInstanceCapacity' ||
+      /spot/i.test(msg)
+    if (!spotBlocked) throw err
+    console.warn('Spot GPU unavailable, falling back to on-demand:', msg)
+  }
+  const onDemand = await ec2().send(new RunInstancesCommand(base))
+  const id = onDemand.Instances?.[0]?.InstanceId
+  if (!id) throw new Error('RunInstances returned no instance')
+  return id
 }
 
 export type GpuCapacity = {
