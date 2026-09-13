@@ -42,7 +42,7 @@ type Rig = {
   toeR: Pt
 }
 
-const WALK_PERIOD = 1.15
+const WALK_PERIOD = 1.35
 
 function deg(d: number) {
   return (d * Math.PI) / 180
@@ -87,14 +87,14 @@ function swapLR(p: WalkPose): WalkPose {
 }
 
 const CONTACT: WalkPose = {
-  hipY: 1,
+  hipY: 0,
   lean: 8,
   head: -5,
-  thighR: 26,
-  shinR: 8,
-  footR: 14,
-  thighL: -20,
-  shinL: 16,
+  thighR: 28,
+  shinR: 28,
+  footR: 12,
+  thighL: -26,
+  shinL: 32,
   footL: -16,
   armR: -28,
   forearmR: 14,
@@ -103,15 +103,15 @@ const CONTACT: WalkPose = {
 }
 
 const DOWN: WalkPose = {
-  hipY: 5,
+  hipY: 0,
   lean: 10,
   head: -3,
-  thighR: 12,
-  shinR: 26,
+  thighR: 16,
+  shinR: 58,
   footR: 2,
-  thighL: -8,
-  shinL: 38,
-  footL: -6,
+  thighL: 28,
+  shinL: 64,
+  footL: 8,
   armR: -14,
   forearmR: 22,
   armL: 12,
@@ -119,31 +119,31 @@ const DOWN: WalkPose = {
 }
 
 const PASS: WalkPose = {
-  hipY: 1,
-  lean: 8,
-  head: -5,
-  thighR: 4,
-  shinR: 10,
-  footR: 0,
-  thighL: 16,
-  shinL: 46,
-  footL: 12,
-  armR: 6,
+  hipY: 0,
+  lean: 6,
+  head: -4,
+  thighR: -30,
+  shinR: 42,
+  footR: -12,
+  thighL: 72,
+  shinL: 74,
+  footL: 4,
+  armR: 10,
   forearmR: 18,
-  armL: -8,
+  armL: -12,
   forearmL: 24,
 }
 
 const HIGH: WalkPose = {
-  hipY: -3,
+  hipY: 0,
   lean: 7,
   head: -6,
-  thighR: -12,
-  shinR: 6,
-  footR: -14,
-  thighL: 32,
-  shinL: 16,
-  footL: 10,
+  thighR: -20,
+  shinR: 24,
+  footR: -16,
+  thighL: 52,
+  shinL: 50,
+  footL: 12,
   armR: 26,
   forearmR: 32,
   armL: -28,
@@ -152,13 +152,15 @@ const HIGH: WalkPose = {
 
 const WALK_KEYS: { at: number; pose: WalkPose }[] = [
   { at: 0, pose: CONTACT },
-  { at: 0.125, pose: DOWN },
-  { at: 0.25, pose: PASS },
-  { at: 0.375, pose: HIGH },
+  { at: 0.1, pose: DOWN },
+  { at: 0.2, pose: PASS },
+  { at: 0.34, pose: PASS },
+  { at: 0.44, pose: HIGH },
   { at: 0.5, pose: swapLR(CONTACT) },
-  { at: 0.625, pose: swapLR(DOWN) },
-  { at: 0.75, pose: swapLR(PASS) },
-  { at: 0.875, pose: swapLR(HIGH) },
+  { at: 0.6, pose: swapLR(DOWN) },
+  { at: 0.7, pose: swapLR(PASS) },
+  { at: 0.84, pose: swapLR(PASS) },
+  { at: 0.94, pose: swapLR(HIGH) },
   { at: 1, pose: CONTACT },
 ]
 
@@ -172,22 +174,16 @@ function sampleWalk(time: number): WalkPose {
   return lerpPose(a.pose, b.pose, u)
 }
 
-function plantToFloor(ankle: Pt, toe: Pt, floorY: number) {
-  const lowest = Math.max(ankle.y, toe.y)
-  if (lowest <= floorY) return { ankle, toe }
-  const dy = lowest - floorY
-  return {
-    ankle: { x: ankle.x, y: ankle.y - dy },
-    toe: { x: toe.x, y: toe.y - dy },
-  }
+function up(p: Pt, dy: number): Pt {
+  return { x: p.x, y: p.y - dy }
 }
 
-function solveLeg(hip: Pt, thigh: number, shin: number, foot: number, scale: number, floorY: number) {
+function solveLeg(hip: Pt, thigh: number, shin: number, foot: number, scale: number) {
   const knee = polar(hip, deg(thigh), 28 * scale)
-  const ankle = polar(knee, deg(thigh + shin), 26 * scale)
+  // shin is knee flexion: calf folds back so the foot lifts instead of kicking forward
+  const ankle = polar(knee, deg(thigh - shin), 26 * scale)
   const toe = polar(ankle, Math.PI / 2 + deg(foot), 10 * scale)
-  const planted = plantToFloor(ankle, toe, floorY)
-  return { knee, ankle: planted.ankle, toe: planted.toe }
+  return { knee, ankle, toe }
 }
 
 function solveSide(pose: WalkPose, origin: Pt, scale: number): Rig {
@@ -210,15 +206,32 @@ function solveSide(pose: WalkPose, origin: Pt, scale: number): Rig {
 
   const hipR = { x: hip.x + 5 * s, y: hip.y + 1 * s }
   const hipL = { x: hip.x - 6 * s, y: hip.y + 2 * s }
-  const right = solveLeg(hipR, pose.thighR, pose.shinR, pose.footR, s, floorY)
-  const left = solveLeg(hipL, pose.thighL, pose.shinL, pose.footL, s, floorY)
+  const right = solveLeg(hipR, pose.thighR, pose.shinR, pose.footR, s)
+  const left = solveLeg(hipL, pose.thighL, pose.shinL, pose.footL, s)
+
+  const lowest = Math.max(left.ankle.y, left.toe.y, right.ankle.y, right.toe.y)
+  const dy = lowest - floorY
 
   return {
-    hip, chest, neck, head, nose,
-    shoulderL, elbowL, wristL,
-    shoulderR, elbowR, wristR,
-    hipL, kneeL: left.knee, ankleL: left.ankle, toeL: left.toe,
-    hipR, kneeR: right.knee, ankleR: right.ankle, toeR: right.toe,
+    hip: up(hip, dy),
+    chest: up(chest, dy),
+    neck: up(neck, dy),
+    head: up(head, dy),
+    nose: up(nose, dy),
+    shoulderL: up(shoulderL, dy),
+    elbowL: up(elbowL, dy),
+    wristL: up(wristL, dy),
+    shoulderR: up(shoulderR, dy),
+    elbowR: up(elbowR, dy),
+    wristR: up(wristR, dy),
+    hipL: up(hipL, dy),
+    kneeL: up(left.knee, dy),
+    ankleL: up(left.ankle, dy),
+    toeL: up(left.toe, dy),
+    hipR: up(hipR, dy),
+    kneeR: up(right.knee, dy),
+    ankleR: up(right.ankle, dy),
+    toeR: up(right.toe, dy),
   }
 }
 
