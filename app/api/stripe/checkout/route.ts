@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { stripe, PLANS, safeReturnPath, type PaidPlanType } from '@/lib/stripe'
 import prisma from '@/lib/prisma'
+import { publicAppUrl } from '@/lib/app-url'
 
 export async function POST(request: NextRequest) {
   try {
@@ -32,7 +33,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'User not found' }, { status: 404 })
     }
 
-    const origin = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+    const origin = publicAppUrl()
     const joiner = returnPath.includes('?') ? '&' : '?'
     const successUrl = `${origin}${returnPath}${joiner}upgraded=${planId}`
     const cancelUrl = `${origin}${returnPath}${joiner}canceled=true`

@@ -24,6 +24,10 @@ Parameters:
     Type: String
     Default: frim
     Description: Vercel project name used in the OIDC subject (no access keys)
+  VercelTeamSlug:
+    Type: String
+    Default: sajyds-projects
+    Description: Vercel team slug from vercel.com/TEAM. Used for default OIDC aud and Team issuer.
   InstanceType:
     Type: String
     Default: g4dn.xlarge
@@ -172,32 +176,125 @@ Resources:
         ExcludePunctuation: true
         RequireEachIncludedType: false
 
+  # Let's Encrypt YR2 intermediate (not the leaf). AWS falls back to this
+  # thumbprint when the CA is not yet in the trusted store — a leaf SHA1
+  # makes AssumeRoleWithWebIdentity fail with InvalidIdentityToken.
   VercelOidcProvider:
     Type: AWS::IAM::OIDCProvider
     Properties:
       Url: https://oidc.vercel.com
       ClientIdList:
         - sts.amazonaws.com
+        - https://sts.amazonaws.com
+        - !Sub https://vercel.com/${VercelTeamSlug}
+        - https://vercel.com/sajyds-projects
+        - https://vercel.com/sajyd
+        - https://vercel.com/sajydmounib
+        - https://vercel.com/frim
       ThumbprintList:
-        - 91d89f33169baa11a2e810804f8d25f5639aa440
+        - 2d74d6dfd96eea55ad7baafa0d3c6552b2dadc37
+
+  VercelTeamOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://oidc.vercel.com/sajyd
+      ClientIdList:
+        - sts.amazonaws.com
+        - https://sts.amazonaws.com
+        - https://vercel.com/sajyd
+      ThumbprintList:
+        - 2d74d6dfd96eea55ad7baafa0d3c6552b2dadc37
+
+  VercelTeamOidcProviderAlt:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://oidc.vercel.com/sajydmounib
+      ClientIdList:
+        - sts.amazonaws.com
+        - https://sts.amazonaws.com
+        - https://vercel.com/sajydmounib
+      ThumbprintList:
+        - 2d74d6dfd96eea55ad7baafa0d3c6552b2dadc37
+
+  VercelTeamOidcSajydsProjects:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://oidc.vercel.com/sajyds-projects
+      ClientIdList:
+        - sts.amazonaws.com
+        - https://sts.amazonaws.com
+        - https://vercel.com/sajyds-projects
+      ThumbprintList:
+        - 2d74d6dfd96eea55ad7baafa0d3c6552b2dadc37
 
   AppRole:
     Type: AWS::IAM::Role
-    DependsOn: VercelOidcProvider
+    DependsOn:
+      - VercelOidcProvider
+      - VercelTeamOidcProvider
+      - VercelTeamOidcProviderAlt
+      - VercelTeamOidcSajydsProjects
     Properties:
       RoleName: frim-gpu-mocap-web
       AssumeRolePolicyDocument:
         Version: '2012-10-17'
         Statement:
-          - Effect: Allow
+          - Sid: VercelGlobalIssuer
+            Effect: Allow
             Principal:
               Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com
             Action: sts:AssumeRoleWithWebIdentity
             Condition:
               StringEquals:
-                oidc.vercel.com:aud: sts.amazonaws.com
+                oidc.vercel.com:aud:
+                  - sts.amazonaws.com
+                  - https://sts.amazonaws.com
+                  - !Sub https://vercel.com/${VercelTeamSlug}
+                  - https://vercel.com/sajyds-projects
+                  - https://vercel.com/sajyd
+                  - https://vercel.com/sajydmounib
+                  - https://vercel.com/frim
               StringLike:
                 oidc.vercel.com:sub: !Sub 'owner:*:project:${VercelProjectName}:environment:*'
+          - Sid: VercelTeamIssuer
+            Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/sajyd
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                oidc.vercel.com/sajyd:aud:
+                  - sts.amazonaws.com
+                  - https://sts.amazonaws.com
+                  - https://vercel.com/sajyd
+              StringLike:
+                oidc.vercel.com/sajyd:sub: !Sub 'owner:sajyd:project:${VercelProjectName}:environment:*'
+          - Sid: VercelTeamIssuerAlt
+            Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/sajydmounib
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                oidc.vercel.com/sajydmounib:aud:
+                  - sts.amazonaws.com
+                  - https://sts.amazonaws.com
+                  - https://vercel.com/sajydmounib
+              StringLike:
+                oidc.vercel.com/sajydmounib:sub: !Sub 'owner:sajydmounib:project:${VercelProjectName}:environment:*'
+          - Sid: VercelTeamSajydsProjects
+            Effect: Allow
+            Principal:
+              Federated: !Sub arn:aws:iam::${AWS::AccountId}:oidc-provider/oidc.vercel.com/sajyds-projects
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                oidc.vercel.com/sajyds-projects:aud:
+                  - sts.amazonaws.com
+                  - https://sts.amazonaws.com
+                  - https://vercel.com/sajyds-projects
+              StringLike:
+                oidc.vercel.com/sajyds-projects:sub: !Sub 'owner:sajyds-projects:project:${VercelProjectName}:environment:*'
       Policies:
         - PolicyName: app
           PolicyDocument:

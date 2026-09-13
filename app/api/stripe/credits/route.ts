@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import { stripe, GPU_OVERAGE_CENTS, isStudioPlan, safeReturnPath } from '@/lib/stripe'
 import prisma from '@/lib/prisma'
+import { publicAppUrl } from '@/lib/app-url'
 
 export async function POST(request: NextRequest) {
   try {
@@ -42,7 +43,7 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    const origin = process.env.NEXTAUTH_URL || 'http://localhost:3000'
+    const origin = publicAppUrl()
     const joiner = returnPath.includes('?') ? '&' : '?'
 
     const checkoutSession = await stripe.checkout.sessions.create({

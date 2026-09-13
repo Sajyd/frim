@@ -8,6 +8,7 @@ STACK="${STACK_NAME:-frim-gpu-mocap}"
 BUDGET="${AWS_BUDGET_LIMIT:-80}"
 MAX_INSTANCES="${GPU_MAX_INSTANCES:-100}"
 CALLBACK="${GPU_CALLBACK_URL:?Set GPU_CALLBACK_URL e.g. https://frim.app}"
+VERCEL_TEAM="${VERCEL_TEAM_SLUG:-sajyds-projects}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "Deploying $STACK in $REGION (eu-north-1 budget cap \$$BUDGET/mo, max ${MAX_INSTANCES} GPUs, idle 900s)"
@@ -20,7 +21,8 @@ aws cloudformation deploy \
     MonthlyBudgetUsd="$BUDGET" \
     CallbackUrl="$CALLBACK" \
     IdleSeconds=900 \
-    MaxInstances="$MAX_INSTANCES"
+    MaxInstances="$MAX_INSTANCES" \
+    VercelTeamSlug="$VERCEL_TEAM"
 
 ACCOUNT="$(aws sts get-caller-identity --query Account --output text)"
 BUCKET="$(aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \

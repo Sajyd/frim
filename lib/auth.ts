@@ -5,6 +5,7 @@ import GitHubProvider from "next-auth/providers/github"
 import GoogleProvider from "next-auth/providers/google"
 import bcrypt from "bcryptjs"
 import prisma from "./prisma"
+import './app-url'
 
 const ACCOUNT_FIELDS = [
   "userId",
