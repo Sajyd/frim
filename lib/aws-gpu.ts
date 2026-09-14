@@ -12,6 +12,7 @@ import {
   DescribeInstancesCommand,
   DescribeSubnetsCommand,
   TerminateInstancesCommand,
+  type CreateFleetCommandInput,
 } from '@aws-sdk/client-ec2'
 import {
   CloudWatchClient,
@@ -175,6 +176,10 @@ export function wakingProgress(updatedAt: Date) {
   return Math.min(30, 12 + Math.floor(elapsed / 15))
 }
 
+type FleetOverride = NonNullable<
+  NonNullable<CreateFleetCommandInput['LaunchTemplateConfigs']>[number]['Overrides']
+>[number]
+
 async function launchOneGpu(): Promise<string | null> {
   const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
   if (!templateId) {
@@ -184,8 +189,11 @@ async function launchOneGpu(): Promise<string | null> {
   if (!subnets.length) {
     throw new Error('No GPU subnets found (tag Application=frim-gpu-mocap)')
   }
-  const overrides = gpuInstanceTypes().flatMap(InstanceType =>
-    subnets.map(SubnetId => ({ InstanceType, SubnetId })),
+  const overrides: FleetOverride[] = gpuInstanceTypes().flatMap(instanceType =>
+    subnets.map(SubnetId => ({
+      InstanceType: instanceType as FleetOverride['InstanceType'],
+      SubnetId,
+    })),
   )
   const fleet = await ec2().send(new CreateFleetCommand({
     Type: 'instant',
