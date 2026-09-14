@@ -2,16 +2,31 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { chargeGpuQuota } from '@/lib/gpu-jobs'
-import { enqueueGpuJob, ensureGpuCapacity, gpuMaxInstances, isGpuAwsConfigured, putGpuMetric } from '@/lib/aws-gpu'
+import { chargeGpuQuota, refundGpuQuota } from '@/lib/gpu-jobs'
+import {
+  enqueueGpuJob,
+  ensureGpuCapacity,
+  GPU_POOL_FULL_MESSAGE,
+  isGpuAwsConfigured,
+  putGpuMetric,
+} from '@/lib/aws-gpu'
 
-function capacityLabel(cap: { launchedId: string | null; reused: boolean; atCap: boolean; waiting: number }) {
-  if (cap.atCap) {
-    return `All ${gpuMaxInstances()} GPUs are busy — you are in the queue (one GPU per capture)`
-  }
+function capacityLabel(cap: { launchedId: string | null; reused: boolean }) {
   if (cap.launchedId) return 'Starting a Spot GPU for this capture…'
   if (cap.reused) return 'Warm GPU is picking up your capture…'
-  return 'Queued — waiting for a GPU…'
+  return 'Starting GPU…'
+}
+
+async function failPoolFull(jobId: string) {
+  await prisma.gpuJob.update({
+    where: { id: jobId },
+    data: { status: 'failed', error: GPU_POOL_FULL_MESSAGE, completedAt: new Date() },
+  })
+  await refundGpuQuota(jobId)
+  return NextResponse.json(
+    { error: GPU_POOL_FULL_MESSAGE, code: 'GPU_POOL_FULL' },
+    { status: 503 },
+  )
 }
 
 export async function POST(
@@ -52,6 +67,21 @@ export async function POST(
       }
     }
 
+    let cap = {
+      launchedId: null as string | null,
+      reused: false,
+      atCap: false,
+      running: 0,
+      waiting: 1,
+    }
+    try {
+      cap = await ensureGpuCapacity({ queuedJustNow: true })
+      await putGpuMetric('GpuInstancesRunning', cap.running)
+    } catch (err) {
+      console.error('ensure GPU capacity failed:', err)
+      return failPoolFull(job.id)
+    }
+
     await enqueueGpuJob({
       jobId: job.id,
       inputKey: job.s3InputKey,
@@ -68,26 +98,6 @@ export async function POST(
         progress: claimed.progress,
         label: claimed.status === 'running' ? 'Warm GPU is picking up your capture…' : claimed.status,
       })
-    }
-
-    let cap = {
-      launchedId: null as string | null,
-      reused: false,
-      atCap: false,
-      running: 0,
-      waiting: 1,
-    }
-    try {
-      cap = await ensureGpuCapacity({ queuedJustNow: true })
-      await putGpuMetric('GpuInstancesRunning', cap.running)
-    } catch (err) {
-      console.error('ensure GPU capacity failed:', err)
-      const message = err instanceof Error ? err.message : 'Could not start a GPU'
-      await prisma.gpuJob.update({
-        where: { id: job.id },
-        data: { status: 'failed', error: message, completedAt: new Date() },
-      })
-      return NextResponse.json({ error: message, code: 'GPU_LAUNCH_FAILED' }, { status: 503 })
     }
 
     const status = cap.launchedId ? 'waking' : 'queued'
@@ -108,7 +118,6 @@ export async function POST(
       status,
       instanceId: cap.launchedId,
       progress: 5,
-      atCap: cap.atCap,
       running: cap.running,
       label: capacityLabel(cap),
     })

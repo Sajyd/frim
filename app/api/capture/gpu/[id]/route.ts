@@ -2,17 +2,16 @@ import { NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
-import { failTimedOutJobs } from '@/lib/gpu-jobs'
+import { failTimedOutJobs, refundGpuQuota } from '@/lib/gpu-jobs'
 import {
   getGpuResultJson,
   gpuResultExists,
   isGpuAwsConfigured,
-  countLiveGpuInstances,
-  ensureGpuCapacity,
   describeGpuInstance,
   isGpuInstanceLive,
   wakingLabel,
   wakingProgress,
+  GPU_POOL_FULL_MESSAGE,
 } from '@/lib/aws-gpu'
 
 const LABELS: Record<string, string> = {
@@ -42,29 +41,22 @@ export async function GET(
     }
 
     let instanceState: string | null = null
-    if (['queued', 'waking'].includes(job.status) && isGpuAwsConfigured()) {
-      const inst = job.instanceId ? await describeGpuInstance(job.instanceId) : null
+    if (['queued', 'waking'].includes(job.status) && isGpuAwsConfigured() && job.instanceId) {
+      const inst = await describeGpuInstance(job.instanceId)
       instanceState = inst?.state || null
       const live = isGpuInstanceLive(instanceState)
       const ageMs = Date.now() - job.updatedAt.getTime()
-      // Only launch another GPU if this job's box is dead. A pending/running
-      // instance is usually still installing Docker — extras burn credits.
-      const shouldRetry = job.instanceId
-        ? !live && ageMs > 25_000
-        : ageMs > 45_000 && (await countLiveGpuInstances()).length === 0
-      if (shouldRetry) {
-        try {
-          const cap = await ensureGpuCapacity({ queuedJustNow: true })
-          if (cap.launchedId) {
-            job = await prisma.gpuJob.update({
-              where: { id: job.id },
-              data: { instanceId: cap.launchedId, status: 'waking' },
-            })
-            instanceState = 'pending'
-          }
-        } catch (err) {
-          console.error('capacity retry failed:', err)
-        }
+      if (!live && ageMs > 25_000) {
+        await prisma.gpuJob.update({
+          where: { id: job.id },
+          data: {
+            status: 'failed',
+            error: GPU_POOL_FULL_MESSAGE,
+            completedAt: new Date(),
+          },
+        })
+        await refundGpuQuota(job.id)
+        job = (await prisma.gpuJob.findUnique({ where: { id: job.id } })) || job
       }
     }
 

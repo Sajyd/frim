@@ -41,18 +41,25 @@ export function gpuInstanceTypes() {
   return types.length ? types : ['g4dn.xlarge']
 }
 
+export const GPU_POOL_FULL_MESSAGE = 'gpu pool is full retry later'
+
 function homeRegion() {
   return process.env.AWS_REGION || 'eu-north-1'
 }
 
-function gpuLaunchRegions() {
-  return [...new Set([homeRegion(), 'us-east-1', 'eu-west-1'])]
+function errorCode(err: unknown) {
+  const e = err as { name?: string; Code?: string; code?: string; message?: string }
+  return String(e?.name || e?.Code || e?.code || '')
+}
+
+function errorMessage(err: unknown) {
+  const e = err as { message?: string }
+  return String(e?.message || err)
 }
 
 function isGpuRetryable(err: unknown) {
-  const e = err as { name?: string; Code?: string; code?: string; message?: string }
-  const code = String(e?.name || e?.Code || e?.code || '')
-  const msg = String(e?.message || err)
+  const code = errorCode(err)
+  const msg = errorMessage(err)
   return (
     code === 'InsufficientInstanceCapacity' ||
     code === 'MaxSpotInstanceCountExceeded' ||
@@ -60,7 +67,7 @@ function isGpuRetryable(err: unknown) {
     code === 'Unsupported' ||
     code === 'VPCIdNotSpecified' ||
     code === 'InvalidParameterCombination' ||
-    /insufficient .*capacity|availability zone you requested|not available in the requested|no default VPC|default subnet/i.test(msg)
+    /insufficient .*capacity|max spot instance count exceeded|availability zone you requested|not available in the requested|no default VPC|default subnet/i.test(msg)
   )
 }
 
@@ -141,16 +148,13 @@ export async function gpuQueueDepth() {
 }
 
 export async function countLiveGpuInstances() {
-  const lists = await Promise.all(gpuLaunchRegions().map(async region => {
-    const listed = await ec2For(region).send(new DescribeInstancesCommand({
-      Filters: [
-        { Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] },
-        { Name: 'instance-state-name', Values: ['pending', 'running'] },
-      ],
-    }))
-    return (listed.Reservations || []).flatMap(r => r.Instances || [])
+  const listed = await ec2().send(new DescribeInstancesCommand({
+    Filters: [
+      { Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] },
+      { Name: 'instance-state-name', Values: ['pending', 'running'] },
+    ],
   }))
-  return lists.flat()
+  return (listed.Reservations || []).flatMap(r => r.Instances || [])
 }
 
 export type GpuInstanceView = {
@@ -163,20 +167,18 @@ const DEAD_STATES = new Set(['terminated', 'stopped', 'stopping', 'shutting-down
 
 export async function describeGpuInstance(instanceId: string): Promise<GpuInstanceView | null> {
   if (!instanceId) return null
-  for (const region of gpuLaunchRegions()) {
-    try {
-      const listed = await ec2For(region).send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }))
-      const inst = listed.Reservations?.flatMap(r => r.Instances || [])[0]
-      if (inst?.InstanceId) {
-        return {
-          id: inst.InstanceId,
-          state: inst.State?.Name || 'unknown',
-          launchTime: inst.LaunchTime ?? null,
-        }
+  try {
+    const listed = await ec2().send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }))
+    const inst = listed.Reservations?.flatMap(r => r.Instances || [])[0]
+    if (inst?.InstanceId) {
+      return {
+        id: inst.InstanceId,
+        state: inst.State?.Name || 'unknown',
+        launchTime: inst.LaunchTime ?? null,
       }
-    } catch {
-      // Wrong region for this instance id.
     }
+  } catch {
+    return null
   }
   return null
 }
@@ -188,7 +190,7 @@ export function isGpuInstanceLive(state?: string | null) {
 export function wakingLabel(state?: string | null) {
   if (state === 'pending') return 'Waiting for a Spot GPU to come online…'
   if (state === 'running') return 'GPU is booting — installing the capture worker…'
-  if (state && DEAD_STATES.has(state)) return 'GPU stopped — starting another…'
+  if (state && DEAD_STATES.has(state)) return 'GPU stopped'
   return 'Starting a Spot GPU for this capture…'
 }
 
@@ -291,41 +293,36 @@ async function runSpot(opts: {
   return id
 }
 
-async function launchOneGpu(): Promise<string | null> {
+async function launchOneGpu(): Promise<string> {
   const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
   const bits = await homeTemplateBits()
   const types = gpuInstanceTypes()
+  const region = homeRegion()
+  const azs = await orderedAzs(region).catch(() => [] as string[])
+  const preferred = [`${region}b`, `${region}c`, `${region}a`]
+  const attempts = preferred.filter(az => !azs.length || azs.includes(az))
   let lastErr: unknown
 
-  for (const region of gpuLaunchRegions()) {
-    const azs = await orderedAzs(region).catch(() => [] as string[])
-    // Prefer b/c, then let AWS pick, then a and remaining AZs. Never pass a subnet.
-    const attempts: (string | undefined)[] = [
-      ...azs.filter(az => az.endsWith('b') || az.endsWith('c')),
-      undefined,
-      ...azs.filter(az => !az.endsWith('b') && !az.endsWith('c')),
-    ]
-    for (const instanceType of types) {
-      for (const az of attempts) {
-        try {
-          const id = await runSpot({
-            region,
-            instanceType,
-            az,
-            templateId: region === homeRegion() ? templateId : undefined,
-            bits,
-          })
-          if (id) return id
-        } catch (err) {
-          lastErr = err
-          if (!isGpuRetryable(err)) throw err
-          console.warn(`GPU launch skipped ${instanceType} ${region} ${az || 'aws-pick'}:`, err)
-        }
+  for (const instanceType of types) {
+    for (const az of attempts) {
+      try {
+        const id = await runSpot({
+          region,
+          instanceType,
+          az,
+          templateId,
+          bits,
+        })
+        if (id) return id
+      } catch (err) {
+        lastErr = err
+        if (!isGpuRetryable(err)) throw err
+        console.warn(`GPU launch skipped ${instanceType} ${az}:`, err)
       }
     }
   }
 
-  throw lastErr instanceof Error ? lastErr : new Error('Could not start a GPU')
+  throw lastErr instanceof Error ? lastErr : new Error(GPU_POOL_FULL_MESSAGE)
 }
 
 export type GpuCapacity = {
@@ -337,9 +334,9 @@ export type GpuCapacity = {
 }
 
 /**
- * One Spot GPU per in-flight capture, shared across users.
- * Reuses a warm instance if one is polling the queue; otherwise launches
- * another up to GPU_MAX_INSTANCES. Never keeps stopped disks.
+ * Reuse a warm Stockholm GPU when one is idle. Otherwise launch one Spot T4
+ * in eu-north-1b, then 1c, then 1a. Pool full / no capacity fails immediately
+ * so we do not keep billed instances or retry loops.
  */
 export async function ensureGpuCapacity(opts?: { queuedJustNow?: boolean }): Promise<GpuCapacity> {
   const max = gpuMaxInstances()
@@ -354,7 +351,7 @@ export async function ensureGpuCapacity(opts?: { queuedJustNow?: boolean }): Pro
     return { launchedId: null, reused: running > 0, atCap: false, running, waiting }
   }
   if (running >= max) {
-    return { launchedId: null, reused: false, atCap: true, running, waiting }
+    throw new Error(GPU_POOL_FULL_MESSAGE)
   }
 
   const launchedId = await launchOneGpu()
@@ -362,7 +359,7 @@ export async function ensureGpuCapacity(opts?: { queuedJustNow?: boolean }): Pro
     launchedId,
     reused: false,
     atCap: false,
-    running: running + (launchedId ? 1 : 0),
+    running: running + 1,
     waiting,
   }
 }
@@ -370,20 +367,7 @@ export async function ensureGpuCapacity(opts?: { queuedJustNow?: boolean }): Pro
 export async function terminateGpuInstances(instanceIds: string[]) {
   const ids = instanceIds.filter(Boolean)
   if (!ids.length) return
-  await Promise.all(gpuLaunchRegions().map(async region => {
-    try {
-      const listed = await ec2For(region).send(new DescribeInstancesCommand({ InstanceIds: ids }))
-      const found = (listed.Reservations || [])
-        .flatMap(r => r.Instances || [])
-        .map(i => i.InstanceId)
-        .filter((id): id is string => Boolean(id))
-      if (found.length) {
-        await ec2For(region).send(new TerminateInstancesCommand({ InstanceIds: found }))
-      }
-    } catch {
-      // IDs belong to another region.
-    }
-  }))
+  await ec2().send(new TerminateInstancesCommand({ InstanceIds: ids }))
 }
 
 export async function putGpuMetric(name: string, value: number, unit: 'Count' | 'Seconds' | 'None' = 'Count') {

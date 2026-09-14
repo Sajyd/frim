@@ -3647,7 +3647,20 @@ export default function ThreeEditor({
           setShowBuyCredits(true)
           return
         }
+        if (startRes.status === 503 && startData.code === 'WORKER_NOT_CONFIGURED') {
+          showToast('GPU worker is connecting — running Fast capture on your model', 'info')
+          await processVideoCapture()
+          return
+        }
+        if (startRes.status === 503 && startData.code === 'GPU_POOL_FULL') {
+          setVideoAnalyzing(false)
+          setVideoProgress(0)
+          setVideoProgressLabel('')
+          showToast('gpu pool is full retry later', 'warning')
+          return
+        }
         if (!startRes.ok) throw new Error(startData.error || 'Failed to start GPU worker')
+        if (startData.label) setVideoProgressLabel(startData.label)
 
         const deadline = Date.now() + 35 * 60 * 1000
         while (Date.now() < deadline) {
@@ -3669,6 +3682,13 @@ export default function ThreeEditor({
             return
           }
           if (job.status === 'failed') {
+            if (job.error === 'gpu pool is full retry later') {
+              setVideoAnalyzing(false)
+              setVideoProgress(0)
+              setVideoProgressLabel('')
+              showToast('gpu pool is full retry later', 'warning')
+              return
+            }
             throw new Error(job.error || 'GPU capture failed')
           }
           await new Promise(r => setTimeout(r, 2000))
