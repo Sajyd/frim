@@ -8,11 +8,13 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { SQSClient, SendMessageCommand, GetQueueAttributesCommand } from '@aws-sdk/client-sqs'
 import {
   EC2Client,
+  CreateFleetCommand,
   DescribeInstancesCommand,
   DescribeSecurityGroupsCommand,
   DescribeSubnetsCommand,
   RunInstancesCommand,
   TerminateInstancesCommand,
+  type CreateFleetCommandInput,
   type RunInstancesCommandInput,
 } from '@aws-sdk/client-ec2'
 import {
@@ -44,22 +46,15 @@ export function gpuSubnetIds() {
 }
 
 async function gpuSubnetsForLaunch() {
-  const fromEnv = gpuSubnetIds()
-  if (fromEnv.length) return fromEnv
   const listed = await ec2().send(new DescribeSubnetsCommand({
     Filters: [{ Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] }],
   }))
-  const rank = (az?: string) => {
-    const letter = az?.slice(-1)
-    if (letter === 'b') return 0
-    if (letter === 'c') return 1
-    if (letter === 'a') return 2
-    return 3
-  }
-  return (listed.Subnets || [])
-    .filter((s): s is typeof s & { SubnetId: string } => Boolean(s.SubnetId))
-    .sort((a, b) => rank(a.AvailabilityZone) - rank(b.AvailabilityZone))
+  const tagged = (listed.Subnets || [])
     .map(s => s.SubnetId)
+    .filter((id): id is string => Boolean(id))
+  // Never trust a stale Vercel GPU_SUBNET_IDS that only contains the original 1a subnet.
+  const ids = tagged.length ? tagged : gpuSubnetIds()
+  return [...new Set(ids)]
 }
 
 async function gpuSecurityGroupId() {
@@ -209,21 +204,55 @@ export function wakingProgress(updatedAt: Date) {
   return Math.min(30, 12 + Math.floor(elapsed / 15))
 }
 
+type FleetOverride = NonNullable<
+  NonNullable<CreateFleetCommandInput['LaunchTemplateConfigs']>[number]['Overrides']
+>[number]
+
 async function launchOneGpu(): Promise<string | null> {
   const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
   if (!templateId) {
     throw new Error('GPU_EC2_LAUNCH_TEMPLATE_ID is not set')
   }
   const subnets = await gpuSubnetsForLaunch()
-  const sg = await gpuSecurityGroupId()
   if (!subnets.length) {
     throw new Error('No GPU subnets found (tag Application=frim-gpu-mocap)')
   }
-  if (!sg) {
-    throw new Error('No GPU security group found')
+
+  const overrides: FleetOverride[] = gpuInstanceTypes().flatMap(instanceType =>
+    subnets.map(SubnetId => ({
+      InstanceType: instanceType as FleetOverride['InstanceType'],
+      SubnetId,
+    })),
+  )
+  const fleet = await ec2().send(new CreateFleetCommand({
+    Type: 'instant',
+    TargetCapacitySpecification: {
+      TotalTargetCapacity: 1,
+      DefaultTargetCapacityType: 'spot',
+      OnDemandTargetCapacity: 0,
+      SpotTargetCapacity: 1,
+    },
+    SpotOptions: {
+      AllocationStrategy: 'price-capacity-optimized',
+      InstanceInterruptionBehavior: 'terminate',
+      SingleAvailabilityZone: false,
+    },
+    LaunchTemplateConfigs: [{
+      LaunchTemplateSpecification: {
+        LaunchTemplateId: templateId,
+        Version: '$Latest',
+      },
+      Overrides: overrides,
+    }],
+  }))
+  const fleetId = fleet.Instances?.flatMap(i => i.InstanceIds || [])[0]
+  if (fleetId) {
+    console.log(`launched GPU fleet ${fleetId} from ${subnets.length} subnets`)
+    return fleetId
   }
 
-  let lastErr: unknown
+  const sg = await gpuSecurityGroupId()
+  let lastErr: unknown = new Error(fleet.Errors?.[0]?.ErrorMessage || 'Could not start a GPU')
   for (const instanceType of gpuInstanceTypes()) {
     for (const subnet of subnets) {
       try {
@@ -239,13 +268,15 @@ async function launchOneGpu(): Promise<string | null> {
               InstanceInterruptionBehavior: 'terminate',
             },
           },
-          NetworkInterfaces: [{
-            DeviceIndex: 0,
-            AssociatePublicIpAddress: true,
-            DeleteOnTermination: true,
-            Groups: [sg],
-            SubnetId: subnet,
-          }],
+          ...(sg ? {
+            NetworkInterfaces: [{
+              DeviceIndex: 0,
+              AssociatePublicIpAddress: true,
+              DeleteOnTermination: true,
+              Groups: [sg],
+              SubnetId: subnet,
+            }],
+          } : {}),
         }))
         const id = launched.Instances?.[0]?.InstanceId
         if (id) {

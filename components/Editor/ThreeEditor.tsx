@@ -403,7 +403,7 @@ export default function ThreeEditor({
     }
 
     const toast = document.createElement('div')
-    toast.className = `flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg ${colors[type]} text-white animate-slide-up`
+    toast.className = `flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg max-w-md ${colors[type]} text-white animate-slide-up`
     
     const iconSpan = document.createElement('span')
     iconSpan.className = 'w-4 h-4'
@@ -423,7 +423,7 @@ export default function ThreeEditor({
       toast.style.opacity = '0'
       toast.style.transform = 'translateY(10px)'
       setTimeout(() => toast.remove(), 300)
-    }, 3000)
+    }, type === 'error' ? 8000 : 3000)
   }, [])
 
   // Initialize Three.js scene
@@ -4662,9 +4662,6 @@ export default function ThreeEditor({
         </div>
       </div>
 
-      {/* Toast container */}
-      <div id="toast-container" className="fixed bottom-[180px] right-4 flex flex-col-reverse gap-2 z-50" />
-
       {/* Upgrade Modal */}
       {showUpgradeModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2100] p-4">
@@ -5287,6 +5284,8 @@ export default function ThreeEditor({
           </div>
         </div>
       )}
+
+      <div id="toast-container" className="fixed top-4 right-4 flex flex-col gap-2 z-[4000] pointer-events-none" />
 
       <style jsx global>{`
         @keyframes slide-up {
