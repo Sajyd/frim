@@ -46,6 +46,15 @@ import {
   Loader2,
   Sparkles
 } from 'lucide-react'
+import {
+  accumulateSims,
+  applyCameraStabilize,
+  cameraMotionStrength,
+  estimateBackgroundSim,
+  poseBBox,
+  readDownscaledGray,
+  type Sim2D,
+} from '@/lib/capture-stabilize'
 
 interface EditorProps {
   projectName: string
@@ -100,14 +109,23 @@ function normBoneName(n: string) {
   return n.toLowerCase().replace(/[^a-z0-9]/g, '')
 }
 
+function isFingerBoneName(n: string) {
+  return /thumb|index|middle|ring|pinky/.test(normBoneName(n))
+}
+
+function isHandBoneName(n: string) {
+  const k = normBoneName(n)
+  return (k.endsWith('lefthand') || k.endsWith('righthand') || k.endsWith('hand')) && !isFingerBoneName(n)
+}
+
 /** Pick the shortest Mixamo/generic bone whose name ends with one of the aliases. */
-function matchNamedBone(order: string[], aliases: string[]): string | null {
+function matchNamedBone(order: string[], aliases: string[], allowFingers = false): string | null {
   const wants = aliases.map(normBoneName)
   let best: string | null = null
   let bestLen = Infinity
   for (const boneName of order) {
     const n = normBoneName(boneName)
-    if (/thumb|index|middle|ring|pinky|eye|end$/.test(n)) continue
+    if (!allowFingers && /thumb|index|middle|ring|pinky|eye|end$/.test(n)) continue
     for (const w of wants) {
       if (n === w || n.endsWith(w)) {
         if (n.length < bestLen) { best = boneName; bestLen = n.length }
@@ -115,6 +133,62 @@ function matchNamedBone(order: string[], aliases: string[]): string | null {
     }
   }
   return best
+}
+
+/** MediaPipe / COCO-WholeBody 21: wrist 0, thumb 1-4, index 5-8, middle 9-12, ring 13-16, pinky 17-20. */
+const HAND21_FINGERS: { joints: [number, number][]; aliases: string[][] }[] = [
+  { joints: [[1, 2], [2, 3], [3, 4]], aliases: [
+    ['HandThumb1', 'Thumb1', 'ThumbProximal', 'thumbProximal'],
+    ['HandThumb2', 'Thumb2', 'ThumbIntermediate', 'thumbIntermediate'],
+    ['HandThumb3', 'Thumb3', 'ThumbDistal', 'thumbDistal'],
+  ]},
+  { joints: [[5, 6], [6, 7], [7, 8]], aliases: [
+    ['HandIndex1', 'Index1', 'IndexProximal', 'indexProximal'],
+    ['HandIndex2', 'Index2', 'IndexIntermediate', 'indexIntermediate'],
+    ['HandIndex3', 'Index3', 'IndexDistal', 'indexDistal'],
+  ]},
+  { joints: [[9, 10], [10, 11], [11, 12]], aliases: [
+    ['HandMiddle1', 'Middle1', 'MiddleProximal', 'middleProximal'],
+    ['HandMiddle2', 'Middle2', 'MiddleIntermediate', 'middleIntermediate'],
+    ['HandMiddle3', 'Middle3', 'MiddleDistal', 'middleDistal'],
+  ]},
+  { joints: [[13, 14], [14, 15], [15, 16]], aliases: [
+    ['HandRing1', 'Ring1', 'RingProximal', 'ringProximal'],
+    ['HandRing2', 'Ring2', 'RingIntermediate', 'ringIntermediate'],
+    ['HandRing3', 'Ring3', 'RingDistal', 'ringDistal'],
+  ]},
+  { joints: [[17, 18], [18, 19], [19, 20]], aliases: [
+    ['HandPinky1', 'Pinky1', 'LittleProximal', 'littleProximal', 'PinkyProximal', 'pinkyProximal'],
+    ['HandPinky2', 'Pinky2', 'LittleIntermediate', 'littleIntermediate', 'PinkyIntermediate', 'pinkyIntermediate'],
+    ['HandPinky3', 'Pinky3', 'LittleDistal', 'littleDistal', 'PinkyDistal', 'pinkyDistal'],
+  ]},
+]
+
+type FingerTarget = { a: number; b: number; side: 'left' | 'right' }
+
+function resolveFingerTargets(order: string[]): Map<string, FingerTarget> {
+  const out = new Map<string, FingerTarget>()
+  for (const side of ['Left', 'Right'] as const) {
+    for (const finger of HAND21_FINGERS) {
+      for (let j = 0; j < finger.aliases.length; j++) {
+        const aliases = finger.aliases[j].map(a => `${side}${a}`)
+        const bone = matchNamedBone(order, aliases, true)
+        if (bone) out.set(bone, { a: finger.joints[j][0], b: finger.joints[j][1], side: side === 'Left' ? 'left' : 'right' })
+      }
+    }
+  }
+  return out
+}
+
+function handVisibility(hand?: { visibility?: number }[] | null) {
+  if (!hand || hand.length < 6) return 0
+  let s = 0
+  for (const p of hand) s += p.visibility ?? 0
+  return s / hand.length
+}
+
+function asLm(p: any): { x: number; y: number; z: number; visibility: number } {
+  return { x: p.x, y: p.y, z: p.z || 0, visibility: p.visibility ?? p.presence ?? 1 }
 }
 
 /**
@@ -269,8 +343,13 @@ export default function ThreeEditor({
   const [videoProgress, setVideoProgress] = useState(0)
   const [videoProgressLabel, setVideoProgressLabel] = useState('')
   const [captureEngine, setCaptureEngine] = useState<'fast' | 'studio'>('fast')
+  const [stabilizeCamera, setStabilizeCamera] = useState(false)
   const [showBuyCredits, setShowBuyCredits] = useState(false)
+  const [exampleLoading, setExampleLoading] = useState(false)
   const videoInputRef = useRef<HTMLInputElement>(null)
+  const captureAbortRef = useRef(false)
+  const gpuJobIdRef = useRef<string | null>(null)
+  const captureUploadAbortRef = useRef<AbortController | null>(null)
 
   // GLB export modal
   const [showExportModal, setShowExportModal] = useState(false)
@@ -562,7 +641,7 @@ export default function ThreeEditor({
   }, [])
 
   // Apply pose interpolation at a specific (possibly fractional) frame.
-  // Integer frames stay exact; in-between frames use Catmull-Rom / cubic Bézier.
+  // Integer frames stay exact. Adjacent keys lerp/slerp; sparse keys stay cubic.
   const applyPoseAtFrame = useCallback((frame: number) => {
     if (!currentAnimation || currentAnimation.keyframes.size === 0) return
 
@@ -602,9 +681,22 @@ export default function ThreeEditor({
       }
 
       const t = THREE.MathUtils.clamp((frame - f1) / (f2 - f1), 0, 1)
-      bone.position.copy(catmullRomVec(k0.position, k1.position, k2.position, k3.position, t))
-      bone.rotation.setFromQuaternion(cubicQuat(k0.rotation, k1.rotation, k2.rotation, k3.rotation, t))
+      // Dense video keys already carry the motion character. Linear in-betweens keep
+      // robotic snaps and organic ease distinct; Catmull-Rom would force C1 continuity
+      // and make both look like the same glide. Cubic stays for sparse authored keys.
+      if (f2 - f1 <= 1) {
+        bone.position.lerpVectors(k1.position, k2.position, t)
+        bone.rotation.setFromQuaternion(slerpKeepHemisphere(k1.rotation, k2.rotation, t))
+      } else {
+        bone.position.copy(catmullRomVec(k0.position, k1.position, k2.position, k3.position, t))
+        bone.rotation.setFromQuaternion(cubicQuat(k0.rotation, k1.rotation, k2.rotation, k3.rotation, t))
+      }
       bone.scale.lerpVectors(k1.scale, k2.scale, t)
+    })
+    modelRef.current?.traverse(child => {
+      if ((child as THREE.SkinnedMesh).isSkinnedMesh) {
+        ;(child as THREE.SkinnedMesh).skeleton.update()
+      }
     })
   }, [currentAnimation, bones])
 
@@ -2675,24 +2767,30 @@ export default function ThreeEditor({
 
   // Video Motion Capture - MediaPipe Tasks PoseLandmarker (heavy model)
   const poseModelRef = useRef<any>(null)
+  const handModelRef = useRef<any>(null)
+  const visionFilesetRef = useRef<any>(null)
   // Live preview (testing): MediaPipe skeleton drawn over the source video.
   const previewVideoRef = useRef<HTMLVideoElement>(null)
   const previewCanvasRef = useRef<HTMLCanvasElement>(null)
 
+  const loadVisionFileset = useCallback(async () => {
+    if (visionFilesetRef.current) return visionFilesetRef.current
+    const VER = '0.10.22-rc.20250304'
+    const BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VER}`
+    const vision: any = await (Function('u', 'return import(u)')(`${BASE}/vision_bundle.mjs`))
+    const fileset = await vision.FilesetResolver.forVisionTasks(`${BASE}/wasm`)
+    visionFilesetRef.current = { vision, fileset }
+    return visionFilesetRef.current
+  }, [])
+
   const loadPoseModel = useCallback(async () => {
     if (poseModelRef.current) return poseModelRef.current
 
-    // Load JS bundle and WASM from the same CDN version so they stay ABI-compatible.
-    // The Function(...) wrapper keeps the bundler from trying to resolve the URL import.
-    const VER = '0.10.22-rc.20250304'
-    const BASE = `https://cdn.jsdelivr.net/npm/@mediapipe/tasks-vision@${VER}`
     const MODEL = 'https://storage.googleapis.com/mediapipe-models/pose_landmarker/pose_landmarker_heavy/float16/latest/pose_landmarker_heavy.task'
+    const { vision, fileset } = await loadVisionFileset()
+    const { PoseLandmarker } = vision
+    if (!PoseLandmarker) throw new Error('Failed to load MediaPipe pose landmarker')
 
-    const vision: any = await (Function('u', 'return import(u)')(`${BASE}/vision_bundle.mjs`))
-    const { PoseLandmarker, FilesetResolver } = vision
-    if (!PoseLandmarker || !FilesetResolver) throw new Error('Failed to load MediaPipe tasks-vision')
-
-    const fileset = await FilesetResolver.forVisionTasks(`${BASE}/wasm`)
     // IMAGE running mode: every frame is detected independently with NO internal
     // temporal smoothing. This preserves full limb amplitude/depth (VIDEO mode's
     // tracking damps fast motion and flattens the pose). We do our own light
@@ -2716,7 +2814,33 @@ export default function ThreeEditor({
 
     poseModelRef.current = landmarker
     return landmarker
-  }, [])
+  }, [loadVisionFileset])
+
+  const loadHandModel = useCallback(async () => {
+    if (handModelRef.current) return handModelRef.current
+    const MODEL = 'https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/latest/hand_landmarker.task'
+    const { vision, fileset } = await loadVisionFileset()
+    const { HandLandmarker } = vision
+    if (!HandLandmarker) return null
+    const makeOptions = (delegate: 'GPU' | 'CPU') => ({
+      baseOptions: { modelAssetPath: MODEL, delegate },
+      runningMode: 'IMAGE' as const,
+      numHands: 2,
+      minHandDetectionConfidence: 0.35,
+      minHandPresenceConfidence: 0.35,
+      minTrackingConfidence: 0.35,
+    })
+    try {
+      handModelRef.current = await HandLandmarker.createFromOptions(fileset, makeOptions('GPU'))
+    } catch {
+      try {
+        handModelRef.current = await HandLandmarker.createFromOptions(fileset, makeOptions('CPU'))
+      } catch {
+        handModelRef.current = null
+      }
+    }
+    return handModelRef.current
+  }, [loadVisionFileset])
 
   const analyzeSkeletonHierarchy = useCallback(() => {
     if (bones.size === 0) return null
@@ -2746,9 +2870,19 @@ export default function ThreeEditor({
     const queue: THREE.Bone[] = [rootBone]
     while (queue.length > 0) {
       const bone = queue.shift()!
-      let firstBoneChild: THREE.Object3D | null = null
+      const boneKids: THREE.Object3D[] = []
       for (const child of bone.children) {
-        if (bones.has(child.name)) { if (!firstBoneChild) firstBoneChild = child; queue.push(child as THREE.Bone) }
+        if (bones.has(child.name)) {
+          boneKids.push(child)
+          queue.push(child as THREE.Bone)
+        }
+      }
+      // Hands: aim along the middle/index finger, not the thumb (often first child).
+      let firstBoneChild: THREE.Object3D | null = boneKids[0] || null
+      if (isHandBoneName(bone.name) && boneKids.length > 1) {
+        firstBoneChild = boneKids.find(c => /middle1|middleproximal/.test(normBoneName(c.name)))
+          || boneKids.find(c => /index1|indexproximal/.test(normBoneName(c.name)))
+          || boneKids[0]
       }
       const orig = originalTransformsRef.current.get(bone.name)
       const restQuat = orig
@@ -2777,10 +2911,19 @@ export default function ThreeEditor({
   const processVideoCapture = useCallback(async (gpuTimeline?: {
     fps: number
     aspect: number
-    frames: { image: any[]; world: any[] }[]
-  }) => {
+    frames: { image: any[]; world: any[]; leftHand?: any[]; rightHand?: any[] }[]
+  }, sourceFile?: File | null) => {
+    const captureFile = sourceFile ?? videoFile
     if (bones.size === 0) return
-    if (!gpuTimeline?.frames?.length && !videoFile) return
+    if (!gpuTimeline?.frames?.length && !captureFile) return
+
+    const throwIfAborted = () => {
+      if (captureAbortRef.current) {
+        const err = new Error('Capture cancelled')
+        err.name = 'CaptureCancelled'
+        throw err
+      }
+    }
 
     const skeletonInfo = analyzeSkeletonHierarchy()
     if (!skeletonInfo) { showToast('No skeleton found to map to', 'error'); return }
@@ -2791,13 +2934,18 @@ export default function ThreeEditor({
       setVideoProgressLabel('')
     }
 
+    let captureBlobUrl: string | null = null
     try {
-      type LMSet = { image: any[]; world: any[] } | null
+      throwIfAborted()
+      type LMSet = { image: any[]; world: any[]; leftHand?: any[] | null; rightHand?: any[] | null } | null
 
       let captureFps = 30
       let aspect = 1
       let totalAnimFrames = 0
       let timeline: LMSet[] = []
+      let captureVideo: HTMLVideoElement | null = null
+      let captureCanvas: HTMLCanvasElement | null = null
+      let captureCtx: CanvasRenderingContext2D | null = null
 
       if (gpuTimeline?.frames?.length) {
         captureFps = Math.max(1, Math.round(Number(gpuTimeline.fps) || 30))
@@ -2806,22 +2954,32 @@ export default function ThreeEditor({
         timeline = gpuTimeline.frames.map(f => ({
           image: f.image,
           world: (f.world && f.world.length) ? f.world : f.image,
+          leftHand: f.leftHand?.length ? f.leftHand.map(asLm) : null,
+          rightHand: f.rightHand?.length ? f.rightHand.map(asLm) : null,
         }))
         setVideoProgress(88)
         setVideoProgressLabel('Building keyframes on your model...')
       } else {
+      throwIfAborted()
       const pose = await loadPoseModel()
+      throwIfAborted()
+      const hands = await loadHandModel()
+      throwIfAborted()
 
       const video = document.createElement('video')
       video.muted = true
       video.playsInline = true
-      video.src = URL.createObjectURL(videoFile!)
+      video.src = URL.createObjectURL(captureFile!)
       await new Promise<void>(r => { video.onloadedmetadata = () => r() })
 
       const canvas = document.createElement('canvas')
       canvas.width = video.videoWidth
       canvas.height = video.videoHeight
-      const ctx = canvas.getContext('2d')!
+      const ctx = canvas.getContext('2d', { willReadFrequently: true })!
+      captureVideo = video
+      captureCanvas = canvas
+      captureCtx = ctx
+      captureBlobUrl = video.src
       // Image landmarks are normalized to width/height separately; multiply x by the
       // aspect ratio so screen-space directions are measured in consistent units.
       aspect = (video.videoWidth || 1) / (video.videoHeight || 1)
@@ -2873,6 +3031,7 @@ export default function ThreeEditor({
           ? [...Array(indices.length).keys()].reverse()
           : [...Array(indices.length).keys()]
         for (const idx of order) {
+          throwIfAborted()
           video.currentTime = indices[idx] / captureFps
           await new Promise<void>(r => { video.onseeked = () => r() })
           ctx.drawImage(video, 0, 0)
@@ -2883,7 +3042,37 @@ export default function ThreeEditor({
           const imageLm = result?.landmarks?.[0]
           const worldLm = result?.worldLandmarks?.[0]
           if (imageLm && imageLm.length) {
-            out[idx] = { image: imageLm, world: (worldLm && worldLm.length) ? worldLm : imageLm }
+            let leftHand: any[] | null = null
+            let rightHand: any[] | null = null
+            if (hands) {
+              try {
+                const hr = hands.detect(canvas)
+                const detected = hr?.landmarks || []
+                const handed = hr?.handedness || []
+                const dist = (hand: any[], wrist: any) => {
+                  if (!hand?.[0] || !wrist) return 1e9
+                  return Math.hypot(hand[0].x - wrist.x, hand[0].y - wrist.y)
+                }
+                const unused: any[][] = []
+                for (let hi = 0; hi < detected.length; hi++) {
+                  const pts = detected[hi].map(asLm)
+                  const label = String(handed[hi]?.[0]?.categoryName || handed[hi]?.categoryName || '')
+                  if (/left/i.test(label) && !leftHand) leftHand = pts
+                  else if (/right/i.test(label) && !rightHand) rightHand = pts
+                  else unused.push(pts)
+                }
+                unused.sort((a, b) => dist(a, imageLm[15]) - dist(b, imageLm[15]))
+                if (!leftHand && unused[0] && dist(unused[0], imageLm[15]) < 0.35) leftHand = unused.shift()!
+                unused.sort((a, b) => dist(a, imageLm[16]) - dist(b, imageLm[16]))
+                if (!rightHand && unused[0] && dist(unused[0], imageLm[16]) < 0.35) rightHand = unused.shift()!
+              } catch { /* hands optional */ }
+            }
+            out[idx] = {
+              image: imageLm,
+              world: (worldLm && worldLm.length) ? worldLm : imageLm,
+              leftHand,
+              rightHand,
+            }
           }
           const done = reversed ? indices.length - 1 - idx : idx
           setVideoProgress(Math.round(progressOffset + (done / indices.length) * progressScale))
@@ -2902,6 +3091,8 @@ export default function ThreeEditor({
           map.set(indices[i], {
             image: avgLandmarks([a.image, b.image]),
             world: avgLandmarks([a.world, b.world]),
+            leftHand: a.leftHand && b.leftHand ? avgLandmarks([a.leftHand, b.leftHand]) : (a.leftHand || b.leftHand),
+            rightHand: a.rightHand && b.rightHand ? avgLandmarks([a.rightHand, b.rightHand]) : (a.rightHand || b.rightHand),
           })
         }
         return map
@@ -2910,11 +3101,12 @@ export default function ThreeEditor({
       // 4 passes: even fwd/bwd + odd fwd/bwd → every video frame sampled once, each
       // averaged from two detections for stability.
       const evenFwd = evenIndices.length ? await runPass(evenIndices, false, 0, 22) : []
+      throwIfAborted()
       const evenBwd = evenIndices.length ? await runPass(evenIndices, true, 22, 22) : []
+      throwIfAborted()
       const oddFwd = oddIndices.length ? await runPass(oddIndices, false, 44, 22) : []
+      throwIfAborted()
       const oddBwd = oddIndices.length ? await runPass(oddIndices, true, 66, 22) : []
-
-      URL.revokeObjectURL(video.src)
 
       timeline = new Array(totalAnimFrames).fill(null)
       if (evenIndices.length) {
@@ -2951,7 +3143,7 @@ export default function ThreeEditor({
           for (let k = i; k < j; k++) {
             if (prev && next) {
               const t = (k - (i - 1)) / Math.max(1, j - (i - 1))
-              timeline[k] = { image: lerpLmArr(prev.image, next.image, t), world: lerpLmArr(prev.world, next.world, t) }
+              timeline[k] = { image: lerpLmArr(prev.image, next.image, t), world: lerpLmArr(prev.world, next.world, t), leftHand: (prev.leftHand && next.leftHand) ? lerpLmArr(prev.leftHand, next.leftHand, t) : (prev.leftHand || next.leftHand), rightHand: (prev.rightHand && next.rightHand) ? lerpLmArr(prev.rightHand, next.rightHand, t) : (prev.rightHand || next.rightHand) }
             } else {
               timeline[k] = prev || next
             }
@@ -2998,9 +3190,59 @@ export default function ThreeEditor({
         }
       }
 
-      // Binomial [1,2,1] temporal filter: current frame stays dominant so fast motion
-      // isn't smeared, but single-frame jitter is still killed.
+      if (stabilizeCamera && captureFile && timeline.length) {
+        throwIfAborted()
+        setVideoProgressLabel('Detecting camera motion…')
+        if (!captureVideo || !captureCanvas || !captureCtx) {
+          captureVideo = document.createElement('video')
+          captureVideo.muted = true
+          captureVideo.playsInline = true
+          captureBlobUrl = URL.createObjectURL(captureFile)
+          captureVideo.src = captureBlobUrl
+          await new Promise<void>(r => { captureVideo!.onloadedmetadata = () => r() })
+          captureCanvas = document.createElement('canvas')
+          captureCtx = captureCanvas.getContext('2d', { willReadFrequently: true })
+        }
+        if (captureVideo && captureCanvas && captureCtx) {
+          const srcW = captureVideo.videoWidth || 640
+          const srcH = captureVideo.videoHeight || 360
+          const dw = 160
+          const dh = Math.max(90, Math.round(dw * srcH / srcW))
+          captureCanvas.width = dw
+          captureCanvas.height = dh
+          const deltas: Sim2D[] = []
+          let prevGray: Uint8Array | null = null
+          let prevBBox: { x0: number; y0: number; x1: number; y1: number } | null = null
+          for (let i = 0; i < totalAnimFrames; i++) {
+            throwIfAborted()
+            captureVideo.currentTime = i / captureFps
+            await new Promise<void>(r => { captureVideo!.onseeked = () => r() })
+            captureCtx.drawImage(captureVideo, 0, 0, dw, dh)
+            const gray = readDownscaledGray(captureCtx, dw, dh)
+            const bbox = poseBBox(timeline[i]?.image, 0.12)
+            if (i > 0 && prevGray) {
+              deltas.push(estimateBackgroundSim(prevGray, gray, dw, dh, prevBBox || bbox))
+            }
+            prevGray = gray
+            prevBBox = bbox
+            if (i % 8 === 0) {
+              setVideoProgress(84 + Math.round((i / Math.max(1, totalAnimFrames)) * 6))
+            }
+          }
+          const cams = accumulateSims(deltas)
+          applyCameraStabilize(timeline, cams, !gpuTimeline?.frames?.length)
+          const strength = cameraMotionStrength(cams)
+          if (strength > 0.012) {
+            showToast('Stabilized camera pan, zoom, and roll', 'info')
+          }
+        }
+      }
+
+      // Fast (browser) detections need a 3-tap denoise. GPU clips already went through
+      // a median/Gaussian in infer.py — another blend would round robotic snaps into
+      // the same glide as organic motion.
       const smoothedTimeline: LMSet[] = new Array(totalAnimFrames).fill(null)
+      const gpuCapture = Boolean(gpuTimeline?.frames?.length)
       const weightedAvg = (items: { arr: any[]; w: number }[]): any[] => {
         const L = items[0].arr.length
         const res: any[] = []
@@ -3020,17 +3262,30 @@ export default function ThreeEditor({
       }
       for (let frameIdx = 0; frameIdx < totalAnimFrames; frameIdx++) {
         if (!timeline[frameIdx]) continue
+        if (gpuCapture) {
+          smoothedTimeline[frameIdx] = timeline[frameIdx]
+          continue
+        }
         const imgWin: { arr: any[]; w: number }[] = []
         const worldWin: { arr: any[]; w: number }[] = []
+        const lHandWin: { arr: any[]; w: number }[] = []
+        const rHandWin: { arr: any[]; w: number }[] = []
         for (let d = -1; d <= 1; d++) {
           const j = frameIdx + d
           if (j >= 0 && j < totalAnimFrames && timeline[j]) {
             const w = d === 0 ? 2 : 1
             imgWin.push({ arr: timeline[j]!.image, w })
             worldWin.push({ arr: timeline[j]!.world, w })
+            if (timeline[j]!.leftHand) lHandWin.push({ arr: timeline[j]!.leftHand!, w })
+            if (timeline[j]!.rightHand) rHandWin.push({ arr: timeline[j]!.rightHand!, w })
           }
         }
-        smoothedTimeline[frameIdx] = { image: weightedAvg(imgWin), world: weightedAvg(worldWin) }
+        smoothedTimeline[frameIdx] = {
+          image: weightedAvg(imgWin),
+          world: weightedAvg(worldWin),
+          leftHand: lHandWin.length ? weightedAvg(lHandWin) : (timeline[frameIdx]!.leftHand || null),
+          rightHand: rHandWin.length ? weightedAvg(rHandWin) : (timeline[frameIdx]!.rightHand || null),
+        }
       }
 
       const frameEntries: { frameIdx: number; data: LMSet }[] = []
@@ -3043,12 +3298,16 @@ export default function ThreeEditor({
 
       if (frameEntries.length === 0) { showToast('No poses detected in video', 'warning'); return }
 
+      throwIfAborted()
       setVideoProgress(92)
 
       // --- Build the animation ---------------------------------------------
       const id = `anim_${animationCounterRef.current++}`
+      const exampleClip = captureFile?.name === 'sample-capture.mp4'
       const newAnim: Animation = {
-        name: `Video Capture`,
+        name: gpuTimeline?.frames?.length
+          ? (exampleClip ? 'Studio 3D example' : 'Studio 3D Capture')
+          : (exampleClip ? 'Fast example' : 'Video Capture'),
         // Match video timeline: frame N at t = N/captureFps seconds.
         fps: captureFps, totalFrames: totalAnimFrames, speed: 1, loop: true,
         keyframes: new Map()
@@ -3157,6 +3416,12 @@ export default function ThreeEditor({
       const rightHandName = matchNamedBone(skeletonInfo.order, ['RightHand'])
       const leftFootName = matchNamedBone(skeletonInfo.order, ['LeftFoot'])
       const rightFootName = matchNamedBone(skeletonInfo.order, ['RightFoot'])
+      const fingerTargets = resolveFingerTargets(skeletonInfo.order)
+      const toHandPts = (hand: any[] | null | undefined): Pt[] | null => {
+        if (!hand || hand.length < 21) return null
+        if (rotationOnly) return hand.map((p: any) => ({ x: p.x, y: p.y, z: p.z || 0 }))
+        return hand.map((p: any) => ({ x: p.x * aspect, y: p.y, z: p.z || 0 }))
+      }
 
       const rootBoneName = skeletonInfo.order[0]
       const rootRest = originalTransformsRef.current.get(rootBoneName)?.position
@@ -3230,15 +3495,14 @@ export default function ThreeEditor({
       const rootDX = new Map<number, number>()
       const rootDY = new Map<number, number>()
       const rootDZ = new Map<number, number>()
-      for (const [frameIdx, v] of smoothOnTimeline(rawDX, 4)) {
+      for (const [frameIdx, v] of smoothOnTimeline(rawDX, 1)) {
         rootDX.set(frameIdx, shapeRoot(v, ROOT_GAIN_X, ROOT_DEADZONE_X))
       }
-      // Light smoothing on Y (win=1 → 3-frame average) preserves quick up/down bounce;
-      // a wider window (as on X) would average the bounciness out into a flat glide.
-      for (const [frameIdx, v] of smoothOnTimeline(rawDY, 1)) {
+      // Keep root filters tiny so a robotic sidestep/plant is not averaged into a glide.
+      for (const [frameIdx, v] of smoothOnTimeline(rawDY, 0)) {
         rootDY.set(frameIdx, shapeRoot(v, ROOT_GAIN_Y, ROOT_DEADZONE_Y))
       }
-      for (const [frameIdx, v] of smoothOnTimeline(rawDZ, 2)) {
+      for (const [frameIdx, v] of smoothOnTimeline(rawDZ, 1)) {
         rootDZ.set(frameIdx, shapeRoot(v, ROOT_GAIN_Z, 0))
       }
 
@@ -3286,6 +3550,8 @@ export default function ThreeEditor({
         const mapping = getBoneMapping(hyb)
         const worldQuats: Record<string, THREE.Quaternion> = {}
         const worldPositions: Record<string, THREE.Vector3> = {}
+        const leftHandPts = handVisibility(frame!.leftHand) >= 0.2 ? toHandPts(frame!.leftHand) : null
+        const rightHandPts = handVisibility(frame!.rightHand) >= 0.2 ? toHandPts(frame!.rightHand) : null
 
         const midHipChar = charPt(mid(hyb[23], hyb[24]))
         const midShoulderChar = charPt(mid(hyb[11], hyb[12]))
@@ -3428,7 +3694,18 @@ export default function ThreeEditor({
 
           if (solvedLower.has(boneName)) continue
 
-          const seg = findSegment(mapping, boneName)
+          const finger = fingerTargets.get(boneName)
+          const seg = (finger || isFingerBoneName(boneName)) ? null : findSegment(mapping, boneName)
+          if (finger) {
+            const pts = finger.side === 'left' ? leftHandPts : rightHandPts
+            if (pts) {
+              const dir = dirFromSeg(pts[finger.a], pts[finger.b])
+              if (dir) {
+                const q = alignBone(bi.childPosDir, dir, parentWorldQ)
+                if (q) localQuat = q
+              }
+            }
+          }
           if (seg) {
             let targetWorldDir = dirFromSeg(seg.start, seg.end)
 
@@ -3453,14 +3730,24 @@ export default function ThreeEditor({
               }
             }
 
-            // Hands: aim at the palm centre (index/pinky), not just the index tip.
-            if (boneName === leftHandName && hyb[15] && hyb[17] && hyb[19]) {
-              const palm = mid(hyb[17], hyb[19])
-              targetWorldDir = dirFromSeg(hyb[15], palm)
+            // Hands: 21-point palm (index/pinky MCP) when captured, else pose landmarks.
+            if (boneName === leftHandName) {
+              if (leftHandPts) {
+                const palm = mid(leftHandPts[5], leftHandPts[17])
+                targetWorldDir = dirFromSeg(leftHandPts[0], palm)
+              } else if (hyb[15] && hyb[17] && hyb[19]) {
+                const palm = mid(hyb[17], hyb[19])
+                targetWorldDir = dirFromSeg(hyb[15], palm)
+              }
             }
-            if (boneName === rightHandName && hyb[16] && hyb[18] && hyb[20]) {
-              const palm = mid(hyb[18], hyb[20])
-              targetWorldDir = dirFromSeg(hyb[16], palm)
+            if (boneName === rightHandName) {
+              if (rightHandPts) {
+                const palm = mid(rightHandPts[5], rightHandPts[17])
+                targetWorldDir = dirFromSeg(rightHandPts[0], palm)
+              } else if (hyb[16] && hyb[18] && hyb[20]) {
+                const palm = mid(hyb[18], hyb[20])
+                targetWorldDir = dirFromSeg(hyb[16], palm)
+              }
             }
             // Feet: heel → toe so the sole follows the captured foot, not just the ankle.
             if (boneName === leftFootName && hyb[29] && hyb[31]) {
@@ -3510,9 +3797,8 @@ export default function ThreeEditor({
         newAnim.keyframes.set(frameIdx, frameKeyframes)
       })
 
-      // Quaternion/position temporal filter on the finished animation. Landmark
-      // averaging can still leave bone-level jitter; a 3-tap slerp (current-frame
-      // weighted) kills that without flattening IK depth or bounce.
+      // Light 3-tap denoise only. A 5-tap cubic (or a neighbor-heavy 3-tap) used to
+      // round robotic snaps into the same glide as organic motion.
       {
         const frames = [...newAnim.keyframes.keys()].sort((a, b) => a - b)
         if (frames.length >= 3) {
@@ -3532,70 +3818,119 @@ export default function ThreeEditor({
             const prev = orig[Math.max(0, i - 1)]
             const cur = orig[i]
             const next = orig[Math.min(orig.length - 1, i + 1)]
-            const prev2 = orig[Math.max(0, i - 2)]
-            const next2 = orig[Math.min(orig.length - 1, i + 2)]
             const out = newAnim.keyframes.get(frames[i])!
             out.forEach((kf, name) => {
               const p = prev.get(name)
               const c = cur.get(name)
               const n = next.get(name)
               if (!p || !c || !n) return
+              const midQ = slerpKeepHemisphere(p.rotation, n.rotation, 0.5)
+              kf.rotation.copy(slerpKeepHemisphere(midQ, c.rotation, 0.9))
               if (rotationOnly) {
-                const p2 = prev2.get(name) ?? p
-                const n2 = next2.get(name) ?? n
-                kf.rotation.copy(cubicQuat(p2.rotation, p.rotation, n.rotation, n2.rotation, 0.5))
-                kf.rotation.copy(slerpKeepHemisphere(kf.rotation, c.rotation, 0.55))
                 kf.position.copy(c.position)
                 return
               }
-              const midQ = slerpKeepHemisphere(p.rotation, n.rotation, 0.5)
-              kf.rotation.copy(slerpKeepHemisphere(midQ, c.rotation, 0.7))
               kf.position.set(
-                p.position.x * 0.15 + c.position.x * 0.7 + n.position.x * 0.15,
-                p.position.y * 0.1 + c.position.y * 0.8 + n.position.y * 0.1,
-                p.position.z * 0.15 + c.position.z * 0.7 + n.position.z * 0.15,
+                p.position.x * 0.08 + c.position.x * 0.84 + n.position.x * 0.08,
+                p.position.y * 0.05 + c.position.y * 0.9 + n.position.y * 0.05,
+                p.position.z * 0.08 + c.position.z * 0.84 + n.position.z * 0.08,
               )
             })
           }
         }
       }
 
+      throwIfAborted()
       setAnimations(prev => new Map(prev).set(id, newAnim))
       setCurrentAnimationId(id)
       setCurrentFrame(0)
       setShowVideoModal(false)
       setVideoFile(null)
       const durationSec = (totalAnimFrames / captureFps).toFixed(1)
-      showToast(`Imported ${frameEntries.length} keyframes · ${captureFps} fps · ${durationSec}s`, 'success')
+      const handNote = fingerTargets.size
+        ? ` · ${fingerTargets.size} finger bones`
+        : ' · mesh has no finger bones (load Mixamo/VRM for gestures)'
+      showToast(`Imported ${frameEntries.length} keyframes · ${captureFps} fps · ${durationSec}s${handNote}`, fingerTargets.size ? 'success' : 'warning')
     } catch (err: any) {
+      if (err?.name === 'CaptureCancelled') {
+        showToast('Capture cancelled', 'info')
+        return
+      }
       console.error('Video capture error:', err)
       showToast('Error: ' + (err.message || 'Video processing failed'), 'error')
     } finally {
+      if (captureBlobUrl) URL.revokeObjectURL(captureBlobUrl)
       setVideoAnalyzing(false)
       setVideoProgress(0)
       setVideoProgressLabel('')
     }
-  }, [videoFile, bones, analyzeSkeletonHierarchy, loadPoseModel, showToast, setAnimations, setCurrentAnimationId, setCurrentFrame])
+  }, [videoFile, bones, analyzeSkeletonHierarchy, loadPoseModel, loadHandModel, showToast, setAnimations, setCurrentAnimationId, setCurrentFrame, stabilizeCamera])
 
-  const handleProcessCapture = useCallback(async () => {
-    if (captureEngine === 'studio') {
+  const cancelCapture = useCallback(async () => {
+    captureAbortRef.current = true
+    captureUploadAbortRef.current?.abort()
+    setVideoProgressLabel('Cancelling…')
+    const jobId = gpuJobIdRef.current
+    if (jobId) {
+      try {
+        await fetch(`/api/capture/gpu/${jobId}`, { method: 'DELETE' })
+      } catch {
+        /* poll loop / Fast pass will stop on the abort flag */
+      }
+    }
+  }, [])
+
+  const loadExampleClip = useCallback(async () => {
+    setExampleLoading(true)
+    try {
+      const res = await fetch('/assets/sample-capture.mp4')
+      if (!res.ok) throw new Error('Could not load example clip')
+      const blob = await res.blob()
+      const file = new File([blob], 'sample-capture.mp4', { type: 'video/mp4' })
+      setVideoFile(file)
+      return file
+    } catch (err: any) {
+      showToast(err?.message || 'Could not load example clip', 'error')
+      return null
+    } finally {
+      setExampleLoading(false)
+    }
+  }, [showToast])
+
+  const handleProcessCapture = useCallback(async (opts?: { file?: File; engine?: 'fast' | 'studio' }) => {
+    const file = opts?.file ?? videoFile
+    const engine = opts?.engine ?? captureEngine
+    if (!file) return
+
+    const throwIfAborted = () => {
+      if (captureAbortRef.current) {
+        const err = new Error('Capture cancelled')
+        err.name = 'CaptureCancelled'
+        throw err
+      }
+    }
+
+    captureAbortRef.current = false
+    gpuJobIdRef.current = null
+
+    if (engine === 'studio') {
       if (!canUseGpuCapture) {
         setUpgradeModalReason('gpu_capture')
         setShowUpgradeModal(true)
         return
       }
-      if (!videoFile) return
       setVideoAnalyzing(true)
       setVideoProgress(2)
       setVideoProgressLabel('Creating GPU job…')
       try {
+        throwIfAborted()
         const res = await fetch('/api/capture/gpu', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            filename: videoFile.name,
-            contentType: videoFile.type || 'video/mp4',
-            size: videoFile.size,
+            filename: file.name,
+            contentType: file.type || 'video/mp4',
+            size: file.size,
           }),
         })
         const data = await res.json().catch(() => ({}))
@@ -3615,7 +3950,7 @@ export default function ThreeEditor({
         }
         if (res.status === 503) {
           showToast('GPU worker is connecting — running Fast capture on your model', 'info')
-          await processVideoCapture()
+          await processVideoCapture(undefined, file)
           return
         }
         if (!res.ok) {
@@ -3626,19 +3961,33 @@ export default function ThreeEditor({
           return
         }
 
+        gpuJobIdRef.current = data.jobId
+        throwIfAborted()
+
         setVideoProgress(8)
         setVideoProgressLabel('Uploading video…')
+        const uploadAbort = new AbortController()
+        captureUploadAbortRef.current = uploadAbort
         const put = await fetch(data.uploadUrl, {
           method: 'PUT',
-          headers: { 'Content-Type': videoFile.type || 'video/mp4' },
-          body: videoFile,
+          headers: { 'Content-Type': file.type || 'video/mp4' },
+          body: file,
+          signal: uploadAbort.signal,
         })
         if (!put.ok) throw new Error('Video upload to GPU storage failed')
+        throwIfAborted()
 
         setVideoProgress(12)
         setVideoProgressLabel('Waking GPU (Spot, billed per minute)…')
         const startRes = await fetch(`/api/capture/gpu/${data.jobId}/start`, { method: 'POST' })
         const startData = await startRes.json().catch(() => ({}))
+        if (startRes.status === 409 && startData.code === 'CANCELLED') {
+          showToast('Capture cancelled', 'info')
+          setVideoAnalyzing(false)
+          setVideoProgress(0)
+          setVideoProgressLabel('')
+          return
+        }
         if (startRes.status === 429) {
           setVideoAnalyzing(false)
           setVideoProgress(0)
@@ -3649,7 +3998,7 @@ export default function ThreeEditor({
         }
         if (startRes.status === 503 && startData.code === 'WORKER_NOT_CONFIGURED') {
           showToast('GPU worker is connecting — running Fast capture on your model', 'info')
-          await processVideoCapture()
+          await processVideoCapture(undefined, file)
           return
         }
         if (startRes.status === 503 && startData.code === 'GPU_POOL_FULL') {
@@ -3661,16 +4010,50 @@ export default function ThreeEditor({
         }
         if (!startRes.ok) throw new Error(startData.error || 'Failed to start GPU worker')
         if (startData.label) setVideoProgressLabel(startData.label)
+        throwIfAborted()
+
+        const waitOrAbort = (ms: number) => new Promise<void>((resolve, reject) => {
+          const start = Date.now()
+          const tick = () => {
+            if (captureAbortRef.current) {
+              const err = new Error('Capture cancelled')
+              err.name = 'CaptureCancelled'
+              reject(err)
+              return
+            }
+            if (Date.now() - start >= ms) {
+              resolve()
+              return
+            }
+            setTimeout(tick, 200)
+          }
+          tick()
+        })
 
         const deadline = Date.now() + 35 * 60 * 1000
         while (Date.now() < deadline) {
+          throwIfAborted()
           const poll = await fetch(`/api/capture/gpu/${data.jobId}`)
           const job = await poll.json().catch(() => ({}))
           if (!poll.ok) throw new Error(job.error || 'Lost GPU job')
           const pct = Number(job.progress)
           setVideoProgress(Math.max(12, Math.min(88, Number.isFinite(pct) ? pct : 12)))
           setVideoProgressLabel(job.label || 'Starting GPU…')
+          if (job.status === 'cancelled') {
+            showToast('Capture cancelled', 'info')
+            setVideoAnalyzing(false)
+            setVideoProgress(0)
+            setVideoProgressLabel('')
+            return
+          }
           if (job.status === 'complete') {
+            if (captureAbortRef.current) {
+              showToast('Capture cancelled', 'info')
+              setVideoAnalyzing(false)
+              setVideoProgress(0)
+              setVideoProgressLabel('')
+              return
+            }
             if (!job.result?.frames?.length) {
               throw new Error('GPU returned no pose frames')
             }
@@ -3678,7 +4061,7 @@ export default function ThreeEditor({
               fps: job.result.fps,
               aspect: job.result.aspect,
               frames: job.result.frames,
-            })
+            }, file)
             return
           }
           if (job.status === 'failed') {
@@ -3691,10 +4074,17 @@ export default function ThreeEditor({
             }
             throw new Error(job.error || 'GPU capture failed')
           }
-          await new Promise(r => setTimeout(r, 2000))
+          await waitOrAbort(2000)
         }
         throw new Error('GPU capture timed out. The instance will stop itself to protect credits.')
       } catch (err: any) {
+        if (err?.name === 'AbortError' || err?.name === 'CaptureCancelled') {
+          showToast('Capture cancelled', 'info')
+          setVideoAnalyzing(false)
+          setVideoProgress(0)
+          setVideoProgressLabel('')
+          return
+        }
         console.error('Studio GPU capture error:', err)
         showToast(err?.message || 'Studio 3D capture failed', 'error')
         setVideoAnalyzing(false)
@@ -3703,7 +4093,7 @@ export default function ThreeEditor({
       }
       return
     }
-    await processVideoCapture()
+    await processVideoCapture(undefined, file)
   }, [captureEngine, canUseGpuCapture, processVideoCapture, showToast, videoFile])
 
   // TEMPORARY (testing): live MediaPipe skeleton overlaid on the source video so testers
@@ -3990,7 +4380,7 @@ export default function ThreeEditor({
               showToast('Load a model with a skeleton first', 'warning')
               return
             }
-            videoInputRef.current?.click()
+            setShowVideoModal(true)
           }}
           className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
             canUseVideoAnalysis ? 'text-[#a1a1aa] hover:bg-[#1c2130]' : 'text-[#71717a] hover:bg-[#1c2130]'
@@ -4781,9 +5171,13 @@ export default function ThreeEditor({
                 </div>
               </div>
               <button
-                onClick={() => { setShowVideoModal(false); setVideoFile(null); setVideoAnalyzing(false) }}
+                onClick={() => {
+                  if (videoAnalyzing) void cancelCapture()
+                  setShowVideoModal(false)
+                  setVideoFile(null)
+                  setVideoAnalyzing(false)
+                }}
                 className="text-[#71717a] hover:text-[#a1a1aa] p-2"
-                disabled={videoAnalyzing}
               >
                 <X className="w-5 h-5" />
               </button>
@@ -4806,6 +5200,29 @@ export default function ThreeEditor({
                   <span className="absolute top-2 left-2 text-[10px] font-bold bg-black/60 text-[#4ade80] px-2 py-0.5 rounded">
                     PREVIEW · detected skeleton
                   </span>
+                  {!videoFile && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center gap-2 text-[#a1a1aa]">
+                      <Video className="w-8 h-8 text-[#3f3f46]" />
+                      <p className="text-xs">Choose a video or use the example clip</p>
+                    </div>
+                  )}
+                </div>
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <button
+                    type="button"
+                    onClick={() => videoInputRef.current?.click()}
+                    className="py-2 text-xs font-semibold rounded-lg bg-[#252b3d] text-[#a1a1aa] hover:bg-[#2f3649] transition-colors"
+                  >
+                    Choose video
+                  </button>
+                  <button
+                    type="button"
+                    disabled={exampleLoading}
+                    onClick={() => { void loadExampleClip() }}
+                    className="py-2 text-xs font-semibold rounded-lg border border-[#22c55e]/40 text-[#4ade80] hover:bg-[#22c55e]/10 transition-colors disabled:opacity-50"
+                  >
+                    {exampleLoading ? 'Loading example…' : 'Use example clip'}
+                  </button>
                 </div>
                 <div className="grid grid-cols-2 gap-2 mb-4">
                   <button
@@ -4900,6 +5317,53 @@ export default function ThreeEditor({
                     <span className="w-2 h-2 bg-[#22c55e] rounded-full" />
                     {captureEngine === 'studio' ? 'GPU job · applied to your mesh' : 'Processes entirely in your browser'}
                   </div>
+                  <label className="flex items-start gap-2.5 cursor-pointer pt-1">
+                    <input
+                      type="checkbox"
+                      checked={stabilizeCamera}
+                      onChange={e => setStabilizeCamera(e.target.checked)}
+                      className="mt-0.5 accent-[#22c55e]"
+                    />
+                    <span>
+                      <span className="text-xs text-[#f4f4f5]">Stabilize camera motion</span>
+                      <span className="block text-[11px] text-[#71717a] mt-0.5">
+                        Detect pan, zoom, and roll in the video and lock them off so the character does not slide with the camera. Works for Fast and Studio 3D.
+                      </span>
+                    </span>
+                  </label>
+                </div>
+                <div className="grid grid-cols-2 gap-2 mb-4">
+                  <button
+                    type="button"
+                    disabled={exampleLoading}
+                    onClick={async () => {
+                      const file = videoFile?.name === 'sample-capture.mp4' ? videoFile : await loadExampleClip()
+                      if (!file) return
+                      setCaptureEngine('fast')
+                      await handleProcessCapture({ file, engine: 'fast' })
+                    }}
+                    className="py-2 text-[11px] font-semibold rounded-lg bg-[#22c55e]/15 text-[#4ade80] hover:bg-[#22c55e]/25 transition-colors disabled:opacity-50"
+                  >
+                    Run Fast example
+                  </button>
+                  <button
+                    type="button"
+                    disabled={exampleLoading}
+                    onClick={async () => {
+                      if (!canUseGpuCapture) {
+                        setUpgradeModalReason('gpu_capture')
+                        setShowUpgradeModal(true)
+                        return
+                      }
+                      const file = videoFile?.name === 'sample-capture.mp4' ? videoFile : await loadExampleClip()
+                      if (!file) return
+                      setCaptureEngine('studio')
+                      await handleProcessCapture({ file, engine: 'studio' })
+                    }}
+                    className="py-2 text-[11px] font-semibold rounded-lg bg-[#22c55e]/15 text-[#4ade80] hover:bg-[#22c55e]/25 transition-colors disabled:opacity-50"
+                  >
+                    Run Studio 3D example
+                  </button>
                 </div>
                 <div className="flex gap-3">
                   <button
@@ -4909,14 +5373,16 @@ export default function ThreeEditor({
                     Cancel
                   </button>
                   <button
+                    disabled={!videoFile}
                     onClick={() => {
+                      if (!videoFile) return
                       if (captureEngine === 'studio' && gpuCapturesRemaining <= 0) {
                         onBuyGpuCredits?.(1)
                         return
                       }
                       handleProcessCapture()
                     }}
-                    className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2"
+                    className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2 disabled:opacity-40 disabled:hover:bg-[#22c55e]"
                   >
                     <Video className="w-4 h-4" />
                     {captureEngine === 'studio'
@@ -4951,6 +5417,13 @@ export default function ThreeEditor({
                     }
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => { void cancelCapture() }}
+                  className="w-full py-2.5 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
+                >
+                  Cancel capture
+                </button>
               </div>
             )}
           </div>

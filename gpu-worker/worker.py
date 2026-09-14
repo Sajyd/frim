@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 import boto3
 
-from infer import infer_video, maybe_transcode
+from infer import CaptureCancelled, infer_video, maybe_transcode
 
 REGION = os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
 BUCKET = os.environ['GPU_S3_BUCKET']
@@ -99,37 +99,96 @@ def callback(job_id: str, payload: dict) -> None:
         log(f'callback failed: {exc}')
 
 
+def job_cancelled(job_id: str) -> bool:
+    try:
+        s3.head_object(Bucket=BUCKET, Key=f'cancels/{job_id}')
+        return True
+    except Exception:
+        return False
+
+
 def process_message(body: dict) -> None:
     job_id = body['jobId']
     input_key = body['inputKey']
     result_key = body.get('resultKey') or f'results/{job_id}.json'
     log(f'job {job_id} ← s3://{BUCKET}/{input_key}')
+    if job_cancelled(job_id):
+        log(f'job {job_id} cancelled before start')
+        return
     callback(job_id, {'status': 'running', 'progress': 5, 'instanceId': instance_id()})
 
     tmp_in = tempfile.NamedTemporaryFile(suffix=os.path.splitext(input_key)[1] or '.mp4', delete=False)
     tmp_in.close()
     s3.download_file(BUCKET, input_key, tmp_in.name)
+    if job_cancelled(job_id):
+        log(f'job {job_id} cancelled during download')
+        try:
+            os.unlink(tmp_in.name)
+        except OSError:
+            pass
+        return
     video_path = maybe_transcode(tmp_in.name)
+    if job_cancelled(job_id):
+        log(f'job {job_id} cancelled during transcode')
+        for path in {tmp_in.name, video_path}:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return
 
     last_pct = [-1]
 
     def on_progress(done: int, total: int) -> None:
+        if job_cancelled(job_id):
+            raise CaptureCancelled()
         pct = 10 + int(80 * done / max(total, 1))
         if pct >= last_pct[0] + 10 or done >= total:
             last_pct[0] = pct
             callback(job_id, {'status': 'running', 'progress': pct, 'instanceId': instance_id()})
 
     t0 = time.time()
-    result = infer_video(video_path, progress_cb=on_progress)
+    try:
+        result = infer_video(
+            video_path,
+            progress_cb=on_progress,
+            cancel_cb=lambda: job_cancelled(job_id),
+        )
+    except CaptureCancelled:
+        log(f'job {job_id} cancelled during infer')
+        for path in {tmp_in.name, video_path}:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return
     duration_ms = int((time.time() - t0) * 1000)
     billed = (time.time() - t0) / 3600.0 * SPOT_HOUR_USD
     result['jobId'] = job_id
     result['durationMs'] = duration_ms
 
+    if job_cancelled(job_id):
+        log(f'job {job_id} cancelled before upload')
+        for path in {tmp_in.name, video_path}:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return
+
     out = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
     out.write(json.dumps(result).encode())
     out.close()
     s3.upload_file(out.name, BUCKET, result_key, ExtraArgs={'ContentType': 'application/json'})
+
+    if job_cancelled(job_id):
+        log(f'job {job_id} cancelled after upload')
+        for path in {tmp_in.name, video_path, out.name}:
+            try:
+                os.unlink(path)
+            except OSError:
+                pass
+        return
 
     put_metric('JobsCompleted', 1)
     put_metric('JobDurationSeconds', duration_ms / 1000.0, 'Seconds')
@@ -177,10 +236,12 @@ def main() -> None:
     put_metric('WorkerStart', 1)
     # Warm the pose model so the first job is not a 30s download.
     try:
-        from infer import get_body, get_motionbert
+        from infer import get_body, pose_kind, get_motionbert
         get_body()
-        get_motionbert()
-        log('pose + MotionBERT ready')
+        kind = pose_kind()
+        if kind != 'rtmw3d':
+            get_motionbert()
+        log(f'pose ready ({kind})')
     except Exception as exc:
         log(f'model warmup failed (will retry on job): {exc}')
 

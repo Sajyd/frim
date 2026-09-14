@@ -43,12 +43,22 @@ if [ -n "$ECR_IMAGE" ]; then
   fi
 fi
 
+# Always refresh Python from S3 so infer.py deploys without a local docker push.
+aws s3 sync "s3://${BUCKET}/worker/" /opt/frim-gpu-worker/ --region "$REGION"
+MOUNT=""
+PIP_CMD=""
+if [ -f /opt/frim-gpu-worker/infer.py ]; then
+  MOUNT="-v /opt/frim-gpu-worker/infer.py:/app/infer.py:ro -v /opt/frim-gpu-worker/worker.py:/app/worker.py:ro -v /opt/frim-gpu-worker/requirements.txt:/opt/frim-gpu-worker/requirements.txt:ro"
+  PIP_CMD="pip3 install --no-cache-dir -r /opt/frim-gpu-worker/requirements.txt && "
+fi
+
 BUILT_LOCAL=0
 if [ "$IMAGE" = "frim-gpu-worker" ]; then
-  aws s3 sync "s3://${BUCKET}/worker/" /opt/frim-gpu-worker/ --region "$REGION"
   cd /opt/frim-gpu-worker
   docker build -t frim-gpu-worker .
   BUILT_LOCAL=1
+  MOUNT=""
+  PIP_CMD=""
 fi
 
 docker rm -f frim-gpu-worker 2>/dev/null || true
@@ -59,11 +69,13 @@ docker run -d --name frim-gpu-worker $GPU_FLAGS --restart unless-stopped \
   -e AWS_DEFAULT_REGION="$REGION" \
   -e GPU_S3_BUCKET="$BUCKET" \
   -e GPU_SQS_QUEUE_URL="$QUEUE_URL" \
-  -e GPU_WORKER_SECRET="$SECRET" \
   -e GPU_CALLBACK_URL="$CALLBACK_URL" \
+  -e GPU_WORKER_SECRET="$SECRET" \
   -e IDLE_SECONDS="$IDLE_SECONDS" \
   -e GPU_SPOT_USD_PER_HOUR="$SPOT_USD" \
-  "$IMAGE"
+  $MOUNT \
+  "$IMAGE" \
+  bash -c "${PIP_CMD}exec python3 /app/worker.py"
 
 # Cache a first-boot image in ECR so the next Spot GPU can pull instead of rebuild.
 if [ "$BUILT_LOCAL" = "1" ] && [ -n "$ECR_IMAGE" ]; then

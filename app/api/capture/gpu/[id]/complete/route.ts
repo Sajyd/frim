@@ -25,6 +25,9 @@ export async function POST(
     if (!job) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
+    if (job.status === 'cancelled') {
+      return NextResponse.json({ ok: true, ignored: true })
+    }
 
     const status = String(body.status || 'running')
     const progress = Math.max(0, Math.min(100, Math.round(Number(body.progress) || job.progress)))

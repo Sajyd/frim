@@ -46,6 +46,9 @@ export async function POST(
     if (!job || job.userId !== session.user.id) {
       return NextResponse.json({ error: 'Job not found' }, { status: 404 })
     }
+    if (job.status === 'cancelled') {
+      return NextResponse.json({ error: 'Job was cancelled', code: 'CANCELLED' }, { status: 409 })
+    }
     if (['complete', 'running', 'queued', 'waking'].includes(job.status)) {
       return NextResponse.json({ ok: true, jobId: job.id, status: job.status, progress: job.progress })
     }

@@ -62,7 +62,7 @@ model GpuJob {
   id            String    @id @default(cuid())
   userId        String
   user          User      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  status        String    @default("uploading") // uploading, queued, waking, running, complete, failed
+  status        String    @default("uploading") // uploading, queued, waking, running, complete, failed, cancelled
   progress      Int       @default(0)
   s3InputKey    String
   s3ResultKey   String?

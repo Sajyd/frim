@@ -130,6 +130,15 @@ export async function gpuResultExists(key: string) {
   }
 }
 
+export async function putGpuCancelFlag(jobId: string) {
+  await s3().send(new PutObjectCommand({
+    Bucket: process.env.GPU_S3_BUCKET!,
+    Key: `cancels/${jobId}`,
+    Body: '1',
+    ContentType: 'text/plain',
+  }))
+}
+
 export async function enqueueGpuJob(payload: Record<string, unknown>) {
   await sqs().send(new SendMessageCommand({
     QueueUrl: process.env.GPU_SQS_QUEUE_URL!,
