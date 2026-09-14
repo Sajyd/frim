@@ -576,8 +576,12 @@ Resources:
         ImageId: '{{resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id}}'
         IamInstanceProfile:
           Arn: !GetAtt WorkerProfile.Arn
-        SecurityGroupIds:
-          - !Ref WorkerSg
+        NetworkInterfaces:
+          - DeviceIndex: 0
+            AssociatePublicIpAddress: true
+            DeleteOnTermination: true
+            Groups:
+              - !Ref WorkerSg
         EbsOptimized: true
         InstanceInitiatedShutdownBehavior: terminate
         BlockDeviceMappings:
