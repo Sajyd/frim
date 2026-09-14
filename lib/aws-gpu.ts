@@ -202,7 +202,7 @@ async function launchOneGpu(): Promise<string | null> {
       MinCount: 1,
       MaxCount: 1,
       LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' },
-      InstanceType: attempt.instanceType,
+      InstanceType: attempt.instanceType as RunInstancesCommandInput['InstanceType'],
       InstanceMarketOptions: {
         MarketType: 'spot',
         SpotOptions: {
