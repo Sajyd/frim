@@ -8,7 +8,8 @@ BUCKET="${GPU_S3_BUCKET:?}"
 QUEUE_URL="${GPU_SQS_QUEUE_URL:?}"
 SECRET="${GPU_WORKER_SECRET:-}"
 CALLBACK_URL="${GPU_CALLBACK_URL:-}"
-IDLE_SECONDS="${IDLE_SECONDS:-900}"
+IDLE_SECONDS="${IDLE_SECONDS:-300}"
+SPOT_USD="${GPU_SPOT_USD_PER_HOUR:-0.13}"
 ECR_IMAGE="${GPU_ECR_IMAGE:-}"
 
 export AWS_DEFAULT_REGION="$REGION"
@@ -61,6 +62,7 @@ docker run -d --name frim-gpu-worker $GPU_FLAGS --restart unless-stopped \
   -e GPU_WORKER_SECRET="$SECRET" \
   -e GPU_CALLBACK_URL="$CALLBACK_URL" \
   -e IDLE_SECONDS="$IDLE_SECONDS" \
+  -e GPU_SPOT_USD_PER_HOUR="$SPOT_USD" \
   "$IMAGE"
 
 # Cache a first-boot image in ECR so the next Spot GPU can pull instead of rebuild.

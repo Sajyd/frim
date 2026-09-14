@@ -10,7 +10,7 @@ import { sendGpuAlert } from '@/lib/email'
 
 const ALERT_KEY = 'ops/alert-state.json'
 const SPEND_KEY = 'ops/eu-north-1-spend.json'
-const IDLE_MAX_SEC = 900
+const IDLE_MAX_SEC = 300
 
 type AlertState = {
   budgetPctNotified: number
@@ -99,10 +99,10 @@ export async function runGpuGuard() {
 
   if (idleIds.length) {
     await terminateGpuInstances(idleIds)
-    actions.push(`terminated ${idleIds.length} idle GPU(s) after 900s`)
+    actions.push(`terminated ${idleIds.length} idle GPU(s) after 300s`)
     await sendGpuAlert(
       `Frim GPU terminated (${idleIds.length} idle)`,
-      `Idle > 900s with an empty queue. Terminated so disks are not billed.\n${idleIds.join(', ')}`,
+      `Idle > 300s with an empty queue. Terminated so disks are not billed.\n${idleIds.join(', ')}`,
     )
   }
 

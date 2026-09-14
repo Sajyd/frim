@@ -2,7 +2,7 @@
 """SQS GPU mocap worker. One job at a time (one GPU per concurrent user).
 
 Writes landmarks JSON to S3, then stays warm so the next user can reuse this
-instance. After IDLE_SECONDS (default 1 hour) with an empty queue it TERMINATES
+instance. After IDLE_SECONDS (default 5 minutes) with an empty queue it TERMINATES
 so the EBS volume is deleted — no per-user disk bill.
 """
 from __future__ import annotations
@@ -26,9 +26,9 @@ BUCKET = os.environ['GPU_S3_BUCKET']
 QUEUE_URL = os.environ['GPU_SQS_QUEUE_URL']
 SECRET = os.environ.get('GPU_WORKER_SECRET', '')
 CALLBACK_URL = os.environ.get('GPU_CALLBACK_URL', '').rstrip('/')
-IDLE_SECONDS = int(os.environ.get('IDLE_SECONDS', '900'))
+IDLE_SECONDS = int(os.environ.get('IDLE_SECONDS', '300'))
 MIN_UPTIME = int(os.environ.get('MIN_UPTIME_SECONDS', '90'))
-SPOT_HOUR_USD = float(os.environ.get('GPU_SPOT_USD_PER_HOUR', '0.18'))
+SPOT_HOUR_USD = float(os.environ.get('GPU_SPOT_USD_PER_HOUR', '0.13'))
 
 sqs = boto3.client('sqs', region_name=REGION)
 s3 = boto3.client('s3', region_name=REGION)
