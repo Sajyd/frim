@@ -22,7 +22,7 @@ aws cloudformation deploy \
     CallbackUrl="$CALLBACK" \
     IdleSeconds=300 \
     MaxInstances="$MAX_INSTANCES" \
-    InstanceType=g6.xlarge \
+    InstanceType=g4dn.xlarge \
     VolumeSize=100 \
     VercelTeamSlug="$VERCEL_TEAM"
 

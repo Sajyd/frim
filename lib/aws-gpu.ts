@@ -25,16 +25,16 @@ export { isGpuAwsConfigured }
 const TAG_KEY = 'Application'
 const TAG_VAL = 'frim-gpu-mocap'
 
-/** 64 G/VT Spot vCPUs in eu-north-1 ÷ 4 vCPU g6.xlarge / g4dn.xlarge = 16 concurrent GPUs. */
+/** 64 G/VT Spot vCPUs in eu-north-1 ÷ 4 vCPU g4dn.xlarge = 16 concurrent GPUs. */
 export function gpuMaxInstances() {
   const n = Number(process.env.GPU_MAX_INSTANCES || 16)
   return Number.isFinite(n) ? Math.max(1, Math.min(16, Math.floor(n))) : 16
 }
 
 export function gpuInstanceTypes() {
-  const raw = process.env.GPU_INSTANCE_TYPES || process.env.GPU_INSTANCE_TYPE || 'g6.xlarge,g4dn.xlarge'
+  const raw = process.env.GPU_INSTANCE_TYPES || process.env.GPU_INSTANCE_TYPE || 'g4dn.xlarge'
   const types = raw.split(',').map(s => s.trim()).filter(Boolean)
-  return types.length ? types : ['g6.xlarge', 'g4dn.xlarge']
+  return types.length ? types : ['g4dn.xlarge']
 }
 
 export function gpuSubnetIds() {
