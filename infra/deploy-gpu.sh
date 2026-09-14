@@ -12,6 +12,23 @@ VERCEL_TEAM="${VERCEL_TEAM_SLUG:-sajyds-projects}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 echo "Deploying $STACK in $REGION (eu-north-1 budget cap \$$BUDGET/mo, max ${MAX_INSTANCES} GPUs, idle 300s)"
+
+ensure_default_vpc() {
+  local r="$1"
+  local id
+  id="$(aws ec2 describe-vpcs --region "$r" --filters Name=isDefault,Values=true --query 'Vpcs[0].VpcId' --output text 2>/dev/null || true)"
+  if [ -n "$id" ] && [ "$id" != "None" ]; then
+    echo "Default VPC $id in $r"
+    return
+  fi
+  echo "Creating default VPC in $r so GPU launches do not need a subnet"
+  aws ec2 create-default-vpc --region "$r" >/dev/null
+}
+
+ensure_default_vpc "$REGION"
+ensure_default_vpc us-east-1
+ensure_default_vpc eu-west-1
+
 aws cloudformation deploy \
   --region "$REGION" \
   --stack-name "$STACK" \

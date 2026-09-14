@@ -8,15 +8,14 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { SQSClient, SendMessageCommand, GetQueueAttributesCommand } from '@aws-sdk/client-sqs'
 import {
   EC2Client,
-  CreateFleetCommand,
+  DescribeAvailabilityZonesCommand,
   DescribeInstancesCommand,
-  DescribeSecurityGroupsCommand,
-  DescribeSubnetsCommand,
+  DescribeLaunchTemplateVersionsCommand,
   RunInstancesCommand,
   TerminateInstancesCommand,
-  type CreateFleetCommandInput,
   type RunInstancesCommandInput,
 } from '@aws-sdk/client-ec2'
+import { SSMClient, GetParameterCommand } from '@aws-sdk/client-ssm'
 import {
   CloudWatchClient,
   PutMetricDataCommand,
@@ -28,8 +27,9 @@ export { isGpuAwsConfigured }
 
 const TAG_KEY = 'Application'
 const TAG_VAL = 'frim-gpu-mocap'
+const DLAMI_PARAM = '/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id'
 
-/** 64 G/VT Spot vCPUs in eu-north-1 ÷ 4 vCPU g4dn.xlarge = 16 concurrent GPUs. */
+/** 64 G/VT Spot vCPUs ÷ 4 vCPU g4dn.xlarge = 16 concurrent GPUs. */
 export function gpuMaxInstances() {
   const n = Number(process.env.GPU_MAX_INSTANCES || 16)
   return Number.isFinite(n) ? Math.max(1, Math.min(16, Math.floor(n))) : 16
@@ -41,32 +41,15 @@ export function gpuInstanceTypes() {
   return types.length ? types : ['g4dn.xlarge']
 }
 
-export function gpuSubnetIds() {
-  return (process.env.GPU_SUBNET_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+function homeRegion() {
+  return process.env.AWS_REGION || 'eu-north-1'
 }
 
-async function gpuSubnetsForLaunch() {
-  const listed = await ec2().send(new DescribeSubnetsCommand({
-    Filters: [{ Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] }],
-  }))
-  const tagged = (listed.Subnets || [])
-    .map(s => s.SubnetId)
-    .filter((id): id is string => Boolean(id))
-  // Never trust a stale Vercel GPU_SUBNET_IDS that only contains the original 1a subnet.
-  const ids = tagged.length ? tagged : gpuSubnetIds()
-  return [...new Set(ids)]
+function gpuLaunchRegions() {
+  return [...new Set([homeRegion(), 'us-east-1', 'eu-west-1'])]
 }
 
-async function gpuSecurityGroupId() {
-  const fromEnv = process.env.GPU_EC2_SECURITY_GROUP_ID?.trim()
-  if (fromEnv) return fromEnv
-  const listed = await ec2().send(new DescribeSecurityGroupsCommand({
-    Filters: [{ Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] }],
-  }))
-  return listed.SecurityGroups?.find(g => g.GroupId)?.GroupId || ''
-}
-
-function isGpuCapacityError(err: unknown) {
+function isGpuRetryable(err: unknown) {
   const e = err as { name?: string; Code?: string; code?: string; message?: string }
   const code = String(e?.name || e?.Code || e?.code || '')
   const msg = String(e?.message || err)
@@ -75,7 +58,9 @@ function isGpuCapacityError(err: unknown) {
     code === 'MaxSpotInstanceCountExceeded' ||
     code === 'SpotMaxPriceTooLow' ||
     code === 'Unsupported' ||
-    /insufficient .*capacity|availability zone you requested|not available in the requested/i.test(msg)
+    code === 'VPCIdNotSpecified' ||
+    code === 'InvalidParameterCombination' ||
+    /insufficient .*capacity|availability zone you requested|not available in the requested|no default VPC|default subnet/i.test(msg)
   )
 }
 
@@ -85,8 +70,11 @@ function s3() {
 function sqs() {
   return new SQSClient(awsClientConfig())
 }
+function ec2For(region: string) {
+  return new EC2Client({ ...awsClientConfig(), region })
+}
 function ec2() {
-  return new EC2Client(awsClientConfig())
+  return ec2For(homeRegion())
 }
 function cw() {
   return new CloudWatchClient(awsClientConfig())
@@ -153,13 +141,16 @@ export async function gpuQueueDepth() {
 }
 
 export async function countLiveGpuInstances() {
-  const listed = await ec2().send(new DescribeInstancesCommand({
-    Filters: [
-      { Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] },
-      { Name: 'instance-state-name', Values: ['pending', 'running'] },
-    ],
+  const lists = await Promise.all(gpuLaunchRegions().map(async region => {
+    const listed = await ec2For(region).send(new DescribeInstancesCommand({
+      Filters: [
+        { Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] },
+        { Name: 'instance-state-name', Values: ['pending', 'running'] },
+      ],
+    }))
+    return (listed.Reservations || []).flatMap(r => r.Instances || [])
   }))
-  return (listed.Reservations || []).flatMap(r => r.Instances || [])
+  return lists.flat()
 }
 
 export type GpuInstanceView = {
@@ -172,19 +163,22 @@ const DEAD_STATES = new Set(['terminated', 'stopped', 'stopping', 'shutting-down
 
 export async function describeGpuInstance(instanceId: string): Promise<GpuInstanceView | null> {
   if (!instanceId) return null
-  try {
-    const listed = await ec2().send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }))
-    const inst = listed.Reservations?.flatMap(r => r.Instances || [])[0]
-    if (!inst?.InstanceId) return null
-    return {
-      id: inst.InstanceId,
-      state: inst.State?.Name || 'unknown',
-      launchTime: inst.LaunchTime ?? null,
+  for (const region of gpuLaunchRegions()) {
+    try {
+      const listed = await ec2For(region).send(new DescribeInstancesCommand({ InstanceIds: [instanceId] }))
+      const inst = listed.Reservations?.flatMap(r => r.Instances || [])[0]
+      if (inst?.InstanceId) {
+        return {
+          id: inst.InstanceId,
+          state: inst.State?.Name || 'unknown',
+          launchTime: inst.LaunchTime ?? null,
+        }
+      }
+    } catch {
+      // Wrong region for this instance id.
     }
-  } catch (err) {
-    console.error('describe GPU instance failed:', err)
-    return null
   }
+  return null
 }
 
 export function isGpuInstanceLive(state?: string | null) {
@@ -204,92 +198,133 @@ export function wakingProgress(updatedAt: Date) {
   return Math.min(30, 12 + Math.floor(elapsed / 15))
 }
 
-type FleetOverride = NonNullable<
-  NonNullable<CreateFleetCommandInput['LaunchTemplateConfigs']>[number]['Overrides']
->[number]
+async function orderedAzs(region: string) {
+  const listed = await ec2For(region).send(new DescribeAvailabilityZonesCommand({
+    Filters: [{ Name: 'state', Values: ['available'] }],
+  }))
+  const names = (listed.AvailabilityZones || []).map(z => z.ZoneName).filter((z): z is string => Boolean(z))
+  const preferred = ['b', 'c', 'a', 'd', 'e', 'f'].map(letter => `${region}${letter}`)
+  return [...preferred.filter(az => names.includes(az)), ...names.filter(az => !preferred.includes(az))]
+}
+
+async function gpuAmi(region: string) {
+  const ssm = new SSMClient({ ...awsClientConfig(), region })
+  const res = await ssm.send(new GetParameterCommand({ Name: DLAMI_PARAM }))
+  return res.Parameter?.Value
+}
+
+type TemplateBits = {
+  userData?: string
+  instanceProfileArn?: string
+}
+
+async function homeTemplateBits(): Promise<TemplateBits> {
+  const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
+  if (!templateId) return {}
+  const res = await ec2().send(new DescribeLaunchTemplateVersionsCommand({
+    LaunchTemplateId: templateId,
+    Versions: ['$Latest'],
+  }))
+  const data = res.LaunchTemplateVersions?.[0]?.LaunchTemplateData
+  return {
+    userData: data?.UserData,
+    instanceProfileArn: data?.IamInstanceProfile?.Arn,
+  }
+}
+
+async function runSpot(opts: {
+  region: string
+  instanceType: string
+  az?: string
+  templateId?: string
+  bits: TemplateBits
+}) {
+  const params: RunInstancesCommandInput = {
+    MinCount: 1,
+    MaxCount: 1,
+    InstanceType: opts.instanceType as RunInstancesCommandInput['InstanceType'],
+    InstanceMarketOptions: {
+      MarketType: 'spot',
+      SpotOptions: {
+        SpotInstanceType: 'one-time',
+        InstanceInterruptionBehavior: 'terminate',
+      },
+    },
+    TagSpecifications: [
+      {
+        ResourceType: 'instance',
+        Tags: [
+          { Key: TAG_KEY, Value: TAG_VAL },
+          { Key: 'Name', Value: 'frim-gpu-mocap-worker' },
+        ],
+      },
+      {
+        ResourceType: 'volume',
+        Tags: [{ Key: TAG_KEY, Value: TAG_VAL }],
+      },
+    ],
+  }
+  if (opts.az) {
+    params.Placement = { AvailabilityZone: opts.az }
+  }
+  if (opts.templateId && opts.region === homeRegion()) {
+    params.LaunchTemplate = { LaunchTemplateId: opts.templateId, Version: '$Latest' }
+  } else {
+    const imageId = await gpuAmi(opts.region)
+    if (!imageId) throw new Error(`No GPU AMI in ${opts.region}`)
+    params.ImageId = imageId
+    if (opts.bits.userData) params.UserData = opts.bits.userData
+    if (opts.bits.instanceProfileArn) {
+      params.IamInstanceProfile = { Arn: opts.bits.instanceProfileArn }
+    }
+    params.InstanceInitiatedShutdownBehavior = 'terminate'
+    params.BlockDeviceMappings = [{
+      DeviceName: '/dev/sda1',
+      Ebs: { VolumeSize: 100, VolumeType: 'gp3', DeleteOnTermination: true },
+    }]
+  }
+
+  const launched = await ec2For(opts.region).send(new RunInstancesCommand(params))
+  const id = launched.Instances?.[0]?.InstanceId
+  if (!id) return null
+  console.log(`launched GPU ${opts.instanceType} ${opts.region} az=${opts.az || 'aws-pick'} ${id}`)
+  return id
+}
 
 async function launchOneGpu(): Promise<string | null> {
   const templateId = process.env.GPU_EC2_LAUNCH_TEMPLATE_ID
-  if (!templateId) {
-    throw new Error('GPU_EC2_LAUNCH_TEMPLATE_ID is not set')
-  }
-  const subnets = await gpuSubnetsForLaunch()
-  if (!subnets.length) {
-    throw new Error('No GPU subnets found (tag Application=frim-gpu-mocap)')
-  }
+  const bits = await homeTemplateBits()
+  const types = gpuInstanceTypes()
+  let lastErr: unknown
 
-  const overrides: FleetOverride[] = gpuInstanceTypes().flatMap(instanceType =>
-    subnets.map(SubnetId => ({
-      InstanceType: instanceType as FleetOverride['InstanceType'],
-      SubnetId,
-    })),
-  )
-  const fleet = await ec2().send(new CreateFleetCommand({
-    Type: 'instant',
-    TargetCapacitySpecification: {
-      TotalTargetCapacity: 1,
-      DefaultTargetCapacityType: 'spot',
-      OnDemandTargetCapacity: 0,
-      SpotTargetCapacity: 1,
-    },
-    SpotOptions: {
-      AllocationStrategy: 'price-capacity-optimized',
-      InstanceInterruptionBehavior: 'terminate',
-      SingleAvailabilityZone: false,
-    },
-    LaunchTemplateConfigs: [{
-      LaunchTemplateSpecification: {
-        LaunchTemplateId: templateId,
-        Version: '$Latest',
-      },
-      Overrides: overrides,
-    }],
-  }))
-  const fleetId = fleet.Instances?.flatMap(i => i.InstanceIds || [])[0]
-  if (fleetId) {
-    console.log(`launched GPU fleet ${fleetId} from ${subnets.length} subnets`)
-    return fleetId
-  }
-
-  const sg = await gpuSecurityGroupId()
-  let lastErr: unknown = new Error(fleet.Errors?.[0]?.ErrorMessage || 'Could not start a GPU')
-  for (const instanceType of gpuInstanceTypes()) {
-    for (const subnet of subnets) {
-      try {
-        const launched = await ec2().send(new RunInstancesCommand({
-          MinCount: 1,
-          MaxCount: 1,
-          LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' },
-          InstanceType: instanceType as RunInstancesCommandInput['InstanceType'],
-          InstanceMarketOptions: {
-            MarketType: 'spot',
-            SpotOptions: {
-              SpotInstanceType: 'one-time',
-              InstanceInterruptionBehavior: 'terminate',
-            },
-          },
-          ...(sg ? {
-            NetworkInterfaces: [{
-              DeviceIndex: 0,
-              AssociatePublicIpAddress: true,
-              DeleteOnTermination: true,
-              Groups: [sg],
-              SubnetId: subnet,
-            }],
-          } : {}),
-        }))
-        const id = launched.Instances?.[0]?.InstanceId
-        if (id) {
-          console.log(`launched GPU ${instanceType} subnet=${subnet} ${id}`)
-          return id
+  for (const region of gpuLaunchRegions()) {
+    const azs = await orderedAzs(region).catch(() => [] as string[])
+    // Prefer b/c, then let AWS pick, then a and remaining AZs. Never pass a subnet.
+    const attempts: (string | undefined)[] = [
+      ...azs.filter(az => az.endsWith('b') || az.endsWith('c')),
+      undefined,
+      ...azs.filter(az => !az.endsWith('b') && !az.endsWith('c')),
+    ]
+    for (const instanceType of types) {
+      for (const az of attempts) {
+        try {
+          const id = await runSpot({
+            region,
+            instanceType,
+            az,
+            templateId: region === homeRegion() ? templateId : undefined,
+            bits,
+          })
+          if (id) return id
+        } catch (err) {
+          lastErr = err
+          if (!isGpuRetryable(err)) throw err
+          console.warn(`GPU launch skipped ${instanceType} ${region} ${az || 'aws-pick'}:`, err)
         }
-      } catch (err) {
-        lastErr = err
-        if (!isGpuCapacityError(err)) throw err
-        console.warn(`GPU launch skipped ${instanceType} ${subnet}:`, err)
       }
     }
   }
+
   throw lastErr instanceof Error ? lastErr : new Error('Could not start a GPU')
 }
 
@@ -335,7 +370,20 @@ export async function ensureGpuCapacity(opts?: { queuedJustNow?: boolean }): Pro
 export async function terminateGpuInstances(instanceIds: string[]) {
   const ids = instanceIds.filter(Boolean)
   if (!ids.length) return
-  await ec2().send(new TerminateInstancesCommand({ InstanceIds: ids }))
+  await Promise.all(gpuLaunchRegions().map(async region => {
+    try {
+      const listed = await ec2For(region).send(new DescribeInstancesCommand({ InstanceIds: ids }))
+      const found = (listed.Reservations || [])
+        .flatMap(r => r.Instances || [])
+        .map(i => i.InstanceId)
+        .filter((id): id is string => Boolean(id))
+      if (found.length) {
+        await ec2For(region).send(new TerminateInstancesCommand({ InstanceIds: found }))
+      }
+    } catch {
+      // IDs belong to another region.
+    }
+  }))
 }
 
 export async function putGpuMetric(name: string, value: number, unit: 'Count' | 'Seconds' | 'None' = 'Count') {

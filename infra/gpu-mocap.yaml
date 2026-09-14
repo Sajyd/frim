@@ -315,14 +315,15 @@ Resources:
               - Effect: Allow
                 Action:
                   - ec2:DescribeInstances
-                  - ec2:DescribeSubnets
-                  - ec2:DescribeSecurityGroups
+                  - ec2:DescribeAvailabilityZones
                   - ec2:RunInstances
-                  - ec2:CreateFleet
                   - ec2:CreateTags
                   - ec2:DescribeLaunchTemplates
                   - ec2:DescribeLaunchTemplateVersions
                   - ec2:TerminateInstances
+                Resource: '*'
+              - Effect: Allow
+                Action: [ssm:GetParameter]
                 Resource: '*'
               - Effect: Allow
                 Action: [cloudwatch:PutMetricData]
@@ -653,8 +654,6 @@ Outputs:
       GPU_S3_BUCKET=${Bucket}
       GPU_SQS_QUEUE_URL=${JobQueue}
       GPU_EC2_LAUNCH_TEMPLATE_ID=${LaunchTemplate}
-      GPU_EC2_SECURITY_GROUP_ID=${WorkerSg}
-      GPU_SUBNET_IDS=${GpuSubnetB},${GpuSubnetC},${GpuSubnet}
       GPU_INSTANCE_TYPES=g4dn.xlarge
       GPU_WORKER_SECRET_ARN=${WorkerCallbackSecret}
       GPU_CALLBACK_URL=${CallbackUrl}
