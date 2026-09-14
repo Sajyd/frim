@@ -315,7 +315,9 @@ Resources:
               - Effect: Allow
                 Action:
                   - ec2:DescribeInstances
+                  - ec2:DescribeSubnets
                   - ec2:RunInstances
+                  - ec2:CreateFleet
                   - ec2:CreateTags
                   - ec2:DescribeLaunchTemplates
                   - ec2:DescribeLaunchTemplateVersions
@@ -574,19 +576,10 @@ Resources:
         ImageId: '{{resolve:ssm:/aws/service/deeplearning/ami/x86_64/base-oss-nvidia-driver-gpu-ubuntu-22.04/latest/ami-id}}'
         IamInstanceProfile:
           Arn: !GetAtt WorkerProfile.Arn
-        NetworkInterfaces:
-          - DeviceIndex: 0
-            AssociatePublicIpAddress: true
-            DeleteOnTermination: true
-            Groups: [!Ref WorkerSg]
-            SubnetId: !Ref GpuSubnet
+        SecurityGroupIds:
+          - !Ref WorkerSg
         EbsOptimized: true
         InstanceInitiatedShutdownBehavior: terminate
-        InstanceMarketOptions:
-          MarketType: spot
-          SpotOptions:
-            SpotInstanceType: one-time
-            InstanceInterruptionBehavior: terminate
         BlockDeviceMappings:
           - DeviceName: /dev/sda1
             Ebs:

@@ -8,10 +8,10 @@ import { getSignedUrl } from '@aws-sdk/s3-request-presigner'
 import { SQSClient, SendMessageCommand, GetQueueAttributesCommand } from '@aws-sdk/client-sqs'
 import {
   EC2Client,
+  CreateFleetCommand,
   DescribeInstancesCommand,
-  RunInstancesCommand,
+  DescribeSubnetsCommand,
   TerminateInstancesCommand,
-  type RunInstancesCommandInput,
 } from '@aws-sdk/client-ec2'
 import {
   CloudWatchClient,
@@ -41,17 +41,13 @@ export function gpuSubnetIds() {
   return (process.env.GPU_SUBNET_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
 }
 
-function isGpuCapacityError(err: unknown) {
-  const e = err as { name?: string; Code?: string; code?: string; message?: string }
-  const code = String(e?.name || e?.Code || e?.code || '')
-  const msg = String(e?.message || err)
-  return (
-    code === 'InsufficientInstanceCapacity' ||
-    code === 'MaxSpotInstanceCountExceeded' ||
-    code === 'SpotMaxPriceTooLow' ||
-    code === 'Unsupported' ||
-    /capacity|availability zone|not available in the requested/i.test(msg)
-  )
+async function gpuSubnetsForLaunch() {
+  const fromEnv = gpuSubnetIds()
+  if (fromEnv.length) return fromEnv
+  const listed = await ec2().send(new DescribeSubnetsCommand({
+    Filters: [{ Name: `tag:${TAG_KEY}`, Values: [TAG_VAL] }],
+  }))
+  return (listed.Subnets || []).map(s => s.SubnetId).filter((id): id is string => Boolean(id))
 }
 
 function s3() {
@@ -184,56 +180,42 @@ async function launchOneGpu(): Promise<string | null> {
   if (!templateId) {
     throw new Error('GPU_EC2_LAUNCH_TEMPLATE_ID is not set')
   }
-  const types = gpuInstanceTypes()
-  const subnets = gpuSubnetIds()
-  const sg = process.env.GPU_EC2_SECURITY_GROUP_ID
-  const attempts: { instanceType: string; subnet?: string }[] = []
-  if (subnets.length) {
-    for (const instanceType of types) {
-      for (const subnet of subnets) attempts.push({ instanceType, subnet })
-    }
-  } else {
-    for (const instanceType of types) attempts.push({ instanceType })
+  const subnets = await gpuSubnetsForLaunch()
+  if (!subnets.length) {
+    throw new Error('No GPU subnets found (tag Application=frim-gpu-mocap)')
   }
-
-  let lastErr: unknown
-  for (const attempt of attempts) {
-    const params: RunInstancesCommandInput = {
-      MinCount: 1,
-      MaxCount: 1,
-      LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' },
-      InstanceType: attempt.instanceType as RunInstancesCommandInput['InstanceType'],
-      InstanceMarketOptions: {
-        MarketType: 'spot',
-        SpotOptions: {
-          SpotInstanceType: 'one-time',
-          InstanceInterruptionBehavior: 'terminate',
-        },
+  const overrides = gpuInstanceTypes().flatMap(InstanceType =>
+    subnets.map(SubnetId => ({ InstanceType, SubnetId })),
+  )
+  const fleet = await ec2().send(new CreateFleetCommand({
+    Type: 'instant',
+    TargetCapacitySpecification: {
+      TotalTargetCapacity: 1,
+      DefaultTargetCapacityType: 'spot',
+      OnDemandTargetCapacity: 0,
+      SpotTargetCapacity: 1,
+    },
+    SpotOptions: {
+      AllocationStrategy: 'price-capacity-optimized',
+      InstanceInterruptionBehavior: 'terminate',
+      SingleAvailabilityZone: false,
+    },
+    LaunchTemplateConfigs: [{
+      LaunchTemplateSpecification: {
+        LaunchTemplateId: templateId,
+        Version: '$Latest',
       },
-    }
-    if (attempt.subnet && sg) {
-      params.NetworkInterfaces = [{
-        DeviceIndex: 0,
-        AssociatePublicIpAddress: true,
-        DeleteOnTermination: true,
-        Groups: [sg],
-        SubnetId: attempt.subnet,
-      }]
-    }
-    try {
-      const launched = await ec2().send(new RunInstancesCommand(params))
-      const id = launched.Instances?.[0]?.InstanceId
-      if (id) {
-        console.log(`launched GPU ${attempt.instanceType} subnet=${attempt.subnet || 'template'} ${id}`)
-        return id
-      }
-    } catch (err) {
-      lastErr = err
-      if (!isGpuCapacityError(err)) throw err
-      console.warn(`GPU launch skipped ${attempt.instanceType} ${attempt.subnet || 'template'}:`, err)
-    }
+      Overrides: overrides,
+    }],
+  }))
+  const id = fleet.Instances?.flatMap(i => i.InstanceIds || [])[0] || null
+  if (id) {
+    console.log(`launched GPU fleet ${id} across ${subnets.length} subnets`)
+    return id
   }
-  throw lastErr instanceof Error ? lastErr : new Error('Could not start a GPU')
+  const err = fleet.Errors?.[0]
+  const msg = err?.ErrorMessage || 'Could not start a GPU'
+  throw new Error(msg)
 }
 
 export type GpuCapacity = {
