@@ -11,6 +11,7 @@ import {
   DescribeInstancesCommand,
   RunInstancesCommand,
   TerminateInstancesCommand,
+  type RunInstancesCommandInput,
 } from '@aws-sdk/client-ec2'
 import {
   CloudWatchClient,
@@ -24,9 +25,33 @@ export { isGpuAwsConfigured }
 const TAG_KEY = 'Application'
 const TAG_VAL = 'frim-gpu-mocap'
 
+/** 64 G/VT Spot vCPUs in eu-north-1 ÷ 4 vCPU g6.xlarge / g4dn.xlarge = 16 concurrent GPUs. */
 export function gpuMaxInstances() {
-  const n = Number(process.env.GPU_MAX_INSTANCES || 100)
-  return Number.isFinite(n) ? Math.max(1, Math.min(100, Math.floor(n))) : 100
+  const n = Number(process.env.GPU_MAX_INSTANCES || 16)
+  return Number.isFinite(n) ? Math.max(1, Math.min(16, Math.floor(n))) : 16
+}
+
+export function gpuInstanceTypes() {
+  const raw = process.env.GPU_INSTANCE_TYPES || process.env.GPU_INSTANCE_TYPE || 'g6.xlarge,g4dn.xlarge'
+  const types = raw.split(',').map(s => s.trim()).filter(Boolean)
+  return types.length ? types : ['g6.xlarge', 'g4dn.xlarge']
+}
+
+export function gpuSubnetIds() {
+  return (process.env.GPU_SUBNET_IDS || '').split(',').map(s => s.trim()).filter(Boolean)
+}
+
+function isGpuCapacityError(err: unknown) {
+  const e = err as { name?: string; Code?: string; code?: string; message?: string }
+  const code = String(e?.name || e?.Code || e?.code || '')
+  const msg = String(e?.message || err)
+  return (
+    code === 'InsufficientInstanceCapacity' ||
+    code === 'MaxSpotInstanceCountExceeded' ||
+    code === 'SpotMaxPriceTooLow' ||
+    code === 'Unsupported' ||
+    /capacity|availability zone|not available in the requested/i.test(msg)
+  )
 }
 
 function s3() {
@@ -159,14 +184,25 @@ async function launchOneGpu(): Promise<string | null> {
   if (!templateId) {
     throw new Error('GPU_EC2_LAUNCH_TEMPLATE_ID is not set')
   }
-  const base = {
-    MinCount: 1,
-    MaxCount: 1,
-    LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' as const },
+  const types = gpuInstanceTypes()
+  const subnets = gpuSubnetIds()
+  const sg = process.env.GPU_EC2_SECURITY_GROUP_ID
+  const attempts: { instanceType: string; subnet?: string }[] = []
+  if (subnets.length) {
+    for (const instanceType of types) {
+      for (const subnet of subnets) attempts.push({ instanceType, subnet })
+    }
+  } else {
+    for (const instanceType of types) attempts.push({ instanceType })
   }
-  try {
-    const spot = await ec2().send(new RunInstancesCommand({
-      ...base,
+
+  let lastErr: unknown
+  for (const attempt of attempts) {
+    const params: RunInstancesCommandInput = {
+      MinCount: 1,
+      MaxCount: 1,
+      LaunchTemplate: { LaunchTemplateId: templateId, Version: '$Latest' },
+      InstanceType: attempt.instanceType,
       InstanceMarketOptions: {
         MarketType: 'spot',
         SpotOptions: {
@@ -174,23 +210,30 @@ async function launchOneGpu(): Promise<string | null> {
           InstanceInterruptionBehavior: 'terminate',
         },
       },
-    }))
-    const id = spot.Instances?.[0]?.InstanceId
-    if (id) return id
-  } catch (err: any) {
-    const code = err?.name || err?.Code || err?.code
-    const msg = String(err?.message || err)
-    const spotBlocked =
-      code === 'MaxSpotInstanceCountExceeded' ||
-      code === 'InsufficientInstanceCapacity' ||
-      /spot/i.test(msg)
-    if (!spotBlocked) throw err
-    console.warn('Spot GPU unavailable, falling back to on-demand:', msg)
+    }
+    if (attempt.subnet && sg) {
+      params.NetworkInterfaces = [{
+        DeviceIndex: 0,
+        AssociatePublicIpAddress: true,
+        DeleteOnTermination: true,
+        Groups: [sg],
+        SubnetId: attempt.subnet,
+      }]
+    }
+    try {
+      const launched = await ec2().send(new RunInstancesCommand(params))
+      const id = launched.Instances?.[0]?.InstanceId
+      if (id) {
+        console.log(`launched GPU ${attempt.instanceType} subnet=${attempt.subnet || 'template'} ${id}`)
+        return id
+      }
+    } catch (err) {
+      lastErr = err
+      if (!isGpuCapacityError(err)) throw err
+      console.warn(`GPU launch skipped ${attempt.instanceType} ${attempt.subnet || 'template'}:`, err)
+    }
   }
-  const onDemand = await ec2().send(new RunInstancesCommand(base))
-  const id = onDemand.Instances?.[0]?.InstanceId
-  if (!id) throw new Error('RunInstances returned no instance')
-  return id
+  throw lastErr instanceof Error ? lastErr : new Error('Could not start a GPU')
 }
 
 export type GpuCapacity = {

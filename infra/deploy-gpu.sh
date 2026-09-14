@@ -6,12 +6,12 @@ set -euo pipefail
 REGION="${AWS_REGION:-eu-north-1}"
 STACK="${STACK_NAME:-frim-gpu-mocap}"
 BUDGET="${AWS_BUDGET_LIMIT:-80}"
-MAX_INSTANCES="${GPU_MAX_INSTANCES:-100}"
+MAX_INSTANCES="${GPU_MAX_INSTANCES:-16}"
 CALLBACK="${GPU_CALLBACK_URL:?Set GPU_CALLBACK_URL e.g. https://frim.app}"
 VERCEL_TEAM="${VERCEL_TEAM_SLUG:-sajyds-projects}"
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
-echo "Deploying $STACK in $REGION (eu-north-1 budget cap \$$BUDGET/mo, max ${MAX_INSTANCES} GPUs, idle 900s)"
+echo "Deploying $STACK in $REGION (eu-north-1 budget cap \$$BUDGET/mo, max ${MAX_INSTANCES} GPUs, idle 300s)"
 aws cloudformation deploy \
   --region "$REGION" \
   --stack-name "$STACK" \
@@ -20,8 +20,9 @@ aws cloudformation deploy \
   --parameter-overrides \
     MonthlyBudgetUsd="$BUDGET" \
     CallbackUrl="$CALLBACK" \
-    IdleSeconds=900 \
+    IdleSeconds=300 \
     MaxInstances="$MAX_INSTANCES" \
+    InstanceType=g6.xlarge \
     VolumeSize=100 \
     VercelTeamSlug="$VERCEL_TEAM"
 
@@ -55,4 +56,4 @@ aws cloudformation describe-stacks --region "$REGION" --stack-name "$STACK" \
   --query "Stacks[0].Outputs[?OutputKey=='VercelEnv'].OutputValue" --output text
 echo
 echo "Enable Vercel OIDC (project Settings > Security) and set AWS_ROLE_ARN from AppRoleArn."
-echo "No GPU is running. Idle workers terminate after 900s. eu-north-1 spend is capped at \$$BUDGET."
+echo "No GPU is running. Idle workers terminate after 300s. eu-north-1 spend is capped at \$$BUDGET."

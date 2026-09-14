@@ -1,8 +1,8 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >
-  Frim GPU motion capture — one Spot T4 per concurrent capture. Idle instances
-  terminate after 900 seconds (disk deleted). Cost alerts go to the webapp (Resend),
-  not SNS email.
+  Frim GPU motion capture — Spot T4 only (no on-demand). Idle instances
+  terminate after 300 seconds (disk deleted). Cost alerts go to the webapp (Resend),
+  not SNS email. Spend is estimated in S3 at $0.20/hr per live GPU.
 
 Parameters:
   MonthlyBudgetUsd:
@@ -11,12 +11,12 @@ Parameters:
     Description: Monthly spend cap. The webapp cron emails via Resend and terminates GPUs at 100%.
   IdleSeconds:
     Type: Number
-    Default: 900
-    Description: Worker self-terminates after this many idle seconds (max 900). Disk is deleted.
+    Default: 300
+    Description: Worker self-terminates after this many idle seconds with an empty queue. Disk is deleted.
   MaxInstances:
     Type: Number
-    Default: 100
-    Description: Max concurrent Spot GPUs (one per in-flight capture). Extra users wait in SQS.
+    Default: 16
+    Description: Max concurrent Spot GPUs. 16 = 64 vCPU G/VT Spot quota on 4-vCPU GPUs (g6.xlarge / g4dn.xlarge). Extra users wait in SQS.
   CallbackUrl:
     Type: String
     Description: Public app origin, e.g. https://frim.app (no trailing slash)
@@ -30,8 +30,8 @@ Parameters:
     Description: Vercel team slug from vercel.com/TEAM. Used for default OIDC aud and Team issuer.
   InstanceType:
     Type: String
-    Default: g4dn.xlarge
-    Description: Cheapest NVIDIA T4 instance that can run RTMO/RTMPose
+    Default: g6.xlarge
+    Description: Default GPU size (4 vCPU NVIDIA L4). g4dn.xlarge is the smallest T4; mocap does not need a larger box.
   VolumeSize:
     Type: Number
     Default: 100
@@ -381,7 +381,7 @@ Resources:
           SECRET_ARN: !Ref WorkerCallbackSecret
           GPU_S3_BUCKET: !Ref Bucket
           MAX_RUN_MINUTES: '45'
-          IDLE_TERMINATE_MINUTES: '16'
+          IDLE_SECONDS: !Ref IdleSeconds
           MAX_INSTANCES: !Ref MaxInstances
           BUDGET_LIMIT: !Ref MonthlyBudgetUsd
           SPOT_USD: '0.20'
@@ -392,7 +392,7 @@ Resources:
           E=os.environ
           ec2,sqs,cw,s3=boto3.client('ec2'),boto3.client('sqs'),boto3.client('cloudwatch'),boto3.client('s3')
           Q,CB,BKT=E['QUEUE_URL'],E.get('CALLBACK_URL','').rstrip('/'),E['GPU_S3_BUCKET']
-          MX,IDLE,CAP=int(E.get('MAX_RUN_MINUTES','45')),int(E.get('IDLE_TERMINATE_MINUTES','16')),int(E.get('MAX_INSTANCES','100'))
+          MX,IDLE,CAP=int(E.get('MAX_RUN_MINUTES','45')),int(E.get('IDLE_SECONDS','300'))/60,int(E.get('MAX_INSTANCES','16'))
           LIM,RATE=float(E.get('BUDGET_LIMIT','80')),float(E.get('SPOT_USD','0.20'))
           TAG={'Name':'tag:Application','Values':['frim-gpu-mocap']}
           def metric(n,v):
@@ -437,7 +437,7 @@ Resources:
               if inflight and age>=MX: stuck.append(iid)
               elif age>=MX*2: stuck.append(iid)
               elif pending==0 and age>=IDLE: idle.append(iid)
-            kill(extra,'over cap'); kill(stuck,'max runtime'); kill(idle,'idle 900s'); return {'usd':usd,'pending':pending}
+            kill(extra,'over cap'); kill(stuck,'max runtime'); kill(idle,'idle empty queue'); return {'usd':usd,'pending':pending}
 
   WatchdogSchedule:
     Type: AWS::Events::Rule
@@ -491,7 +491,33 @@ Resources:
         - Key: Application
           Value: frim-gpu-mocap
         - Key: Name
-          Value: frim-gpu-mocap-public
+          Value: frim-gpu-mocap-public-a
+
+  GpuSubnetB:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GpuVpc
+      CidrBlock: 10.42.1.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Sub '${AWS::Region}b'
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+        - Key: Name
+          Value: frim-gpu-mocap-public-b
+
+  GpuSubnetC:
+    Type: AWS::EC2::Subnet
+    Properties:
+      VpcId: !Ref GpuVpc
+      CidrBlock: 10.42.2.0/24
+      MapPublicIpOnLaunch: true
+      AvailabilityZone: !Sub '${AWS::Region}c'
+      Tags:
+        - Key: Application
+          Value: frim-gpu-mocap
+        - Key: Name
+          Value: frim-gpu-mocap-public-c
 
   GpuRouteTable:
     Type: AWS::EC2::RouteTable
@@ -513,6 +539,18 @@ Resources:
     Type: AWS::EC2::SubnetRouteTableAssociation
     Properties:
       SubnetId: !Ref GpuSubnet
+      RouteTableId: !Ref GpuRouteTable
+
+  GpuSubnetRouteB:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref GpuSubnetB
+      RouteTableId: !Ref GpuRouteTable
+
+  GpuSubnetRouteC:
+    Type: AWS::EC2::SubnetRouteTableAssociation
+    Properties:
+      SubnetId: !Ref GpuSubnetC
       RouteTableId: !Ref GpuRouteTable
 
   WorkerSg:
@@ -544,8 +582,11 @@ Resources:
             SubnetId: !Ref GpuSubnet
         EbsOptimized: true
         InstanceInitiatedShutdownBehavior: terminate
-        # On-demand by default: this account's G/VT Spot quota is 0 until AWS
-        # approves an increase. The app still tries Spot first, then falls back.
+        InstanceMarketOptions:
+          MarketType: spot
+          SpotOptions:
+            SpotInstanceType: one-time
+            InstanceInterruptionBehavior: terminate
         BlockDeviceMappings:
           - DeviceName: /dev/sda1
             Ebs:
@@ -573,6 +614,7 @@ Resources:
             export GPU_WORKER_SECRET=$(aws secretsmanager get-secret-value --secret-id ${WorkerCallbackSecret} --region ${AWS::Region} --query SecretString --output text)
             export GPU_CALLBACK_URL=${CallbackUrl}
             export IDLE_SECONDS=${IdleSeconds}
+            export GPU_SPOT_USD_PER_HOUR=0.20
             export GPU_ECR_IMAGE=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${WorkerRepo}:latest
             apt-get update
             apt-get install -y awscli docker.io || true
@@ -586,6 +628,7 @@ Resources:
             GPU_WORKER_SECRET=$GPU_WORKER_SECRET
             GPU_CALLBACK_URL=${CallbackUrl}
             IDLE_SECONDS=${IdleSeconds}
+            GPU_SPOT_USD_PER_HOUR=0.20
             GPU_ECR_IMAGE=${AWS::AccountId}.dkr.ecr.${AWS::Region}.amazonaws.com/${WorkerRepo}:latest
             EOF
             aws s3 sync s3://${Bucket}/worker/ /opt/frim-gpu-worker/ --region ${AWS::Region} || true
@@ -618,6 +661,9 @@ Outputs:
       GPU_S3_BUCKET=${Bucket}
       GPU_SQS_QUEUE_URL=${JobQueue}
       GPU_EC2_LAUNCH_TEMPLATE_ID=${LaunchTemplate}
+      GPU_EC2_SECURITY_GROUP_ID=${WorkerSg}
+      GPU_SUBNET_IDS=${GpuSubnetB},${GpuSubnetC},${GpuSubnet}
+      GPU_INSTANCE_TYPES=g6.xlarge,g4dn.xlarge
       GPU_WORKER_SECRET_ARN=${WorkerCallbackSecret}
       GPU_CALLBACK_URL=${CallbackUrl}
       AWS_BUDGET_LIMIT=${MonthlyBudgetUsd}
