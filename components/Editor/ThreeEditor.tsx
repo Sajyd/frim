@@ -5159,8 +5159,8 @@ export default function ThreeEditor({
       {/* Video Motion Capture Modal */}
       {showVideoModal && (
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
-          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg p-6">
-            <div className="flex items-center justify-between mb-6">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
               <div className="flex items-center gap-3">
                 <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
                   <Video className="w-5 h-5 text-[#22c55e]" />
@@ -5185,6 +5185,7 @@ export default function ThreeEditor({
 
             {!videoAnalyzing ? (
               <>
+                <div className="px-6 overflow-y-auto min-h-0 flex-1">
                 {/* TEMPORARY preview: live MediaPipe skeleton over the video (testing) */}
                 <div className="relative w-full rounded-xl overflow-hidden mb-3 bg-black flex items-center justify-center" style={{ aspectRatio: '16 / 9' }}>
                   <video
@@ -5317,55 +5318,28 @@ export default function ThreeEditor({
                     <span className="w-2 h-2 bg-[#22c55e] rounded-full" />
                     {captureEngine === 'studio' ? 'GPU job · applied to your mesh' : 'Processes entirely in your browser'}
                   </div>
-                  <label className="flex items-start gap-2.5 cursor-pointer pt-1">
-                    <input
-                      type="checkbox"
-                      checked={stabilizeCamera}
-                      onChange={e => setStabilizeCamera(e.target.checked)}
-                      className="mt-0.5 accent-[#22c55e]"
-                    />
-                    <span>
-                      <span className="text-xs text-[#f4f4f5]">Stabilize camera motion</span>
-                      <span className="block text-[11px] text-[#71717a] mt-0.5">
-                        Detect pan, zoom, and roll in the video and lock them off so the character does not slide with the camera. Works for Fast and Studio 3D.
-                      </span>
-                    </span>
-                  </label>
+                  <div className="flex items-center justify-between gap-3 pt-1">
+                    <span className="text-xs text-[#f4f4f5]">Stabilize camera motion</span>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={stabilizeCamera}
+                      aria-label="Stabilize camera motion"
+                      onClick={() => setStabilizeCamera(v => !v)}
+                      className={`relative h-[31px] w-[51px] shrink-0 rounded-full transition-colors duration-200 ease-out ${
+                        stabilizeCamera ? 'bg-[#22c55e]' : 'bg-[#3a3a3c]'
+                      }`}
+                    >
+                      <span
+                        className={`absolute top-[2px] left-[2px] h-[27px] w-[27px] rounded-full bg-white shadow-md transition-transform duration-200 ease-out ${
+                          stabilizeCamera ? 'translate-x-[20px]' : 'translate-x-0'
+                        }`}
+                      />
+                    </button>
+                  </div>
                 </div>
-                <div className="grid grid-cols-2 gap-2 mb-4">
-                  <button
-                    type="button"
-                    disabled={exampleLoading}
-                    onClick={async () => {
-                      const file = videoFile?.name === 'sample-capture.mp4' ? videoFile : await loadExampleClip()
-                      if (!file) return
-                      setCaptureEngine('fast')
-                      await handleProcessCapture({ file, engine: 'fast' })
-                    }}
-                    className="py-2 text-[11px] font-semibold rounded-lg bg-[#22c55e]/15 text-[#4ade80] hover:bg-[#22c55e]/25 transition-colors disabled:opacity-50"
-                  >
-                    Run Fast example
-                  </button>
-                  <button
-                    type="button"
-                    disabled={exampleLoading}
-                    onClick={async () => {
-                      if (!canUseGpuCapture) {
-                        setUpgradeModalReason('gpu_capture')
-                        setShowUpgradeModal(true)
-                        return
-                      }
-                      const file = videoFile?.name === 'sample-capture.mp4' ? videoFile : await loadExampleClip()
-                      if (!file) return
-                      setCaptureEngine('studio')
-                      await handleProcessCapture({ file, engine: 'studio' })
-                    }}
-                    className="py-2 text-[11px] font-semibold rounded-lg bg-[#22c55e]/15 text-[#4ade80] hover:bg-[#22c55e]/25 transition-colors disabled:opacity-50"
-                  >
-                    Run Studio 3D example
-                  </button>
                 </div>
-                <div className="flex gap-3">
+                <div className="flex gap-3 px-6 pt-3 pb-6 shrink-0">
                   <button
                     onClick={() => { setShowVideoModal(false); setVideoFile(null) }}
                     className="flex-1 py-2.5 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
@@ -5392,7 +5366,7 @@ export default function ThreeEditor({
                 </div>
               </>
             ) : (
-              <div className="space-y-4">
+              <div className="px-6 pb-6 overflow-y-auto min-h-0 flex-1 space-y-4">
                 <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4">
                   <div className="flex items-center justify-between mb-2">
                     <span className="text-sm text-[#a1a1aa]">Analyzing video...</span>
