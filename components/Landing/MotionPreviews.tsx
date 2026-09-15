@@ -59,190 +59,114 @@ function polar(from: Pt, angleFromDown: number, len: number): Pt {
   }
 }
 
-function catmull(p0: number, p1: number, p2: number, p3: number, t: number) {
-  const t2 = t * t
-  const t3 = t2 * t
-  return 0.5 * (
-    2 * p1 +
-    (-p0 + p2) * t +
-    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
-    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
-  )
+function clamp(n: number, a: number, b: number) {
+  return Math.max(a, Math.min(b, n))
 }
 
-function catmullPose(p0: WalkPose, p1: WalkPose, p2: WalkPose, p3: WalkPose, t: number): WalkPose {
-  const keys = Object.keys(p1) as (keyof WalkPose)[]
-  const out = { ...p1 }
-  for (const key of keys) out[key] = catmull(p0[key], p1[key], p2[key], p3[key], t)
-  out.shinL = Math.max(0, Math.min(90, out.shinL))
-  out.shinR = Math.max(0, Math.min(90, out.shinR))
-  return out
+function walkCycle(time: number) {
+  return ((time / WALK_PERIOD) % 1 + 1) % 1
 }
 
-function swapLR(p: WalkPose): WalkPose {
-  return {
-    ...p,
-    thighL: p.thighR,
-    shinL: p.shinR,
-    footL: p.footR,
-    thighR: p.thighL,
-    shinR: p.shinL,
-    footR: p.footL,
-    armL: p.armR,
-    forearmL: p.forearmR,
-    armR: p.armL,
-    forearmR: p.forearmL,
+function ikLeg(hip: Pt, ankle: Pt, thighLen: number, shinLen: number) {
+  let dx = ankle.x - hip.x
+  let dy = ankle.y - hip.y
+  let dist = Math.hypot(dx, dy)
+  const maxLen = thighLen + shinLen - 0.4
+  const minLen = Math.abs(thighLen - shinLen) + 0.4
+  if (dist < 1e-4) {
+    dx = 0
+    dy = 1
+    dist = 1
   }
+  if (dist > maxLen || dist < minLen) {
+    const k = (dist > maxLen ? maxLen : minLen) / dist
+    dx *= k
+    dy *= k
+    dist *= k
+    ankle = { x: hip.x + dx, y: hip.y + dy }
+  }
+  const base = Math.atan2(dx, dy)
+  const cosA = clamp((thighLen * thighLen + dist * dist - shinLen * shinLen) / (2 * thighLen * dist), -1, 1)
+  const knee = polar(hip, base + Math.acos(cosA), thighLen)
+  return { knee, ankle }
 }
 
-const CONTACT: WalkPose = {
-  hipY: 0,
-  lean: 8,
-  head: -5,
-  thighR: 28,
-  shinR: 28,
-  footR: 12,
-  thighL: -26,
-  shinL: 32,
-  footL: -16,
-  armR: -28,
-  forearmR: 14,
-  armL: 26,
-  forearmL: 34,
+function walkFoot(phase: number, hipX: number, floorY: number, scale: number) {
+  const stride = 17 * scale
+  const lift = 16 * scale
+  const footLen = 10 * scale
+  const x = hipX + stride * Math.cos(phase * Math.PI * 2)
+  const swinging = phase > 0.5
+  const u = swinging ? (phase - 0.5) / 0.5 : 0
+  const rise = swinging ? Math.sin(u * Math.PI) ** 2 : 0
+  const ankle = { x, y: floorY - rise * lift }
+  const toe = polar(ankle, Math.PI / 2 + deg(8 * rise), footLen)
+  if (toe.y > floorY) {
+    const sink = toe.y - floorY
+    ankle.y -= sink
+    toe.y = floorY
+  }
+  return { ankle, toe }
 }
 
-const DOWN: WalkPose = {
-  hipY: 0,
-  lean: 10,
-  head: -3,
-  thighR: 16,
-  shinR: 58,
-  footR: 2,
-  thighL: 28,
-  shinL: 64,
-  footL: 8,
-  armR: -14,
-  forearmR: 22,
-  armL: 12,
-  forearmL: 40,
-}
-
-const PASS: WalkPose = {
-  hipY: 0,
-  lean: 6,
-  head: -4,
-  thighR: -30,
-  shinR: 42,
-  footR: -12,
-  thighL: 72,
-  shinL: 74,
-  footL: 4,
-  armR: 10,
-  forearmR: 18,
-  armL: -12,
-  forearmL: 24,
-}
-
-const HIGH: WalkPose = {
-  hipY: 0,
-  lean: 7,
-  head: -6,
-  thighR: -20,
-  shinR: 24,
-  footR: -16,
-  thighL: 52,
-  shinL: 50,
-  footL: 12,
-  armR: 26,
-  forearmR: 32,
-  armL: -28,
-  forearmL: 16,
-}
-
-const WALK_KEYS: { at: number; pose: WalkPose }[] = [
-  { at: 0, pose: CONTACT },
-  { at: 0.12, pose: DOWN },
-  { at: 0.25, pose: PASS },
-  { at: 0.38, pose: HIGH },
-  { at: 0.5, pose: swapLR(CONTACT) },
-  { at: 0.62, pose: swapLR(DOWN) },
-  { at: 0.75, pose: swapLR(PASS) },
-  { at: 0.88, pose: swapLR(HIGH) },
-  { at: 1, pose: CONTACT },
-]
-
-function sampleWalk(time: number): WalkPose {
-  const c = ((time / WALK_PERIOD) % 1 + 1) % 1
-  const keys = WALK_KEYS
-  const last = keys.length - 1
-  let i = 0
-  while (i < last - 1 && keys[i + 1].at <= c) i += 1
-  const a = keys[i]
-  const b = keys[i + 1]
-  const t = (c - a.at) / (b.at - a.at)
-  const p0 = keys[i === 0 ? last - 1 : i - 1].pose
-  const p3 = keys[i + 1 >= last ? 1 : i + 2].pose
-  return catmullPose(p0, a.pose, b.pose, p3, t)
-}
-
-function up(p: Pt, dy: number): Pt {
-  return { x: p.x, y: p.y - dy }
-}
-
-function solveLeg(hip: Pt, thigh: number, shin: number, foot: number, scale: number) {
-  const knee = polar(hip, deg(thigh), 28 * scale)
-  // shin is knee flexion: calf folds back so the foot lifts instead of kicking forward
-  const ankle = polar(knee, deg(thigh - shin), 26 * scale)
-  const toe = polar(ankle, Math.PI / 2 + deg(foot), 10 * scale)
-  return { knee, ankle, toe }
-}
-
-function solveSide(pose: WalkPose, origin: Pt, scale: number): Rig {
+function solveSide(origin: Pt, scale: number, time: number): Rig {
   const s = scale
-  const hip = { x: origin.x, y: origin.y + pose.hipY * s }
+  const cycle = walkCycle(time)
+  const omega = cycle * Math.PI * 2
   const floorY = origin.y + 54 * s
-  const lean = deg(pose.lean)
+  const bounce = 1.8 * Math.cos(cycle * Math.PI * 4)
+  const hip = { x: origin.x, y: floorY - 45.8 * s + bounce * s }
+  const lean = deg(8 + 1.6 * Math.sin(omega))
   const chest = { x: hip.x + Math.sin(lean) * 26 * s, y: hip.y - Math.cos(lean) * 26 * s }
   const neck = { x: chest.x + Math.sin(lean) * 9 * s, y: chest.y - Math.cos(lean) * 9 * s }
-  const headAng = lean + deg(pose.head)
+  const headAng = lean + deg(-4 - 2 * Math.sin(omega))
   const head = { x: neck.x + Math.sin(headAng) * 11 * s, y: neck.y - Math.cos(headAng) * 11 * s }
   const nose = { x: head.x + Math.cos(headAng) * 8 * s, y: head.y + Math.sin(headAng) * 8 * s }
 
+  const armR = -26 * Math.cos(omega)
+  const armL = 26 * Math.cos(omega)
+  const forearmR = 16 + 6 * (1 - Math.cos(omega))
+  const forearmL = 16 + 6 * (1 + Math.cos(omega))
   const shoulderR = { x: chest.x + 5 * s, y: chest.y + 2 * s }
   const shoulderL = { x: chest.x - 7 * s, y: chest.y + 4 * s }
-  const elbowR = polar(shoulderR, deg(pose.armR), 20 * s)
-  const wristR = polar(elbowR, deg(pose.armR + pose.forearmR), 18 * s)
-  const elbowL = polar(shoulderL, deg(pose.armL), 20 * s)
-  const wristL = polar(elbowL, deg(pose.armL + pose.forearmL), 18 * s)
+  const elbowR = polar(shoulderR, deg(armR), 20 * s)
+  const wristR = polar(elbowR, deg(armR + forearmR), 18 * s)
+  const elbowL = polar(shoulderL, deg(armL), 20 * s)
+  const wristL = polar(elbowL, deg(armL + forearmL), 18 * s)
 
   const hipR = { x: hip.x + 5 * s, y: hip.y + 1 * s }
   const hipL = { x: hip.x - 6 * s, y: hip.y + 2 * s }
-  const right = solveLeg(hipR, pose.thighR, pose.shinR, pose.footR, s)
-  const left = solveLeg(hipL, pose.thighL, pose.shinL, pose.footL, s)
-
-  const lowest = Math.max(left.ankle.y, left.toe.y, right.ankle.y, right.toe.y)
-  const dy = lowest - floorY
+  const rightFoot = walkFoot(cycle, hip.x, floorY, s)
+  const leftFoot = walkFoot((cycle + 0.5) % 1, hip.x, floorY, s)
+  const right = ikLeg(hipR, rightFoot.ankle, 28 * s, 26 * s)
+  const left = ikLeg(hipL, leftFoot.ankle, 28 * s, 26 * s)
 
   return {
-    hip: up(hip, dy),
-    chest: up(chest, dy),
-    neck: up(neck, dy),
-    head: up(head, dy),
-    nose: up(nose, dy),
-    shoulderL: up(shoulderL, dy),
-    elbowL: up(elbowL, dy),
-    wristL: up(wristL, dy),
-    shoulderR: up(shoulderR, dy),
-    elbowR: up(elbowR, dy),
-    wristR: up(wristR, dy),
-    hipL: up(hipL, dy),
-    kneeL: up(left.knee, dy),
-    ankleL: up(left.ankle, dy),
-    toeL: up(left.toe, dy),
-    hipR: up(hipR, dy),
-    kneeR: up(right.knee, dy),
-    ankleR: up(right.ankle, dy),
-    toeR: up(right.toe, dy),
+    hip,
+    chest,
+    neck,
+    head,
+    nose,
+    shoulderL,
+    elbowL,
+    wristL,
+    shoulderR,
+    elbowR,
+    wristR,
+    hipL,
+    kneeL: left.knee,
+    ankleL: left.ankle,
+    toeL: {
+      x: left.ankle.x + (leftFoot.toe.x - leftFoot.ankle.x),
+      y: left.ankle.y + (leftFoot.toe.y - leftFoot.ankle.y),
+    },
+    hipR,
+    kneeR: right.knee,
+    ankleR: right.ankle,
+    toeR: {
+      x: right.ankle.x + (rightFoot.toe.x - rightFoot.ankle.x),
+      y: right.ankle.y + (rightFoot.toe.y - rightFoot.ankle.y),
+    },
   }
 }
 
@@ -610,14 +534,14 @@ export function HeroEditorPreview() {
 export function MocapCapturePreview() {
   const reduced = usePrefersReducedMotion()
   const t = useRafTime(reduced)
-  const pose = sampleWalk(reduced ? 0.08 : t)
+  const now = reduced ? 0.08 : t
   const videoOrigin = { x: 152, y: 96 }
   const videoScale = 1.02
-  const videoRig = solveSide(pose, videoOrigin, videoScale)
+  const videoRig = solveSide(videoOrigin, videoScale, now)
   const videoFloor = videoOrigin.y + 54 * videoScale
-  const outRig = solveSide(pose, { x: 70, y: 86 }, 0.88)
+  const outRig = solveSide({ x: 70, y: 86 }, 0.88, now)
   const outFloor = 86 + 54 * 0.88
-  const cycle = ((t / WALK_PERIOD) % 1 + 1) % 1
+  const cycle = walkCycle(t)
   const frame = Math.floor((t * 24) % 240)
   const progress = 0.62 + Math.sin(t * 0.7) * 0.12
   const scroll = (t * 55) % 80
