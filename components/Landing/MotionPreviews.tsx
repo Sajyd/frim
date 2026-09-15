@@ -52,10 +52,6 @@ function lerp(a: number, b: number, t: number) {
   return a + (b - a) * t
 }
 
-function smoothstep(t: number) {
-  return t * t * (3 - 2 * t)
-}
-
 function polar(from: Pt, angleFromDown: number, len: number): Pt {
   return {
     x: from.x + Math.sin(angleFromDown) * len,
@@ -63,10 +59,23 @@ function polar(from: Pt, angleFromDown: number, len: number): Pt {
   }
 }
 
-function lerpPose(a: WalkPose, b: WalkPose, t: number): WalkPose {
-  const keys = Object.keys(a) as (keyof WalkPose)[]
-  const out = { ...a }
-  for (const key of keys) out[key] = lerp(a[key], b[key], t)
+function catmull(p0: number, p1: number, p2: number, p3: number, t: number) {
+  const t2 = t * t
+  const t3 = t2 * t
+  return 0.5 * (
+    2 * p1 +
+    (-p0 + p2) * t +
+    (2 * p0 - 5 * p1 + 4 * p2 - p3) * t2 +
+    (-p0 + 3 * p1 - 3 * p2 + p3) * t3
+  )
+}
+
+function catmullPose(p0: WalkPose, p1: WalkPose, p2: WalkPose, p3: WalkPose, t: number): WalkPose {
+  const keys = Object.keys(p1) as (keyof WalkPose)[]
+  const out = { ...p1 }
+  for (const key of keys) out[key] = catmull(p0[key], p1[key], p2[key], p3[key], t)
+  out.shinL = Math.max(0, Math.min(90, out.shinL))
+  out.shinR = Math.max(0, Math.min(90, out.shinR))
   return out
 }
 
@@ -152,26 +161,28 @@ const HIGH: WalkPose = {
 
 const WALK_KEYS: { at: number; pose: WalkPose }[] = [
   { at: 0, pose: CONTACT },
-  { at: 0.1, pose: DOWN },
-  { at: 0.2, pose: PASS },
-  { at: 0.34, pose: PASS },
-  { at: 0.44, pose: HIGH },
+  { at: 0.12, pose: DOWN },
+  { at: 0.25, pose: PASS },
+  { at: 0.38, pose: HIGH },
   { at: 0.5, pose: swapLR(CONTACT) },
-  { at: 0.6, pose: swapLR(DOWN) },
-  { at: 0.7, pose: swapLR(PASS) },
-  { at: 0.84, pose: swapLR(PASS) },
-  { at: 0.94, pose: swapLR(HIGH) },
+  { at: 0.62, pose: swapLR(DOWN) },
+  { at: 0.75, pose: swapLR(PASS) },
+  { at: 0.88, pose: swapLR(HIGH) },
   { at: 1, pose: CONTACT },
 ]
 
 function sampleWalk(time: number): WalkPose {
   const c = ((time / WALK_PERIOD) % 1 + 1) % 1
+  const keys = WALK_KEYS
+  const last = keys.length - 1
   let i = 0
-  while (i < WALK_KEYS.length - 1 && WALK_KEYS[i + 1].at < c) i += 1
-  const a = WALK_KEYS[i]
-  const b = WALK_KEYS[i + 1]
-  const u = smoothstep((c - a.at) / (b.at - a.at))
-  return lerpPose(a.pose, b.pose, u)
+  while (i < last - 1 && keys[i + 1].at <= c) i += 1
+  const a = keys[i]
+  const b = keys[i + 1]
+  const t = (c - a.at) / (b.at - a.at)
+  const p0 = keys[i === 0 ? last - 1 : i - 1].pose
+  const p3 = keys[i + 1 >= last ? 1 : i + 2].pose
+  return catmullPose(p0, a.pose, b.pose, p3, t)
 }
 
 function up(p: Pt, dy: number): Pt {
