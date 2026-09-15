@@ -8,6 +8,7 @@ import Image from 'next/image'
 import { startPlanCheckout, buyGpuCredits } from '@/lib/checkout'
 import Celebration, { type CelebrationKind } from '@/components/Celebration'
 import GpuUsageMeter from '@/components/GpuUsageMeter'
+import StudioUpgradeModal from '@/components/StudioUpgradeModal'
 
 interface Project {
   id: string
@@ -70,6 +71,8 @@ function DashboardContent() {
   const [celebration, setCelebration] = useState<CelebrationKind>(null)
   const [celebrationCredits, setCelebrationCredits] = useState(0)
   const [upgradingStudio, setUpgradingStudio] = useState(false)
+  const [showStudioModal, setShowStudioModal] = useState(false)
+  const [studioError, setStudioError] = useState<string | null>(null)
   const [buyingCredits, setBuyingCredits] = useState(false)
   const [creditQty, setCreditQty] = useState(5)
 
@@ -198,19 +201,29 @@ function DashboardContent() {
     }
   }
 
-  const handleUpgradeToStudio = async () => {
+  const requestStudioUpgrade = () => {
+    setStudioError(null)
+    setShowStudioModal(true)
+  }
+
+  const confirmStudioUpgrade = async () => {
     setUpgradingStudio(true)
+    setStudioError(null)
     try {
       const result = await startPlanCheckout('studio', '/dashboard')
-      if ('error' in result) throw new Error(result.error)
+      if ('error' in result) {
+        setStudioError(result.error)
+        return
+      }
       if ('upgraded' in result && result.upgraded) {
-        setCelebration('studio')
+        setShowStudioModal(false)
         setShowSubscriptionModal(false)
+        setCelebration('studio')
         await fetchSubscription()
       }
     } catch (error) {
       console.error('Studio upgrade error:', error)
-      alert('Failed to upgrade. Please try again.')
+      setStudioError(error instanceof Error ? error.message : 'Failed to upgrade. Please try again.')
     } finally {
       setUpgradingStudio(false)
     }
@@ -268,6 +281,18 @@ function DashboardContent() {
         credits={celebrationCredits}
         onClose={() => setCelebration(null)}
       />
+      <StudioUpgradeModal
+        open={showStudioModal}
+        onClose={() => {
+          if (upgradingStudio) return
+          setShowStudioModal(false)
+          setStudioError(null)
+        }}
+        onConfirm={confirmStudioUpgrade}
+        loading={upgradingStudio}
+        error={studioError}
+        currentPlan={subscription?.plan}
+      />
       {/* Success Toast */}
       {showSuccessToast && (
         <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-frim-500/10 border border-frim-500/30 text-frim-400 px-6 py-3 rounded-xl z-50 animate-slide-down flex items-center gap-3">
@@ -319,11 +344,10 @@ function DashboardContent() {
             )}
             {subscription?.plan === 'pro' && (
               <button
-                onClick={handleUpgradeToStudio}
-                disabled={upgradingStudio}
-                className="hidden sm:flex items-center gap-2 text-sm text-frim-400 hover:text-frim-300 transition-colors disabled:opacity-50"
+                onClick={requestStudioUpgrade}
+                className="hidden sm:flex items-center gap-2 text-sm text-frim-400 hover:text-frim-300 transition-colors"
               >
-                {upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio'}
+                Upgrade to Studio
               </button>
             )}
             <button
@@ -678,11 +702,10 @@ function DashboardContent() {
 
             {subscription?.plan === 'pro' && (
               <button
-                onClick={handleUpgradeToStudio}
-                disabled={upgradingStudio}
-                className="w-full mb-3 btn-primary py-3 flex items-center justify-center gap-2 disabled:opacity-50"
+                onClick={requestStudioUpgrade}
+                className="w-full mb-3 btn-primary py-3 flex items-center justify-center gap-2"
               >
-                {upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio — $39/mo'}
+                Upgrade to Studio — $39/mo
               </button>
             )}
 

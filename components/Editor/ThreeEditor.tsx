@@ -3897,6 +3897,16 @@ export default function ThreeEditor({
     }
   }, [showToast])
 
+  const requestStudioUpgrade = useCallback(() => {
+    setShowUpgradeModal(false)
+    if (onUpgradeToStudio) {
+      void onUpgradeToStudio()
+      return
+    }
+    setUpgradeModalReason('gpu_capture')
+    setShowUpgradeModal(true)
+  }, [onUpgradeToStudio])
+
   const handleProcessCapture = useCallback(async (opts?: { file?: File; engine?: 'fast' | 'studio' }) => {
     const file = opts?.file ?? videoFile
     const engine = opts?.engine ?? captureEngine
@@ -3915,8 +3925,7 @@ export default function ThreeEditor({
 
     if (engine === 'studio') {
       if (!canUseGpuCapture) {
-        setUpgradeModalReason('gpu_capture')
-        setShowUpgradeModal(true)
+        requestStudioUpgrade()
         return
       }
       setVideoAnalyzing(true)
@@ -3936,8 +3945,7 @@ export default function ThreeEditor({
         const data = await res.json().catch(() => ({}))
         if (res.status === 403) {
           setVideoAnalyzing(false)
-          setUpgradeModalReason('gpu_capture')
-          setShowUpgradeModal(true)
+          requestStudioUpgrade()
           return
         }
         if (res.status === 429) {
@@ -4094,7 +4102,7 @@ export default function ThreeEditor({
       return
     }
     await processVideoCapture(undefined, file)
-  }, [captureEngine, canUseGpuCapture, processVideoCapture, showToast, videoFile])
+  }, [captureEngine, canUseGpuCapture, processVideoCapture, requestStudioUpgrade, showToast, videoFile])
 
   // TEMPORARY (testing): live MediaPipe skeleton overlaid on the source video so testers
   // can compare the detected pose against the captured animation. Remove later.
@@ -5106,11 +5114,14 @@ export default function ThreeEditor({
               <ul className="space-y-2">
                 {(upgradeModalReason === 'gpu_capture'
                   ? [
-                      'Everything in Pro',
-                      'Studio 3D GPU motion capture',
-                      'True 3D rotations on your GLB',
-                      '40 GPU captures per month',
-                      'Then $1 per extra capture',
+                      'Everything in Pro, including Fast in-browser capture',
+                      'Studio 3D GPU motion capture on your GLB',
+                      'True 3D joint rotations, not a 2D overlay',
+                      '40 GPU captures included every month',
+                      '$1 per extra capture after that',
+                      'Unlimited projects and animations',
+                      'Priority cloud saves',
+                      'Priority support',
                     ]
                   : [
                       'Unlimited animations per project',
@@ -5130,9 +5141,8 @@ export default function ThreeEditor({
             <div className="flex flex-col gap-3">
               <button
                 onClick={async () => {
-                  if (upgradeModalReason === 'gpu_capture' && onUpgradeToStudio) {
-                    await onUpgradeToStudio()
-                    setShowUpgradeModal(false)
+                  if (upgradeModalReason === 'gpu_capture') {
+                    requestStudioUpgrade()
                     return
                   }
                   window.location.href = '/pricing'
@@ -5242,8 +5252,7 @@ export default function ThreeEditor({
                     type="button"
                     onClick={() => {
                       if (!canUseGpuCapture) {
-                        setUpgradeModalReason('gpu_capture')
-                        setShowUpgradeModal(true)
+                        requestStudioUpgrade()
                         return
                       }
                       setCaptureEngine('studio')

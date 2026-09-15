@@ -9,6 +9,7 @@ import { ChevronLeft, Cloud, Save, Check, X } from 'lucide-react'
 import { startPlanCheckout, buyGpuCredits } from '@/lib/checkout'
 import Celebration, { type CelebrationKind } from '@/components/Celebration'
 import GpuUsageMeter from '@/components/GpuUsageMeter'
+import StudioUpgradeModal from '@/components/StudioUpgradeModal'
 
 // Dynamically import the editor with no SSR
 const ThreeEditor = dynamic(() => import('@/components/Editor/ThreeEditor'), {
@@ -74,6 +75,8 @@ export default function EditorPage() {
   const [celebration, setCelebration] = useState<CelebrationKind>(null)
   const [celebrationCredits, setCelebrationCredits] = useState(0)
   const [upgradingStudio, setUpgradingStudio] = useState(false)
+  const [showStudioModal, setShowStudioModal] = useState(false)
+  const [studioError, setStudioError] = useState<string | null>(null)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
@@ -146,18 +149,28 @@ export default function EditorPage() {
     }
   }
 
-  const handleUpgradeToStudio = async () => {
+  const requestStudioUpgrade = () => {
+    setStudioError(null)
+    setShowStudioModal(true)
+  }
+
+  const confirmStudioUpgrade = async () => {
     setUpgradingStudio(true)
+    setStudioError(null)
     try {
       const result = await startPlanCheckout('studio', `/editor/${projectId}`)
-      if ('error' in result) throw new Error(result.error)
+      if ('error' in result) {
+        setStudioError(result.error)
+        return
+      }
       if ('upgraded' in result && result.upgraded) {
+        setShowStudioModal(false)
         setCelebration('studio')
         await fetchSubscription()
       }
     } catch (error) {
       console.error('Studio upgrade error:', error)
-      alert('Failed to upgrade. Please try again.')
+      setStudioError(error instanceof Error ? error.message : 'Failed to upgrade. Please try again.')
     } finally {
       setUpgradingStudio(false)
     }
@@ -342,11 +355,10 @@ export default function EditorPage() {
           )}
           {isPro && (
             <button
-              onClick={handleUpgradeToStudio}
-              disabled={upgradingStudio}
-              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors disabled:opacity-50"
+              onClick={requestStudioUpgrade}
+              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors"
             >
-              {upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio'}
+              Upgrade to Studio
             </button>
           )}
           {!isPaid && (
@@ -415,7 +427,7 @@ export default function EditorPage() {
           gpuCapturesUsed={subscription?.usage?.gpuCapturesUsed ?? 0}
           gpuCapturesBonus={subscription?.usage?.gpuCapturesBonus ?? 0}
           gpuCapturesIncluded={subscription?.usage?.gpuCapturesIncluded ?? 40}
-          onUpgradeToStudio={handleUpgradeToStudio}
+          onUpgradeToStudio={requestStudioUpgrade}
           onBuyGpuCredits={handleBuyGpuCredits}
           upgradingStudio={upgradingStudio}
         />
@@ -425,6 +437,18 @@ export default function EditorPage() {
         kind={celebration}
         credits={celebrationCredits}
         onClose={() => setCelebration(null)}
+      />
+      <StudioUpgradeModal
+        open={showStudioModal}
+        onClose={() => {
+          if (upgradingStudio) return
+          setShowStudioModal(false)
+          setStudioError(null)
+        }}
+        onConfirm={confirmStudioUpgrade}
+        loading={upgradingStudio}
+        error={studioError}
+        currentPlan={subscription?.plan}
       />
       <div id="toast-container" className="fixed bottom-4 right-4 flex flex-col-reverse gap-3 z-[1001]" />
 

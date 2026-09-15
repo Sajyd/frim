@@ -6,6 +6,7 @@ import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
 import { startPlanCheckout } from '@/lib/checkout'
 import Celebration, { type CelebrationKind } from '@/components/Celebration'
+import StudioUpgradeModal from '@/components/StudioUpgradeModal'
 
 const plans = [
   {
@@ -96,6 +97,8 @@ function PricingContent() {
   const [currentPlan, setCurrentPlan] = useState<string>('free')
   const [showCanceled, setShowCanceled] = useState(false)
   const [celebration, setCelebration] = useState<CelebrationKind>(null)
+  const [showStudioModal, setShowStudioModal] = useState(false)
+  const [studioError, setStudioError] = useState<string | null>(null)
 
   useEffect(() => {
     if (searchParams.get('canceled') === 'true') {
@@ -133,10 +136,16 @@ function PricingContent() {
       return
     }
 
+    if (planId === 'studio') {
+      setStudioError(null)
+      setShowStudioModal(true)
+      return
+    }
+
     setLoading(planId)
 
     try {
-      const result = await startPlanCheckout(planId === 'studio' ? 'studio' : 'pro', '/dashboard')
+      const result = await startPlanCheckout('pro', '/dashboard')
       if ('error' in result) throw new Error(result.error)
       if ('upgraded' in result && result.upgraded) {
         setCurrentPlan(result.planId)
@@ -145,6 +154,32 @@ function PricingContent() {
     } catch (error) {
       console.error('Upgrade error:', error)
       alert('Failed to start checkout. Please try again.')
+    } finally {
+      setLoading(null)
+    }
+  }
+
+  const confirmStudioUpgrade = async () => {
+    if (!session) {
+      router.push('/auth/signin?callbackUrl=/pricing')
+      return
+    }
+    setLoading('studio')
+    setStudioError(null)
+    try {
+      const result = await startPlanCheckout('studio', '/dashboard')
+      if ('error' in result) {
+        setStudioError(result.error)
+        return
+      }
+      if ('upgraded' in result && result.upgraded) {
+        setShowStudioModal(false)
+        setCurrentPlan(result.planId)
+        setCelebration(result.planId)
+      }
+    } catch (error) {
+      console.error('Studio upgrade error:', error)
+      setStudioError(error instanceof Error ? error.message : 'Failed to start checkout. Please try again.')
     } finally {
       setLoading(null)
     }
@@ -226,6 +261,18 @@ function PricingContent() {
         setCelebration(null)
         router.push('/dashboard')
       }} />
+      <StudioUpgradeModal
+        open={showStudioModal}
+        onClose={() => {
+          if (loading === 'studio') return
+          setShowStudioModal(false)
+          setStudioError(null)
+        }}
+        onConfirm={confirmStudioUpgrade}
+        loading={loading === 'studio'}
+        error={studioError}
+        currentPlan={currentPlan}
+      />
 
       {/* Header */}
       <section className="relative pt-20 pb-16 px-6">

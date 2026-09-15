@@ -1,9 +1,40 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { getServerSession } from 'next-auth'
+import Stripe from 'stripe'
 import { authOptions } from '@/lib/auth'
-import { stripe, PLANS, safeReturnPath, type PaidPlanType } from '@/lib/stripe'
+import { stripe, PLANS, safeReturnPath, stripeErrorMessage, type PaidPlanType } from '@/lib/stripe'
 import prisma from '@/lib/prisma'
 import { publicAppUrl } from '@/lib/app-url'
+
+function isLiveSub(status: Stripe.Subscription.Status) {
+  return status === 'active' || status === 'trialing' || status === 'past_due'
+}
+
+async function findLiveSubscription(customerId: string, knownId?: string | null) {
+  if (knownId) {
+    try {
+      const sub = await stripe.subscriptions.retrieve(knownId)
+      if (isLiveSub(sub.status)) return sub
+    } catch (err) {
+      console.error('Stored subscription lookup failed:', err)
+    }
+  }
+
+  const listed = await stripe.subscriptions.list({
+    customer: customerId,
+    status: 'all',
+    limit: 10,
+  })
+  return listed.data.find(sub => isLiveSub(sub.status)) ?? null
+}
+
+async function assertRecurringPrice(priceId: string) {
+  const price = await stripe.prices.retrieve(priceId)
+  if (price.type !== 'recurring' || !price.recurring) {
+    throw new Error(`Stripe price ${priceId} is not a recurring subscription price`)
+  }
+  return price
+}
 
 export async function POST(request: NextRequest) {
   try {
@@ -24,6 +55,8 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       )
     }
+
+    await assertRecurringPrice(target.priceId)
 
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },
@@ -61,38 +94,41 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    if (user.stripeSubscriptionId) {
-      try {
-        const subscription = await stripe.subscriptions.retrieve(user.stripeSubscriptionId)
-        if (subscription.status === 'active' || subscription.status === 'trialing') {
-          const itemId = subscription.items.data[0]?.id
-          const currentPrice = subscription.items.data[0]?.price?.id
-          if (itemId && currentPrice !== target.priceId) {
-            await stripe.subscriptions.update(user.stripeSubscriptionId, {
-              items: [{ id: itemId, price: target.priceId }],
-              proration_behavior: 'create_prorations',
-              metadata: { userId: user.id, planId },
-            })
-          }
-          await prisma.user.update({
-            where: { id: user.id },
-            data: {
-              plan: planId,
-              stripePriceId: target.priceId,
-              ...(planId === 'studio' && user.plan !== 'studio' ? { gpuCapturesUsed: 0 } : {}),
-            },
-          })
-          return NextResponse.json({ upgraded: true, planId })
-        }
-      } catch (err) {
-        console.error('Subscription update failed, falling back to checkout:', err)
+    const liveSub = await findLiveSubscription(customerId, user.stripeSubscriptionId)
+
+    if (liveSub) {
+      const itemId = liveSub.items.data[0]?.id
+      const currentPrice = liveSub.items.data[0]?.price?.id
+      if (!itemId) {
+        return NextResponse.json(
+          { error: 'Your subscription has no billable item. Contact support@frim.app' },
+          { status: 500 }
+        )
       }
+
+      if (currentPrice !== target.priceId) {
+        await stripe.subscriptions.update(liveSub.id, {
+          items: [{ id: itemId, price: target.priceId }],
+          proration_behavior: 'create_prorations',
+          metadata: { userId: user.id, planId },
+        })
+      }
+
+      await prisma.user.update({
+        where: { id: user.id },
+        data: {
+          plan: planId,
+          stripeSubscriptionId: liveSub.id,
+          stripePriceId: target.priceId,
+          ...(planId === 'studio' && user.plan !== 'studio' ? { gpuCapturesUsed: 0 } : {}),
+        },
+      })
+      return NextResponse.json({ upgraded: true, planId })
     }
 
     const checkoutSession = await stripe.checkout.sessions.create({
       customer: customerId,
       mode: 'subscription',
-      payment_method_types: ['card'],
       line_items: [
         {
           price: target.priceId,
@@ -102,6 +138,7 @@ export async function POST(request: NextRequest) {
       allow_promotion_codes: true,
       success_url: successUrl,
       cancel_url: cancelUrl,
+      client_reference_id: user.id,
       metadata: {
         userId: user.id,
         planId,
@@ -118,7 +155,7 @@ export async function POST(request: NextRequest) {
   } catch (error) {
     console.error('Checkout error:', error)
     return NextResponse.json(
-      { error: 'Failed to create checkout session' },
+      { error: stripeErrorMessage(error, 'Failed to create checkout session') },
       { status: 500 }
     )
   }

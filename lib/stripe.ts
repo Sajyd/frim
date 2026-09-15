@@ -84,6 +84,28 @@ export const PLANS = {
 export type PlanType = keyof typeof PLANS
 export type PaidPlanType = 'pro' | 'studio'
 
+export const STUDIO_UPGRADE_BENEFITS = [
+  'Everything in Pro, including Fast in-browser capture',
+  'Studio 3D GPU motion capture on your GLB',
+  'True 3D joint rotations, not a 2D overlay',
+  '40 GPU captures included every month',
+  '$1 per extra capture after that',
+  'Unlimited projects and animations',
+  'Priority cloud saves',
+  'Priority support',
+] as const
+
+export function stripeErrorMessage(error: unknown, fallback = 'Payment failed') {
+  if (!error || typeof error !== 'object') return fallback
+  const err = error as { message?: string; raw?: { message?: string }; code?: string }
+  const message = err.raw?.message || err.message
+  if (typeof message === 'string' && /no such price/i.test(message)) {
+    return 'Studio billing is not configured. Set STRIPE_STUDIO_PRICE_ID to a recurring Stripe price.'
+  }
+  if (typeof message === 'string' && message.trim()) return message
+  return fallback
+}
+
 export function isPaidPlan(plan: string | null | undefined): boolean {
   return plan === 'pro' || plan === 'studio'
 }
