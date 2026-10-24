@@ -268,9 +268,13 @@ export default function EditorPage() {
     if (!container) return
 
     const toast = document.createElement('div')
-    toast.className = `fixed bottom-4 right-4 px-4 py-3 rounded-lg shadow-lg z-50 flex items-center gap-2 animate-slide-up ${
-      type === 'success' ? 'bg-green-500/90' : type === 'error' ? 'bg-red-500/90' : 'bg-blue-500/90'
-    } text-white`
+    toast.className = `px-4 py-3 rounded-xl shadow-lg border flex items-center gap-2 animate-slide-up pointer-events-auto ${
+      type === 'success'
+        ? 'bg-[#052e16] border-[#22c55e]/40 text-[#bbf7d0]'
+        : type === 'error'
+        ? 'bg-[#450a0a] border-red-500/40 text-red-100'
+        : 'bg-[#151821] border-white/10 text-[#e4e4e7]'
+    }`
     
     const iconSpan = document.createElement('span')
     iconSpan.className = 'w-4 h-4'
@@ -294,10 +298,10 @@ export default function EditorPage() {
 
   if (status === 'loading' || loading) {
     return (
-      <div className="min-h-screen bg-[#0f1117] flex items-center justify-center">
+      <div className="min-h-screen bg-[#0c0e14] flex items-center justify-center">
         <div className="text-center">
           <div className="w-12 h-12 border-4 border-[#22c55e]/20 border-t-[#22c55e] rounded-full animate-spin mx-auto mb-4" />
-          <p className="text-[#71717a]">Loading project...</p>
+          <p className="text-[#a1a1aa]">Opening project…</p>
         </div>
       </div>
     )
@@ -311,16 +315,17 @@ export default function EditorPage() {
     : (subscription?.limits?.animationsPerProject || 2)
 
   return (
-    <div className="min-h-screen bg-[#0f1117] text-[#f4f4f5]">
+    <div className="min-h-screen bg-[#0c0e14] text-[#f4f4f5]">
       {/* Top Bar */}
-      <div className="fixed top-0 left-0 right-0 h-[52px] bg-[#151821] border-b border-[#252b3d] z-[1000] flex items-center justify-between px-4">
-        <div className="flex items-center gap-4">
+      <div className="fixed top-0 left-0 right-0 h-[52px] bg-[#0c0e14]/90 backdrop-blur-xl border-b border-white/[0.06] z-[1000] flex items-center justify-between gap-3 px-3 sm:px-4">
+        <div className="flex items-center gap-3 min-w-0">
           <Link
             href="/dashboard"
-            className="flex items-center gap-2 text-[#a1a1aa] hover:text-[#f4f4f5] transition-colors"
+            className="flex items-center gap-1 text-[#a1a1aa] hover:text-[#f4f4f5] transition-colors shrink-0"
+            aria-label="Back to dashboard"
           >
             <ChevronLeft className="w-5 h-5" />
-            <span className="text-sm">Dashboard</span>
+            <span className="text-sm hidden sm:inline">Dashboard</span>
           </Link>
           <div className="w-px h-6 bg-[#252b3d]" />
           <div className="flex items-center gap-2">
@@ -337,10 +342,10 @@ export default function EditorPage() {
           </div>
         </div>
 
-        <div className="flex-1 flex justify-center items-center gap-3">
-          <span className="text-sm font-medium">{project?.name || 'Untitled Project'}</span>
+        <div className="flex-1 flex justify-center items-center gap-2 min-w-0">
+          <span className="text-sm font-medium truncate max-w-[40vw]">{project?.name || 'Untitled Project'}</span>
           {hasUnsavedChanges && (
-            <span className="text-xs text-yellow-500">• Unsaved</span>
+            <span className="text-[11px] text-amber-300 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full shrink-0">Unsaved</span>
           )}
           {isStudio && (
             <div className="hidden md:block w-40">
@@ -356,7 +361,7 @@ export default function EditorPage() {
           {isPro && (
             <button
               onClick={requestStudioUpgrade}
-              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors"
+              className="hidden md:inline text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors shrink-0"
             >
               Upgrade to Studio
             </button>
@@ -364,7 +369,7 @@ export default function EditorPage() {
           {!isPaid && (
             <Link
               href="/pricing"
-              className="text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors"
+              className="hidden sm:inline text-xs bg-frim-500/10 text-frim-400 px-2 py-1 rounded hover:bg-frim-500/20 transition-colors shrink-0"
             >
               Free Plan
             </Link>
@@ -373,18 +378,19 @@ export default function EditorPage() {
 
         <div className="flex items-center gap-3">
           {lastSaved && (
-            <span className="text-xs text-[#71717a] flex items-center gap-1">
+            <span className="hidden lg:flex text-xs text-[#71717a] items-center gap-1 shrink-0">
               <Cloud className="w-3.5 h-3.5" />
               Saved {lastSaved.toLocaleTimeString()}
             </span>
           )}
           <button
             onClick={() => pendingDataRef.current && saveProject(pendingDataRef.current)}
-            disabled={saving}
-            className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed ${
+            disabled={saving || !hasUnsavedChanges}
+            title="Save (⌘S)"
+            className={`flex items-center gap-2 px-3 sm:px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50 disabled:cursor-not-allowed shrink-0 ${
               hasUnsavedChanges 
                 ? 'bg-[#22c55e] text-[#09090b] hover:bg-[#4ade80]' 
-                : 'bg-[#252b3d] text-[#a1a1aa] hover:bg-[#3f3f46]'
+                : 'bg-[#252b3d] text-[#a1a1aa]'
             }`}
           >
             {saving ? (
@@ -408,7 +414,7 @@ export default function EditorPage() {
       </div>
 
       {/* Editor */}
-      <div className="pt-[52px]">
+      <div id="main" className="pt-[52px]">
         <ThreeEditor 
           projectName={project?.name || 'Untitled'} 
           onChange={handleEditorChange}
@@ -450,7 +456,7 @@ export default function EditorPage() {
         error={studioError}
         currentPlan={subscription?.plan}
       />
-      <div id="toast-container" className="fixed bottom-4 right-4 flex flex-col-reverse gap-3 z-[1001]" />
+      <div id="toast-container" className="fixed bottom-[176px] right-4 flex flex-col gap-2 z-[1001] pointer-events-none max-w-[min(100%-2rem,24rem)]" />
 
       <style jsx global>{`
         @keyframes slide-up {

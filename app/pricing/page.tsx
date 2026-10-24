@@ -7,6 +7,7 @@ import Link from 'next/link'
 import { startPlanCheckout } from '@/lib/checkout'
 import Celebration, { type CelebrationKind } from '@/components/Celebration'
 import StudioUpgradeModal from '@/components/StudioUpgradeModal'
+import { MarketingNav, SiteFooter } from '@/components/chrome'
 
 const plans = [
   {
@@ -99,6 +100,7 @@ function PricingContent() {
   const [celebration, setCelebration] = useState<CelebrationKind>(null)
   const [showStudioModal, setShowStudioModal] = useState(false)
   const [studioError, setStudioError] = useState<string | null>(null)
+  const [faqOpen, setFaqOpen] = useState(0)
 
   useEffect(() => {
     if (searchParams.get('canceled') === 'true') {
@@ -132,7 +134,7 @@ function PricingContent() {
     }
 
     if (planId === 'free') {
-      router.push('/dashboard')
+      router.push(session ? '/dashboard' : '/auth/register')
       return
     }
 
@@ -217,44 +219,30 @@ function PricingContent() {
         <div className="glow-effect w-[400px] h-[400px] bg-purple-500 bottom-1/4 right-1/4 opacity-20" style={{ animationDelay: '-7s' }} />
       </div>
 
-      {/* Navigation */}
-      <nav className="sticky top-0 z-50 glass border-b border-dark-800">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/" className="flex items-center gap-3">
-            <svg className="w-9 h-9 text-frim-400" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
-              <circle cx="16" cy="10" r="3" fill="currentColor"/>
-              <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
-            </svg>
-            <span className="font-display text-2xl font-semibold">frim</span>
+      <MarketingNav>
+        {session ? (
+          <Link href="/dashboard" className="btn-secondary text-sm py-2 px-4">
+            Dashboard
           </Link>
-          <div className="flex items-center gap-4">
-            {session ? (
-              <Link href="/dashboard" className="btn-secondary text-sm py-2">
-                Dashboard
-              </Link>
-            ) : (
-              <>
-                <Link href="/auth/signin" className="btn-secondary text-sm py-2">
-                  Sign In
-                </Link>
-                <Link href="/auth/register" className="btn-primary text-sm py-2">
-                  Get Started
-                </Link>
-              </>
-            )}
-          </div>
-        </div>
-      </nav>
+        ) : (
+          <>
+            <Link href="/auth/signin" className="btn-secondary text-sm py-2 px-4">
+              Sign in
+            </Link>
+            <Link href="/auth/register" className="btn-primary text-sm py-2 px-4">
+              Get started
+            </Link>
+          </>
+        )}
+      </MarketingNav>
 
       {/* Canceled Notice */}
       {showCanceled && (
-        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-yellow-500/10 border border-yellow-500/30 text-yellow-200 px-6 py-3 rounded-xl z-50 animate-slide-down">
-          Checkout was canceled. No charges were made.
+        <div className="fixed top-20 left-1/2 -translate-x-1/2 bg-yellow-500/10 border border-yellow-500/30 text-yellow-100 px-4 py-3 rounded-xl z-50 flex items-center gap-3 shadow-lg">
+          <span className="text-sm">Checkout was canceled. No charges were made.</span>
+          <button type="button" onClick={() => setShowCanceled(false)} className="text-yellow-200/80 hover:text-white text-sm px-2" aria-label="Dismiss">
+            Close
+          </button>
         </div>
       )}
       <Celebration kind={celebration} onClose={() => {
@@ -275,7 +263,7 @@ function PricingContent() {
       />
 
       {/* Header */}
-      <section className="relative pt-20 pb-16 px-6">
+      <section id="main" className="relative pt-28 pb-16 px-6">
         <div className="max-w-4xl mx-auto text-center">
           <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/20 px-4 py-2 rounded-full text-sm text-frim-400 mb-6">
             <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
@@ -284,7 +272,7 @@ function PricingContent() {
           <h1 className="font-display text-4xl md:text-5xl font-bold mb-6">
             Choose your <span className="gradient-text">plan</span>
           </h1>
-          <p className="text-lg text-dark-400 max-w-2xl mx-auto">
+          <p className="text-lg text-dark-300 max-w-2xl mx-auto">
             Start free, upgrade to Pro for Fast capture, or Studio for GPU 3D. Extra Studio captures are $1 each.
           </p>
         </div>
@@ -293,16 +281,16 @@ function PricingContent() {
       {/* Pricing Cards */}
       <section className="relative pb-24 px-6">
         <div className="max-w-6xl mx-auto">
-          <div className="grid md:grid-cols-3 gap-6">
+          <div className="grid md:grid-cols-3 gap-6 items-stretch pt-4">
             {plans.map((plan) => (
               <div
                 key={plan.id}
-                className={`relative bg-dark-900 border rounded-2xl p-8 ${
+                className={`relative bg-dark-900 border rounded-2xl p-8 flex flex-col ${
                   plan.popular
-                    ? 'border-frim-500 shadow-xl shadow-frim-500/10'
+                    ? 'border-frim-500 shadow-xl shadow-frim-500/10 md:-translate-y-2'
                     : plan.id === 'studio'
                     ? 'border-emerald-500/50 shadow-xl shadow-emerald-500/10'
-                    : 'border-dark-800'
+                    : 'border-white/[0.06]'
                 }`}
               >
                 {plan.popular && (
@@ -322,7 +310,7 @@ function PricingContent() {
 
                 <div className="mb-6">
                   <h3 className="font-display text-2xl font-bold mb-2">{plan.name}</h3>
-                  <p className="text-dark-500">{plan.description}</p>
+                  <p className="text-dark-300 min-h-[48px]">{plan.description}</p>
                 </div>
 
                 <div className="mb-8">
@@ -332,7 +320,7 @@ function PricingContent() {
                   <span className="text-dark-500">{plan.period}</span>
                 </div>
 
-                {currentPlan === plan.id ? (
+                {session && currentPlan === plan.id ? (
                   <div className="mb-8">
                     <div className="bg-frim-500/10 border border-frim-500/30 text-frim-400 px-4 py-3 rounded-xl text-center font-medium">
                       ✓ Current Plan
@@ -376,25 +364,25 @@ function PricingContent() {
                   </button>
                 )}
 
-                <div className="space-y-4">
+                <div className="space-y-3.5">
                   {plan.features.map((feature, i) => (
-                    <div key={i} className="flex items-center gap-3">
+                    <div key={i} className="flex items-start gap-3">
                       <div className="w-5 h-5 rounded-full bg-frim-500/20 flex items-center justify-center shrink-0">
                         <svg className="w-3 h-3 text-frim-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" />
                         </svg>
                       </div>
-                      <span className="text-dark-300">{feature}</span>
+                      <span className="text-dark-200 text-sm leading-snug">{feature}</span>
                     </div>
                   ))}
                   {plan.notIncluded.map((feature, i) => (
-                    <div key={i} className="flex items-center gap-3 opacity-50">
+                    <div key={i} className="flex items-start gap-3 opacity-60">
                       <div className="w-5 h-5 rounded-full bg-dark-800 flex items-center justify-center shrink-0">
                         <svg className="w-3 h-3 text-dark-600" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
                         </svg>
                       </div>
-                      <span className="text-dark-600">{feature}</span>
+                      <span className="text-dark-500 text-sm leading-snug">{feature}</span>
                     </div>
                   ))}
                 </div>
@@ -410,7 +398,7 @@ function PricingContent() {
           <h2 className="font-display text-3xl font-bold text-center mb-12">
             Frequently Asked Questions
           </h2>
-          <div className="space-y-6">
+          <div className="space-y-3">
             {[
               {
                 q: 'What is Studio 3D capture?',
@@ -418,57 +406,42 @@ function PricingContent() {
               },
               {
                 q: 'Can I cancel anytime?',
-                a: 'Yes! You can cancel your subscription at any time. You\'ll continue to have access to Pro features until the end of your billing period.',
+                a: 'Yes. Cancel whenever you like and keep the paid features until the end of the current billing period.',
               },
               {
                 q: 'What happens to my projects if I downgrade?',
-                a: 'Your projects are safe! If you exceed the free plan limit after downgrading, you can still access all your projects but won\'t be able to create new ones until you\'re within the limit.',
+                a: 'Projects stay saved. If you are over the free limit, you can still open them. You just cannot create new ones until you are back within the limit.',
               },
               {
                 q: 'Is there a free trial?',
-                a: 'The free plan lets you explore all basic features with up to 3 projects. This is essentially a forever-free tier, not a limited trial.',
+                a: 'The free plan is a permanent tier: up to 3 projects and the basic editor. It is not a timed trial.',
               },
               {
                 q: 'How secure is my payment?',
-                a: 'We use Stripe for all payments. Your card details never touch our servers and are processed securely by Stripe, trusted by millions of businesses worldwide.',
+                a: 'Stripe processes every payment. Card details never reach Frim servers.',
               },
-            ].map((faq, i) => (
-              <div key={i} className="bg-dark-900 border border-dark-800 rounded-xl p-6">
-                <h3 className="font-semibold text-lg mb-2">{faq.q}</h3>
-                <p className="text-dark-400">{faq.a}</p>
-              </div>
-            ))}
+            ].map((faq, i) => {
+              const open = faqOpen === i
+              return (
+                <div key={faq.q} className="bg-dark-900 border border-white/[0.06] rounded-xl">
+                  <button
+                    type="button"
+                    aria-expanded={open}
+                    onClick={() => setFaqOpen(open ? -1 : i)}
+                    className="w-full text-left px-6 py-5 flex items-center justify-between gap-4"
+                  >
+                    <span className="font-semibold">{faq.q}</span>
+                    <span className="text-dark-400 text-xl leading-none" aria-hidden="true">{open ? '−' : '+'}</span>
+                  </button>
+                  {open && <p className="px-6 pb-5 text-dark-300 leading-relaxed">{faq.a}</p>}
+                </div>
+              )
+            })}
           </div>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-dark-800 py-10 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col items-center gap-4">
-          <div className="flex items-center gap-2 text-dark-400">
-            <svg className="w-7 h-7" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
-              <circle cx="16" cy="10" r="3" fill="currentColor"/>
-              <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
-            </svg>
-            <span className="font-display text-lg font-semibold">frim</span>
-          </div>
-          <p className="text-sm text-dark-600">© 2026 Frim. Web-based GLB animation editor.</p>
-          <a 
-            href="mailto:support@frim.app"
-            className="text-sm text-dark-500 hover:text-frim-400 transition-colors flex items-center gap-2"
-          >
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-            </svg>
-            Need help? Contact support@frim.app
-          </a>
-        </div>
-      </footer>
+      <SiteFooter />
 
       <style jsx>{`
         @keyframes slide-down {

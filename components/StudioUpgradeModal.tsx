@@ -1,5 +1,7 @@
 'use client'
 
+import { useEffect } from 'react'
+
 const STUDIO_PRICE = 39
 
 const STUDIO_UPGRADE_BENEFITS = [
@@ -30,17 +32,29 @@ export default function StudioUpgradeModal({
   error = null,
   currentPlan,
 }: StudioUpgradeModalProps) {
+  useEffect(() => {
+    if (!open) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape' && !loading) onClose()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [open, loading, onClose])
+
   if (!open) return null
 
   const fromPro = currentPlan === 'pro'
 
   return (
-    <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2200] p-4">
-      <div className="bg-dark-900 border border-dark-800 rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
+    <div
+      className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2200] p-4"
+      onMouseDown={(event) => { if (event.target === event.currentTarget && !loading) onClose() }}
+    >
+      <div role="dialog" aria-modal="true" aria-labelledby="studio-upgrade-title" className="modal-pop bg-dark-900 border border-white/10 rounded-2xl w-full max-w-lg p-6 max-h-[90vh] overflow-y-auto">
         <div className="flex items-start justify-between gap-4 mb-4">
           <div>
             <p className="text-xs font-semibold tracking-wider text-frim-400 mb-1">STUDIO</p>
-            <h2 className="font-display text-2xl font-semibold">Upgrade to Studio</h2>
+            <h2 id="studio-upgrade-title" className="font-display text-2xl font-semibold">Upgrade to Studio</h2>
           </div>
           <button
             onClick={onClose}

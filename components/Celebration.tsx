@@ -12,6 +12,17 @@ interface CelebrationProps {
 
 export default function Celebration({ kind, credits = 0, onClose }: CelebrationProps) {
   const canvasRef = useRef<HTMLCanvasElement>(null)
+  const onCloseRef = useRef(onClose)
+  onCloseRef.current = onClose
+
+  useEffect(() => {
+    if (!kind) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') onCloseRef.current()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [kind])
 
   useEffect(() => {
     if (!kind) return
@@ -61,13 +72,13 @@ export default function Celebration({ kind, credits = 0, onClose }: CelebrationP
     }
     raf = requestAnimationFrame(draw)
 
-    const closeTimer = window.setTimeout(onClose, 8000)
+    const closeTimer = window.setTimeout(() => onCloseRef.current(), 8000)
     return () => {
       cancelAnimationFrame(raf)
       window.removeEventListener('resize', onResize)
       window.clearTimeout(closeTimer)
     }
-  }, [kind, onClose])
+  }, [kind])
 
   if (!kind) return null
 
@@ -84,11 +95,11 @@ export default function Celebration({ kind, credits = 0, onClose }: CelebrationP
     : 'Congrats — unlimited projects and Fast motion capture are yours.'
 
   return (
-    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4">
+    <div className="fixed inset-0 z-[4000] flex items-center justify-center p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) onClose() }}>
       <canvas ref={canvasRef} className="absolute inset-0 pointer-events-none" />
-      <div className="relative bg-[#151821]/95 border border-[#22c55e]/40 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl shadow-[#22c55e]/20">
+      <div role="dialog" aria-modal="true" aria-labelledby="celebration-title" className="modal-pop relative bg-[#151821]/95 border border-[#22c55e]/40 rounded-3xl p-8 max-w-md w-full text-center shadow-2xl shadow-[#22c55e]/20">
         <div className="text-5xl mb-4">🎉</div>
-        <h2 className="font-display text-2xl font-bold text-white mb-2">{title}</h2>
+        <h2 id="celebration-title" className="font-display text-2xl font-bold text-white mb-2">{title}</h2>
         <p className="text-[#a1a1aa] mb-6">{body}</p>
         <button
           onClick={onClose}

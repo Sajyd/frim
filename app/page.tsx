@@ -5,6 +5,7 @@ import { useSession } from 'next-auth/react'
 import { useRouter } from 'next/navigation'
 import { useEffect } from 'react'
 import { HeroEditorPreview, MocapCapturePreview } from '@/components/Landing/MotionPreviews'
+import { DISCORD_URL, DiscordIcon, MarketingNav, SiteFooter } from '@/components/chrome'
 
 export default function Home() {
   const { data: session, status } = useSession()
@@ -38,40 +39,29 @@ export default function Home() {
         <div className="glow-effect w-[400px] h-[400px] bg-frim-600 bottom-1/4 right-1/4" style={{ animationDelay: '-7s' }} />
       </div>
 
-      {/* Navigation */}
-      <nav className="fixed top-0 left-0 right-0 z-50 glass">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <FrimLogo className="w-9 h-9 text-frim-400" />
-            <span className="font-display text-2xl font-semibold">frim</span>
-          </div>
-          <div className="flex items-center gap-4">
-            <Link href="/pricing" className="text-sm text-dark-400 hover:text-dark-200 transition-colors">
-              Pricing
-            </Link>
-            <a
-              href="https://discord.gg/YKfmSqZ5e8"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-dark-400 hover:text-[#5865F2] transition-colors flex items-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-              </svg>
-              Discord
-            </a>
-            <Link href="/auth/signin" className="btn-secondary text-sm py-2">
-              Sign In
-            </Link>
-            <Link href="/auth/register" className="btn-primary text-sm py-2">
-              Get Started
-            </Link>
-          </div>
-        </div>
-      </nav>
+      <MarketingNav>
+        <Link href="/pricing" className="text-sm text-dark-300 hover:text-white hover:bg-white/5 transition-colors px-3 py-2 rounded-lg">
+          Pricing
+        </Link>
+        <a
+          href={DISCORD_URL}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="text-sm text-dark-300 hover:text-[#5865F2] hover:bg-white/5 transition-colors px-3 py-2 rounded-lg inline-flex items-center gap-1.5"
+        >
+          <DiscordIcon className="w-4 h-4" />
+          Discord
+        </a>
+        <Link href="/auth/signin" className="btn-secondary text-sm py-2 px-4">
+          Sign in
+        </Link>
+        <Link href="/auth/register" className="btn-primary text-sm py-2 px-4">
+          Get started
+        </Link>
+      </MarketingNav>
 
       {/* Hero Section */}
-      <section className="relative min-h-screen flex items-center pt-20">
+      <section id="main" className="relative min-h-screen flex items-center pt-16">
         <div className="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-16 items-center">
           <div className="max-w-xl">
             <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/20 px-4 py-2 rounded-full text-sm text-frim-400 mb-6">
@@ -79,29 +69,28 @@ export default function Home() {
               Web-Based Animation Tool
             </div>
             
-            <h1 className="font-display text-5xl lg:text-6xl font-bold leading-tight mb-6">
+            <h1 className="font-display text-5xl lg:text-6xl font-bold leading-[1.05] mb-6 text-balance">
               Animate your<br />
               <span className="gradient-text">3D models</span>
             </h1>
             
-            <p className="text-lg text-dark-400 mb-8 leading-relaxed">
-              The simplest way to create skeletal animations. 
-              Import GLB files, pose bones, add keyframes, and export 
-              production-ready animations — all in your browser.
+            <p className="text-lg text-dark-300 mb-8 leading-relaxed">
+              Import a GLB, pose the skeleton, set keyframes, and export
+              a production animation. It all happens in the browser.
             </p>
 
             <div className="flex flex-wrap gap-4 mb-10">
-              <Link href="/auth/register" className="btn-primary flex items-center gap-2">
-                Start Animating
+              <Link href="/auth/register" className="btn-primary">
+                Start animating
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
               </Link>
-              <a href="#everything-you-need" className="btn-secondary flex items-center gap-2">
-                <svg className="w-5 h-5" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M8 5v14l11-7z" />
+              <a href="#how-it-works" className="btn-secondary">
+                See how it works
+                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
                 </svg>
-                Learn More
               </a>
             </div>
 
@@ -187,12 +176,30 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="relative py-8 px-6" id="how-it-works">
+        <div className="max-w-6xl mx-auto">
+          <div className="text-center mb-12">
+            <h2 className="font-display text-4xl font-bold mb-3">How it works</h2>
+            <p className="text-lg text-dark-400">Three steps from a model file to a finished clip</p>
+          </div>
+          <ol className="grid md:grid-cols-3 gap-4">
+            {steps.map((step) => (
+              <li key={step.title} className="bg-dark-900/80 border border-white/[0.06] rounded-2xl p-6">
+                <p className="font-mono text-xs text-frim-400 mb-3">{step.index}</p>
+                <h3 className="font-display text-xl font-semibold mb-2">{step.title}</h3>
+                <p className="text-sm text-dark-300 leading-relaxed">{step.body}</p>
+              </li>
+            ))}
+          </ol>
+        </div>
+      </section>
+
       {/* Features Section */}
       <section className="relative py-24 px-6" id="everything-you-need">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-16">
             <h2 className="font-display text-4xl font-bold mb-4">Everything you need</h2>
-            <p className="text-lg text-dark-500">Professional animation tools, right in your browser</p>
+            <p className="text-lg text-dark-400">Professional animation tools, right in your browser</p>
           </div>
           
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -207,57 +214,46 @@ export default function Home() {
                     <span className="text-[10px] font-bold bg-frim-500 text-dark-950 px-1.5 py-0.5 rounded">PRO</span>
                   )}
                 </div>
-                <p className="text-dark-500 text-sm leading-relaxed">{feature.description}</p>
+                <p className="text-dark-300 text-sm leading-relaxed">{feature.description}</p>
               </div>
             ))}
           </div>
         </div>
       </section>
 
-      {/* Footer */}
-      <footer className="border-t border-dark-800 py-10 px-6">
-        <div className="max-w-6xl mx-auto flex flex-col items-center gap-4">
-          <div className="flex items-center gap-2 text-dark-400">
-            <FrimLogo className="w-7 h-7" />
-            <span className="font-display text-lg font-semibold">frim</span>
-          </div>
-          <div className="flex items-center gap-6">
-            <Link href="/pricing" className="text-sm text-dark-500 hover:text-dark-300 transition-colors">
-              Pricing
-            </Link>
-            <a
-              href="https://discord.gg/YKfmSqZ5e8"
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-sm text-dark-500 hover:text-[#5865F2] transition-colors flex items-center gap-1.5"
-            >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-              </svg>
-              Discord
-            </a>
-          </div>
-          <p className="text-sm text-dark-600">© 2026 Frim. Free GLB animation editor.</p>
+      <section className="relative px-6 pb-24">
+        <div className="max-w-4xl mx-auto text-center bg-dark-900 border border-white/[0.06] rounded-3xl px-6 py-14">
+          <h2 className="font-display text-3xl md:text-4xl font-bold mb-3">Open the editor and try a pose</h2>
+          <p className="text-dark-300 mb-8 max-w-xl mx-auto">The sample model is one click away. Your first project is free.</p>
+          <Link href="/auth/register" className="btn-primary">
+            Create a free account
+          </Link>
         </div>
-      </footer>
+      </section>
+
+      <SiteFooter />
 
     </div>
   )
 }
 
-function FrimLogo({ className }: { className?: string }) {
-  return (
-    <svg className={className} viewBox="0 0 32 32" fill="none" xmlns="http://www.w3.org/2000/svg">
-      <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
-      <circle cx="16" cy="10" r="3" fill="currentColor"/>
-      <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" strokeWidth="2"/>
-      <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" strokeWidth="2"/>
-      <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
-      <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
-      <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
-    </svg>
-  )
-}
+const steps = [
+  {
+    index: '01',
+    title: 'Import a model',
+    body: 'Drop in a rigged GLB or start from the sample character. Frim reads the skeleton and lists every bone.',
+  },
+  {
+    index: '02',
+    title: 'Pose and keyframe',
+    body: 'Rotate, move, or scale a bone, then drop a keyframe. Scrub the timeline or hit play to see the motion.',
+  },
+  {
+    index: '03',
+    title: 'Export or capture',
+    body: 'Download a GLB with your clips. On Pro, pull a performance from video. Studio retargets it in 3D.',
+  },
+]
 
 const features = [
   {

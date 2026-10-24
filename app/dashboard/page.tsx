@@ -1,6 +1,6 @@
 'use client'
 
-import { Suspense, useEffect, useState } from 'react'
+import { Suspense, useEffect, useRef, useState } from 'react'
 import { useSession, signOut } from 'next-auth/react'
 import { useRouter, useSearchParams } from 'next/navigation'
 import Link from 'next/link'
@@ -9,6 +9,7 @@ import { startPlanCheckout, buyGpuCredits } from '@/lib/checkout'
 import Celebration, { type CelebrationKind } from '@/components/Celebration'
 import GpuUsageMeter from '@/components/GpuUsageMeter'
 import StudioUpgradeModal from '@/components/StudioUpgradeModal'
+import { DISCORD_URL, DiscordIcon, FrimLogo, SUPPORT_EMAIL, SiteFooter } from '@/components/chrome'
 
 interface Project {
   id: string
@@ -18,6 +19,18 @@ interface Project {
   modelName?: string
   createdAt: string
   updatedAt: string
+}
+
+function timeAgo(iso: string) {
+  const diff = Date.now() - new Date(iso).getTime()
+  const mins = Math.round(diff / 60000)
+  if (!Number.isFinite(mins) || mins < 1) return 'just now'
+  if (mins < 60) return `${mins}m ago`
+  const hours = Math.round(mins / 60)
+  if (hours < 24) return `${hours}h ago`
+  const days = Math.round(hours / 24)
+  if (days < 14) return `${days}d ago`
+  return new Date(iso).toLocaleDateString()
 }
 
 interface Subscription {
@@ -38,8 +51,6 @@ interface Subscription {
     gpuCapturesRemaining?: number
   }
 }
-
-const SUPPORT_EMAIL = 'support@frim.app'
 
 export default function Dashboard() {
   return (
@@ -75,12 +86,45 @@ function DashboardContent() {
   const [studioError, setStudioError] = useState<string | null>(null)
   const [buyingCredits, setBuyingCredits] = useState(false)
   const [creditQty, setCreditQty] = useState(5)
+  const [query, setQuery] = useState('')
+  const [menuOpen, setMenuOpen] = useState(false)
+  const [projectToDelete, setProjectToDelete] = useState<Project | null>(null)
+  const menuRef = useRef<HTMLDivElement>(null)
 
   useEffect(() => {
     if (status === 'unauthenticated') {
       router.push('/auth/signin')
     }
   }, [status, router])
+
+  useEffect(() => {
+    if (!menuOpen) return
+    const onPointer = (event: MouseEvent) => {
+      if (!menuRef.current?.contains(event.target as Node)) setMenuOpen(false)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setMenuOpen(false)
+    }
+    document.addEventListener('mousedown', onPointer)
+    document.addEventListener('keydown', onKey)
+    return () => {
+      document.removeEventListener('mousedown', onPointer)
+      document.removeEventListener('keydown', onKey)
+    }
+  }, [menuOpen])
+
+  useEffect(() => {
+    if (!showNewModal && !showUpgradeModal && !projectToDelete && !showSubscriptionModal) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape' || cancelingSubscription) return
+      setShowNewModal(false)
+      setShowUpgradeModal(false)
+      setProjectToDelete(null)
+      setShowSubscriptionModal(false)
+    }
+    document.addEventListener('keydown', onKey)
+    return () => document.removeEventListener('keydown', onKey)
+  }, [showNewModal, showUpgradeModal, projectToDelete, showSubscriptionModal, cancelingSubscription])
 
   useEffect(() => {
     const upgraded = searchParams.get('upgraded') || (searchParams.get('success') === 'true' ? 'pro' : null)
@@ -176,7 +220,7 @@ function DashboardContent() {
   }
 
   const deleteProject = async (id: string) => {
-    if (!confirm('Are you sure you want to delete this project?')) return
+    setProjectToDelete(null)
     setDeletingId(id)
 
     try {
@@ -273,9 +317,24 @@ function DashboardContent() {
   const isPaid = subscription?.plan === 'pro' || subscription?.plan === 'studio'
   const isStudio = subscription?.plan === 'studio'
   const planLabel = isStudio ? 'Studio' : isPaid ? 'Pro' : 'Free plan'
+  const firstName = session?.user?.name?.split(' ')[0]
+  const needle = query.trim().toLowerCase()
+  const visibleProjects = [...projects]
+    .filter((project) => {
+      if (!needle) return true
+      return project.name.toLowerCase().includes(needle) || (project.modelName || '').toLowerCase().includes(needle)
+    })
+    .sort((a, b) => +new Date(b.updatedAt) - +new Date(a.updatedAt))
+  const initials = (session?.user?.name || session?.user?.email || '?')
+    .replace(/@.*/, '')
+    .split(/[\s._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase())
+    .join('') || '?'
 
   return (
-    <div className="min-h-screen bg-dark-950">
+    <div className="min-h-screen bg-dark-950 flex flex-col">
       <Celebration
         kind={celebration}
         credits={celebrationCredits}
@@ -304,31 +363,21 @@ function DashboardContent() {
       )}
 
       {/* Header */}
-      <header className="border-b border-dark-800 bg-dark-900/50 backdrop-blur-xl sticky top-0 z-50">
-        <div className="max-w-7xl mx-auto px-6 py-4 flex items-center justify-between">
-          <Link href="/dashboard" className="flex items-center gap-3">
-            <svg className="w-8 h-8 text-frim-400" viewBox="0 0 32 32" fill="none">
-              <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
-              <circle cx="16" cy="10" r="3" fill="currentColor"/>
-              <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
-              <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
-            </svg>
-            <span className="font-display text-xl font-semibold">frim</span>
+      <header className="border-b border-white/[0.06] bg-dark-950/80 backdrop-blur-xl sticky top-0 z-50">
+        <div className="max-w-7xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-3">
+          <Link href="/dashboard" className="flex items-center gap-2.5 shrink-0">
+            <FrimLogo className="w-8 h-8 text-frim-400" />
+            <span className="font-display text-xl font-semibold tracking-tight">frim</span>
           </Link>
 
-          <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2 sm:gap-3">
             <a
-              href="https://discord.gg/YKfmSqZ5e8"
+              href={DISCORD_URL}
               target="_blank"
               rel="noopener noreferrer"
-              className="hidden sm:flex items-center gap-2 text-sm text-dark-400 hover:text-[#5865F2] transition-colors"
+              className="hidden md:inline-flex items-center gap-2 text-sm text-dark-400 hover:text-[#5865F2] transition-colors px-2 py-1.5 rounded-lg"
             >
-              <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-              </svg>
+              <DiscordIcon className="w-4 h-4" />
               Discord
             </a>
             {!isPaid && (
@@ -360,49 +409,66 @@ function DashboardContent() {
               New Project
             </button>
             
-            <div className="flex items-center gap-3">
-              {session?.user?.image && (
-                <Image
-                  src={session.user.image}
-                  alt={session.user.name || 'User'}
-                  width={36}
-                  height={36}
-                  className="rounded-full"
-                />
-              )}
-              <div className="hidden sm:block">
-                <p className="text-sm font-medium">{session?.user?.name || session?.user?.email}</p>
-                <p className="text-xs text-dark-500 flex items-center gap-1">
-                  {isPaid ? (
-                    <>
-                      <span className="w-1.5 h-1.5 rounded-full bg-frim-400" />
-                      {planLabel}
-                    </>
-                  ) : (
-                    'Free plan'
-                  )}
-                </p>
-              </div>
+            <div className="relative" ref={menuRef}>
               <button
-                onClick={() => signOut({ callbackUrl: '/' })}
-                className="text-dark-400 hover:text-dark-200 p-2 rounded-lg hover:bg-dark-800 transition-colors"
-                title="Sign out"
+                type="button"
+                onClick={() => setMenuOpen((open) => !open)}
+                className="flex items-center gap-2 rounded-full p-0.5 hover:bg-white/5"
+                aria-expanded={menuOpen}
+                aria-haspopup="menu"
+                aria-label="Account menu"
               >
-                <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 16l4-4m0 0l-4-4m4 4H7m6 4v1a3 3 0 01-3 3H6a3 3 0 01-3-3V7a3 3 0 013-3h4a3 3 0 013 3v1" />
-                </svg>
+                {session?.user?.image ? (
+                  <Image
+                    src={session.user.image}
+                    alt=""
+                    width={36}
+                    height={36}
+                    className="rounded-full"
+                  />
+                ) : (
+                  <span className="w-9 h-9 rounded-full bg-frim-500/15 text-frim-300 text-xs font-semibold inline-flex items-center justify-center">
+                    {initials}
+                  </span>
+                )}
               </button>
+              {menuOpen && (
+                <div role="menu" className="modal-pop absolute right-0 mt-2 w-64 rounded-xl border border-white/10 bg-dark-900 shadow-2xl shadow-black/40 p-2 z-50">
+                  <div className="px-3 py-2">
+                    <p className="text-sm font-medium truncate">{session?.user?.name || 'Account'}</p>
+                    <p className="text-xs text-dark-400 truncate">{session?.user?.email}</p>
+                    <p className="text-xs text-frim-400 mt-1">{planLabel}</p>
+                  </div>
+                  <div className="my-1 h-px bg-white/5" />
+                  <Link href="/pricing" role="menuitem" className="block px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5" onClick={() => setMenuOpen(false)}>
+                    {isPaid ? 'Plans' : 'Upgrade'}
+                  </Link>
+                  {subscription?.plan === 'pro' && (
+                    <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); requestStudioUpgrade() }} className="w-full text-left px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5">
+                      Upgrade to Studio
+                    </button>
+                  )}
+                  <a href={DISCORD_URL} target="_blank" rel="noopener noreferrer" role="menuitem" className="flex items-center gap-2 px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5">
+                    <DiscordIcon className="w-4 h-4" /> Discord
+                  </a>
+                  <button type="button" role="menuitem" onClick={() => signOut({ callbackUrl: '/' })} className="w-full text-left px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5">
+                    Sign out
+                  </button>
+                </div>
+              )}
             </div>
           </div>
         </div>
       </header>
 
       {/* Main Content */}
-      <main className="max-w-7xl mx-auto px-6 py-10">
-        <div className="mb-8 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
+      <main id="main" className="max-w-7xl mx-auto px-4 sm:px-6 py-10 flex-1 w-full">
+        <div className="mb-8 flex flex-col lg:flex-row lg:items-end lg:justify-between gap-4">
           <div>
-            <h1 className="font-display text-3xl font-bold mb-2">Your Projects</h1>
-            <p className="text-dark-500">Create and manage your animation projects</p>
+            <h1 className="font-display text-3xl font-bold mb-2">Projects</h1>
+            <p className="text-dark-300">
+              {firstName ? `${firstName}, pick up a project or start a new one.` : 'Create and manage your animation projects.'}
+            </p>
           </div>
           
           {/* Usage indicator */}
@@ -451,6 +517,27 @@ function DashboardContent() {
           )}
         </div>
 
+        {projects.length > 0 && (
+          <label className="relative block mb-6 max-w-md">
+            <span className="sr-only">Search projects</span>
+            <input
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="Search projects"
+              className="w-full bg-dark-900 border border-white/[0.06] rounded-xl pl-4 pr-10 py-2.5 text-sm text-dark-100 placeholder-dark-500"
+            />
+            {query && (
+              <button
+                type="button"
+                onClick={() => setQuery('')}
+                className="absolute right-2 top-1/2 -translate-y-1/2 text-xs text-dark-400 hover:text-dark-100 px-2 py-1"
+              >
+                Clear
+              </button>
+            )}
+          </label>
+        )}
+
         {projects.length === 0 ? (
           /* Empty State */
           <div className="flex flex-col items-center justify-center py-20 text-center">
@@ -460,7 +547,7 @@ function DashboardContent() {
               </svg>
             </div>
             <h2 className="text-xl font-semibold mb-2">No projects yet</h2>
-            <p className="text-dark-500 mb-6">Create your first animation project to get started</p>
+            <p className="text-dark-300 mb-6 max-w-sm">Create a project, load a GLB, and the editor opens with a timeline ready for the first keyframe.</p>
             <button
               onClick={handleNewProjectClick}
               className="btn-primary flex items-center gap-2"
@@ -504,7 +591,15 @@ function DashboardContent() {
             </button>
 
             {/* Project Cards */}
-            {projects.map((project) => (
+            {visibleProjects.length === 0 && (
+              <div className="sm:col-span-2 lg:col-span-3 xl:col-span-3 bg-dark-900 border border-white/[0.06] rounded-xl p-8 text-center">
+                <p className="font-medium mb-1">No projects match “{query.trim()}”</p>
+                <button type="button" onClick={() => setQuery('')} className="text-sm text-frim-400 hover:text-frim-300">
+                  Clear search
+                </button>
+              </div>
+            )}
+            {visibleProjects.map((project) => (
               <div
                 key={project.id}
                 className="bg-dark-900 border border-dark-800 rounded-xl overflow-hidden card-hover group"
@@ -552,7 +647,7 @@ function DashboardContent() {
                       )}
                     </div>
                     <button
-                      onClick={() => deleteProject(project.id)}
+                      onClick={() => setProjectToDelete(project)}
                       disabled={deletingId === project.id}
                       className="p-2 text-dark-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-colors shrink-0"
                       title="Delete project"
@@ -566,8 +661,8 @@ function DashboardContent() {
                       )}
                     </button>
                   </div>
-                  <p className="text-xs text-dark-600 mt-3">
-                    Updated {new Date(project.updatedAt).toLocaleDateString()}
+                  <p className="text-xs text-dark-500 mt-3" title={new Date(project.updatedAt).toLocaleString()}>
+                    Updated {timeAgo(project.updatedAt)}
                   </p>
                 </div>
               </div>
@@ -578,9 +673,10 @@ function DashboardContent() {
 
       {/* New Project Modal */}
       {showNewModal && (
-        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4">
-          <div className="bg-dark-900 border border-dark-800 rounded-2xl w-full max-w-md p-6">
-            <h2 className="font-display text-xl font-semibold mb-4">Create New Project</h2>
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4" onMouseDown={(event) => { if (event.target === event.currentTarget) { setShowNewModal(false); setNewProjectName('') } }}>
+          <div role="dialog" aria-modal="true" aria-labelledby="new-project-title" className="modal-pop bg-dark-900 border border-white/10 rounded-2xl w-full max-w-md p-6">
+            <h2 id="new-project-title" className="font-display text-xl font-semibold mb-1">New project</h2>
+            <p className="text-sm text-dark-400 mb-4">Use a name you will recognize in the list.</p>
             <div className="mb-6">
               <label className="block text-sm text-dark-400 mb-2">Project Name</label>
               <input
@@ -772,50 +868,34 @@ function DashboardContent() {
         </div>
       )}
 
-      {/* Footer */}
-      <footer className="border-t border-dark-800 mt-auto">
-        <div className="max-w-7xl mx-auto px-6 py-8">
-          <div className="flex flex-col sm:flex-row items-center justify-between gap-4">
-            <div className="flex items-center gap-2 text-dark-500">
-              <svg className="w-6 h-6" viewBox="0 0 32 32" fill="none">
-                <circle cx="16" cy="16" r="14" stroke="currentColor" strokeWidth="2"/>
-                <circle cx="16" cy="10" r="3" fill="currentColor"/>
-                <line x1="16" y1="13" x2="16" y2="20" stroke="currentColor" strokeWidth="2"/>
-                <line x1="16" y1="16" x2="10" y2="14" stroke="currentColor" strokeWidth="2"/>
-                <line x1="16" y1="16" x2="22" y2="14" stroke="currentColor" strokeWidth="2"/>
-                <line x1="16" y1="20" x2="12" y2="26" stroke="currentColor" strokeWidth="2"/>
-                <line x1="16" y1="20" x2="20" y2="26" stroke="currentColor" strokeWidth="2"/>
-              </svg>
-              <span className="text-sm">© 2026 Frim</span>
-            </div>
-            <div className="flex items-center gap-6">
-              <Link href="/pricing" className="text-sm text-dark-500 hover:text-dark-300 transition-colors">
-                Pricing
-              </Link>
-              <a
-                href="https://discord.gg/YKfmSqZ5e8"
-                target="_blank"
-                rel="noopener noreferrer"
-                className="text-sm text-dark-500 hover:text-[#5865F2] transition-colors flex items-center gap-1.5"
+      {projectToDelete && (
+        <div
+          className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-50 p-4"
+          onMouseDown={(event) => { if (event.target === event.currentTarget && deletingId !== projectToDelete.id) setProjectToDelete(null) }}
+        >
+          <div role="dialog" aria-modal="true" aria-labelledby="delete-project-title" className="modal-pop bg-dark-900 border border-white/10 rounded-2xl w-full max-w-md p-6">
+            <h2 id="delete-project-title" className="font-display text-xl font-semibold mb-2">Delete this project?</h2>
+            <p className="text-sm text-dark-300 mb-6">
+              <span className="text-dark-100 font-medium">{projectToDelete.name}</span> and its saved animations will be removed. This cannot be undone.
+            </p>
+            <div className="flex justify-end gap-3">
+              <button type="button" onClick={() => setProjectToDelete(null)} className="btn-secondary py-2" disabled={deletingId === projectToDelete.id}>
+                Keep it
+              </button>
+              <button
+                type="button"
+                onClick={() => deleteProject(projectToDelete.id)}
+                disabled={deletingId === projectToDelete.id}
+                className="inline-flex items-center justify-center gap-2 bg-red-500 text-white px-5 py-2.5 rounded-xl font-semibold hover:bg-red-400 disabled:opacity-50"
               >
-                <svg className="w-4 h-4" fill="currentColor" viewBox="0 0 24 24">
-                  <path d="M20.317 4.37a19.791 19.791 0 0 0-4.885-1.515.074.074 0 0 0-.079.037c-.21.375-.444.864-.608 1.25a18.27 18.27 0 0 0-5.487 0 12.64 12.64 0 0 0-.617-1.25.077.077 0 0 0-.079-.037A19.736 19.736 0 0 0 3.677 4.37a.07.07 0 0 0-.032.027C.533 9.046-.32 13.58.099 18.057a.082.082 0 0 0 .031.057 19.9 19.9 0 0 0 5.993 3.03.078.078 0 0 0 .084-.028 14.09 14.09 0 0 0 1.226-1.994.076.076 0 0 0-.041-.106 13.107 13.107 0 0 1-1.872-.892.077.077 0 0 1-.008-.128 10.2 10.2 0 0 0 .372-.292.074.074 0 0 1 .077-.01c3.928 1.793 8.18 1.793 12.062 0a.074.074 0 0 1 .078.01c.12.098.246.198.373.292a.077.077 0 0 1-.006.127 12.299 12.299 0 0 1-1.873.892.077.077 0 0 0-.041.107c.36.698.772 1.362 1.225 1.993a.076.076 0 0 0 .084.028 19.839 19.839 0 0 0 6.002-3.03.077.077 0 0 0 .032-.054c.5-5.177-.838-9.674-3.549-13.66a.061.061 0 0 0-.031-.03zM8.02 15.33c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.956-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.956 2.418-2.157 2.418zm7.975 0c-1.183 0-2.157-1.085-2.157-2.419 0-1.333.955-2.419 2.157-2.419 1.21 0 2.176 1.096 2.157 2.42 0 1.333-.946 2.418-2.157 2.418z"/>
-                </svg>
-                Discord
-              </a>
-              <a 
-                href={`mailto:${SUPPORT_EMAIL}`}
-                className="text-sm text-dark-500 hover:text-dark-300 transition-colors flex items-center gap-1.5"
-              >
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" />
-                </svg>
-                Support
-              </a>
+                {deletingId === projectToDelete.id ? 'Deleting...' : 'Delete project'}
+              </button>
             </div>
           </div>
         </div>
-      </footer>
+      )}
+
+      <SiteFooter />
 
       <style jsx>{`
         @keyframes slide-down {

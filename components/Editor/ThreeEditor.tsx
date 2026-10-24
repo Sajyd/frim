@@ -21,6 +21,9 @@ import {
   Maximize2,
   Grid3X3,
   Bone,
+  ChevronLeft,
+  ChevronRight,
+  Search,
   Play,
   Pause,
   Square,
@@ -55,6 +58,7 @@ import {
   readDownscaledGray,
   type Sim2D,
 } from '@/lib/capture-stabilize'
+import { repairAiTimeline } from '@/lib/mocap-robust'
 
 interface EditorProps {
   projectName: string
@@ -238,6 +242,11 @@ function slerpKeepHemisphere(a: THREE.Quaternion, b: THREE.Quaternion, t: number
   return qa.slerp(qb, t)
 }
 
+function quatAngle(a: THREE.Quaternion, b: THREE.Quaternion) {
+  const d = Math.abs(Math.max(-1, Math.min(1, a.dot(b))))
+  return 2 * Math.acos(d)
+}
+
 /** Catmull-Rom (cubic Hermite) on a scalar — C1-smooth, no ease that flattens motion. */
 function catmullRom(p0: number, p1: number, p2: number, p3: number, t: number) {
   const t2 = t * t
@@ -368,6 +377,10 @@ export default function ThreeEditor({
   
   // Keyframe selection state
   const [selectedKeyframes, setSelectedKeyframes] = useState<Set<string>>(new Set()) // Set of "frame:boneName" strings
+  const [skeletonOpen, setSkeletonOpen] = useState(true)
+  const [inspectorOpen, setInspectorOpen] = useState(true)
+  const [boneQuery, setBoneQuery] = useState('')
+  const [fileDragOver, setFileDragOver] = useState(false)
   const [boxSelection, setBoxSelection] = useState<{active: boolean, startX: number, startY: number, currentX: number, currentY: number} | null>(null)
   const timelineTracksRef = useRef<HTMLDivElement>(null)
 
@@ -475,14 +488,14 @@ export default function ThreeEditor({
     if (!container) return
 
     const colors: Record<string, string> = {
-      success: 'bg-green-500',
-      error: 'bg-red-500',
-      warning: 'bg-yellow-500',
-      info: 'bg-blue-500'
+      success: 'bg-[#052e16] border border-[#22c55e]/40 text-[#bbf7d0]',
+      error: 'bg-[#450a0a] border border-red-500/40 text-red-100',
+      warning: 'bg-[#422006] border border-amber-400/40 text-amber-100',
+      info: 'bg-[#151821] border border-white/10 text-[#e4e4e7]',
     }
 
     const toast = document.createElement('div')
-    toast.className = `flex items-center gap-2 px-4 py-3 rounded-lg shadow-lg max-w-md ${colors[type]} text-white animate-slide-up`
+    toast.className = `flex items-center gap-2 px-4 py-3 rounded-xl shadow-lg max-w-md pointer-events-auto ${colors[type]} animate-slide-up`
     
     const iconSpan = document.createElement('span')
     iconSpan.className = 'w-4 h-4'
@@ -503,6 +516,13 @@ export default function ThreeEditor({
       toast.style.transform = 'translateY(10px)'
       setTimeout(() => toast.remove(), 300)
     }, type === 'error' ? 8000 : 3000)
+  }, [])
+
+  useEffect(() => {
+    if (window.innerWidth < 1180) {
+      setSkeletonOpen(false)
+      setInspectorOpen(false)
+    }
   }, [])
 
   // Initialize Three.js scene
@@ -2585,7 +2605,13 @@ export default function ThreeEditor({
   // Keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return
+      const target = e.target
+      if (
+        target instanceof HTMLInputElement ||
+        target instanceof HTMLTextAreaElement ||
+        target instanceof HTMLSelectElement ||
+        (target instanceof HTMLElement && target.isContentEditable)
+      ) return
 
       switch (e.code) {
         case 'Space':
@@ -2750,6 +2776,7 @@ export default function ThreeEditor({
   // Drag and drop
   const handleDrop = useCallback((e: React.DragEvent) => {
     e.preventDefault()
+    setFileDragOver(false)
     const file = e.dataTransfer.files[0]
     if (file && (file.name.endsWith('.glb') || file.name.endsWith('.gltf'))) {
       loadGLBFile(file)
@@ -2760,6 +2787,11 @@ export default function ThreeEditor({
 
   const handleDragOver = useCallback((e: React.DragEvent) => {
     e.preventDefault()
+    if (e.dataTransfer.types.includes('Files')) setFileDragOver(true)
+  }, [])
+
+  const handleDragLeave = useCallback((e: React.DragEvent) => {
+    if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setFileDragOver(false)
   }, [])
 
   // File input ref
@@ -3190,6 +3222,12 @@ export default function ThreeEditor({
         }
       }
 
+      const poseReport = repairAiTimeline(timeline)
+      if (poseReport.total >= 8 && poseReport.tracked / poseReport.total < 0.2) {
+        showToast('No clear person in this video. Use one person, full body, and a steady camera.', 'warning')
+        return
+      }
+
       if (stabilizeCamera && captureFile && timeline.length) {
         throwIfAborted()
         setVideoProgressLabel('Detecting camera motion…')
@@ -3350,7 +3388,7 @@ export default function ThreeEditor({
       const dirFromSeg = (start: Pt, end: Pt): THREE.Vector3 | null => {
         const v = charVec(start, end)
         const len = v.length()
-        if (len < 1e-6) return null
+        if (!Number.isFinite(len) || len < 1e-6) return null
         return v.divideScalar(len)
       }
 
@@ -3377,6 +3415,19 @@ export default function ThreeEditor({
         const right = new THREE.Vector3().crossVectors(up, forward).normalize()
         const m = new THREE.Matrix4().makeBasis(right, up, forward)
         return new THREE.Quaternion().setFromRotationMatrix(m)
+      }
+
+      const hybridOf = (img: any[], wld: any[]): Pt[] => {
+        if (rotationOnly) return wld.map((l: any) => ({ x: l.x || 0, y: l.y || 0, z: l.z || 0 }))
+        const msI = mid(img[11], img[12]), mhI = mid(img[23], img[24])
+        const imgTorso = Math.hypot((msI.x - mhI.x) * aspect, msI.y - mhI.y) || 1e-6
+        const msW = mid(wld[11], wld[12]), mhW = mid(wld[23], wld[24])
+        const worldTorso = Math.hypot(msW.x - mhW.x, msW.y - mhW.y, msW.z - mhW.z) || 1e-6
+        return img.map((l: any, k: number) => ({
+          x: (l.x || 0) * aspect,
+          y: l.y || 0,
+          z: (wld[k]?.z ?? 0) * (imgTorso / worldTorso) * Z_DEPTH_TORSO,
+        }))
       }
 
       const findSegment = (mapping: Record<string, { start: Pt; end: Pt }>, boneName: string) => {
@@ -3506,10 +3557,27 @@ export default function ThreeEditor({
         rootDZ.set(frameIdx, shapeRoot(v, ROOT_GAIN_Z, 0))
       }
 
-      // Torso orientation is applied relative to the first valid frame so the rig's
+      // Torso orientation is applied relative to the first stable frame so the rig's
       // bind/rest orientation is preserved and we only add the body's rotation.
+      // A one-frame flip (bad shoulders) is held instead of spinning the whole mesh.
       let refTorsoQuat: THREE.Quaternion | null = null
+      let prevTorsoQuat: THREE.Quaternion | null = null
       let refHeadQuat: THREE.Quaternion | null = null
+      const dominantTorso = (() => {
+        let sx = 0, sy = 0, sz = 0, sw = 0, n = 0
+        let anchor: THREE.Quaternion | null = null
+        for (const { data } of frameEntries) {
+          const q = torsoQuatFromWorld(hybridOf(data!.image, data!.world))
+          if (!q) continue
+          if (anchor && anchor.dot(q) < 0) q.set(-q.x, -q.y, -q.z, -q.w)
+          if (!anchor) anchor = q.clone()
+          sx += q.x; sy += q.y; sz += q.z; sw += q.w
+          n++
+        }
+        const len = Math.hypot(sx, sy, sz, sw)
+        if (!n || len < 1e-8) return null
+        return new THREE.Quaternion(sx / len, sy / len, sz / len, sw / len)
+      })()
 
       const tmpParentInv = new THREE.Quaternion()
       const tmpLocalDir = new THREE.Vector3()
@@ -3538,14 +3606,7 @@ export default function ThreeEditor({
         const msW = mid(wld[11], wld[12]), mhW = mid(wld[23], wld[24])
         const worldTorso = Math.hypot(msW.x - mhW.x, msW.y - mhW.y, msW.z - mhW.z) || 1e-6
         const w3d: Pt[] = wld.map((l: any) => ({ x: l.x, y: l.y, z: l.z || 0 }))
-        // GPU: full 3D world (MotionBERT, canonical bones). Fast: 2D silhouette + z.
-        const hyb: Pt[] = rotationOnly
-          ? w3d
-          : img.map((l: any, k: number) => ({
-              x: l.x * aspect,
-              y: l.y,
-              z: (wld[k]?.z ?? 0) * (imgTorso / worldTorso) * Z_DEPTH_TORSO,
-            }))
+        const hyb: Pt[] = hybridOf(img, wld)
 
         const mapping = getBoneMapping(hyb)
         const worldQuats: Record<string, THREE.Quaternion> = {}
@@ -3576,7 +3637,7 @@ export default function ThreeEditor({
           const startLm = limbStartOf(endLm)
           const dir = charPt(w3d[endLm]).sub(charPt(w3d[startLm]))
           const captured = dir.length()
-          if (captured < 1e-6) return origin.clone()
+          if (!Number.isFinite(captured) || captured < 1e-6) return origin.clone()
           dir.multiplyScalar(1 / captured)
           const canonMax = (endLm === 15 || endLm === 16) ? 0.53 : 0.82
           const reach = THREE.MathUtils.clamp(captured / canonMax, 0.28, 0.995)
@@ -3589,7 +3650,7 @@ export default function ThreeEditor({
           }
           const startLm = limbStartOf(endLm)
           const poleDir = charPt(w3d[poleLm]).sub(charPt(w3d[startLm]))
-          if (poleDir.lengthSq() < 1e-8) {
+          if (!Number.isFinite(poleDir.x) || poleDir.lengthSq() < 1e-8) {
             return origin.clone().add(new THREE.Vector3(0, 0, (endLm === 15 || endLm === 16) ? -1 : 1))
           }
           return origin.clone().add(poleDir.normalize())
@@ -3629,9 +3690,15 @@ export default function ThreeEditor({
           let localPos = new THREE.Vector3(boneRest.x, boneRest.y, boneRest.z)
 
           if (isRoot) {
-            const qTorso = torsoQuatFromWorld(hyb)
+            let qTorso = torsoQuatFromWorld(hyb)
             if (qTorso) {
+              if (prevTorsoQuat && quatAngle(qTorso, prevTorsoQuat) > 2.05) {
+                qTorso = prevTorsoQuat.clone()
+              } else if (!prevTorsoQuat && dominantTorso && quatAngle(qTorso, dominantTorso) > 2.05) {
+                qTorso = dominantTorso.clone()
+              }
               if (!refTorsoQuat) refTorsoQuat = qTorso.clone()
+              prevTorsoQuat = qTorso.clone()
               const deltaQ = qTorso.clone().multiply(refTorsoQuat.clone().invert())
               localQuat = deltaQ.multiply(restHipsQuat.clone())
             }
@@ -4189,14 +4256,26 @@ export default function ThreeEditor({
     }
   }, [showVideoModal, videoFile, videoAnalyzing, loadPoseModel])
 
+  const boneNeedle = boneQuery.trim().toLowerCase()
+  const boneNames = Array.from(bones.keys()).filter((name) => name.toLowerCase().includes(boneNeedle))
+
   return (
     <div 
       ref={containerRef} 
       className="relative w-full h-[calc(100vh-52px)]"
       onDrop={handleDrop}
       onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
     >
       <canvas ref={canvasRef} className="absolute inset-0" />
+
+      {fileDragOver && (
+        <div className="absolute inset-0 z-[60] pointer-events-none bg-[#0c0e14]/75 border-2 border-dashed border-[#22c55e] flex items-center justify-center p-6">
+          <div className="px-5 py-3 rounded-2xl bg-[#151821] border border-[#22c55e]/40 text-sm font-medium text-[#4ade80]">
+            Drop a .glb or .gltf file
+          </div>
+        </div>
+      )}
 
       {/* Welcome Screen */}
       {showWelcome && (
@@ -4205,8 +4284,8 @@ export default function ThreeEditor({
             <div className="w-20 h-20 mx-auto mb-6 bg-gradient-to-br from-[#22c55e] to-[#16a34a] rounded-2xl flex items-center justify-center shadow-lg shadow-[#22c55e]/20">
               <Bone className="w-10 h-10 text-white" />
             </div>
-            <h2 className="text-2xl font-bold text-white mb-2">Welcome to Frim</h2>
-            <p className="text-[#a1a1aa] mb-8">GLB Animation Editor - Create and edit skeletal animations</p>
+            <h2 className="font-display text-2xl font-bold text-white mb-2">Start an animation</h2>
+            <p className="text-[#a1a1aa] mb-6 text-sm leading-relaxed">Load a rigged model, pose the bones, then play the timeline.</p>
             
             <div className="space-y-3">
               <button
@@ -4224,6 +4303,14 @@ export default function ThreeEditor({
                 <FolderOpen className="w-5 h-5" />
                 Import GLB/GLTF File
               </button>
+            </div>
+
+            <div className="mt-5 flex flex-wrap justify-center gap-1.5">
+              {[['V', 'Select'], ['R', 'Rotate'], ['T', 'Move'], ['K', 'Keyframe'], ['Space', 'Play']].map(([key, label]) => (
+                <span key={key} className="text-[10px] text-[#a1a1aa] bg-[#0f1117] border border-[#252b3d] rounded-md px-2 py-1">
+                  <span className="font-mono text-[#f4f4f5]">{key}</span> {label}
+                </span>
+              ))}
             </div>
             
             <div className="mt-8 pt-6 border-t border-[#252b3d]">
@@ -4265,7 +4352,7 @@ export default function ThreeEditor({
       />
 
       {/* Top Toolbar */}
-      <div className="absolute top-4 left-1/2 -translate-x-1/2 bg-[#151821] border border-[#252b3d] rounded-xl flex gap-1 p-1.5 z-10">
+      <div className="absolute top-3 left-1/2 -translate-x-1/2 z-20 max-w-[calc(100%-1.5rem)] bg-[#151821]/95 backdrop-blur-md border border-white/10 rounded-2xl shadow-lg shadow-black/40 flex gap-0.5 p-1 overflow-x-auto" style={{ scrollbarWidth: 'none' }}>
         {/* File operations */}
         <button
           onClick={() => fileInputRef.current?.click()}
@@ -4406,10 +4493,41 @@ export default function ThreeEditor({
       </div>
 
       {/* Left Panel - Bones */}
-      <div className="absolute top-4 left-4 bottom-[180px] w-[240px] bg-[#151821] border border-[#252b3d] rounded-xl overflow-hidden flex flex-col z-10">
-        <div className="p-3 border-b border-[#252b3d] flex items-center justify-between">
+      {!skeletonOpen && (
+        <button
+          type="button"
+          onClick={() => setSkeletonOpen(true)}
+          className="absolute top-20 left-3 z-20 h-10 px-3 rounded-xl bg-[#151821]/95 border border-white/10 text-[#d4d4d8] hover:text-white shadow-lg shadow-black/30 inline-flex items-center gap-2 text-xs font-medium"
+          title="Show skeleton"
+        >
+          <Bone className="w-4 h-4" />
+          Skeleton
+        </button>
+      )}
+      <div className={`absolute top-20 left-3 bottom-[168px] w-[240px] bg-[#151821]/95 backdrop-blur-md border border-white/10 rounded-xl overflow-hidden flex-col z-10 shadow-lg shadow-black/20 ${skeletonOpen ? 'flex' : 'hidden'}`}>
+        <div className="p-3 border-b border-[#252b3d] flex items-center justify-between gap-2">
           <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">SKELETON</h3>
-          <span className="text-xs text-[#71717a]">{bones.size} bones</span>
+          <div className="flex items-center gap-1.5">
+            <span className="text-xs text-[#71717a]">{bones.size}</span>
+            <button type="button" onClick={() => setSkeletonOpen(false)} className="w-6 h-6 rounded-md text-[#a1a1aa] hover:bg-[#1c2130] inline-flex items-center justify-center" aria-label="Hide skeleton">
+              <ChevronLeft className="w-3.5 h-3.5" />
+            </button>
+          </div>
+        </div>
+        <div className="px-2 py-2 border-b border-[#252b3d]">
+          <div className="relative">
+            <Search className="w-3.5 h-3.5 absolute left-2 top-1/2 -translate-y-1/2 text-[#71717a]" />
+            <input
+              value={boneQuery}
+              onChange={(event) => setBoneQuery(event.target.value)}
+              placeholder="Find a bone"
+              aria-label="Find a bone"
+              className="w-full bg-[#0f1117] border border-[#252b3d] rounded-lg pl-7 pr-2 py-1.5 text-xs text-[#f4f4f5] placeholder:text-[#52525b]"
+            />
+          </div>
+          {boneNeedle && boneNames.length === 0 && (
+            <p className="px-1 pt-2 text-[11px] text-[#71717a]">No bones match.</p>
+          )}
         </div>
         
         {/* Quick Bone Select */}
@@ -4463,7 +4581,7 @@ export default function ThreeEditor({
               <Package className="w-3 h-3" />
               Whole Model
             </div>
-            {Array.from(bones.keys()).map(name => (
+            {boneNames.map(name => (
               <div
                 key={name}
                 onClick={() => handleBoneSelect(name)}
@@ -4487,16 +4605,30 @@ export default function ThreeEditor({
       </div>
 
       {/* Right Panel - Properties & Animations */}
-      <div className="absolute top-4 right-4 bottom-[180px] w-[260px] bg-[#151821] border border-[#252b3d] rounded-xl overflow-hidden flex flex-col z-10">
+      {!inspectorOpen && (
+        <button
+          type="button"
+          onClick={() => setInspectorOpen(true)}
+          className="absolute top-20 right-3 z-20 h-10 px-3 rounded-xl bg-[#151821]/95 border border-white/10 text-[#d4d4d8] hover:text-white shadow-lg shadow-black/30 inline-flex items-center gap-2 text-xs font-medium"
+          title="Show properties"
+        >
+          Properties
+          <ChevronRight className="w-4 h-4" />
+        </button>
+      )}
+      <div className={`absolute top-20 right-3 bottom-[168px] w-[260px] bg-[#151821]/95 backdrop-blur-md border border-white/10 rounded-xl overflow-hidden flex-col z-10 shadow-lg shadow-black/20 ${inspectorOpen ? 'flex' : 'hidden'}`}>
         {/* Properties Section */}
-        <div className="p-3 border-b border-[#252b3d]">
+        <div className="p-3 border-b border-[#252b3d] flex items-center justify-between gap-2">
           <h3 className="text-xs tracking-widest text-[#71717a] font-semibold">PROPERTIES</h3>
+          <button type="button" onClick={() => setInspectorOpen(false)} className="w-6 h-6 rounded-md text-[#a1a1aa] hover:bg-[#1c2130] inline-flex items-center justify-center" aria-label="Hide properties">
+            <ChevronRight className="w-3.5 h-3.5" />
+          </button>
         </div>
         {selectedBone ? (
           <div className="p-3 space-y-3 border-b border-[#252b3d] max-h-[300px] overflow-y-auto">
             <div className="flex items-center justify-between">
               <span className="text-xs text-[#71717a]">Selected:</span>
-              <span className="font-mono text-sm text-[#22c55e]">{selectedBone.name}</span>
+              <span className="font-mono text-sm text-[#22c55e] truncate max-w-[140px]" title={selectedBone.name}>{selectedBone.name}</span>
             </div>
             
             {/* Transform values */}
@@ -4650,8 +4782,8 @@ export default function ThreeEditor({
             </div>
           </div>
         ) : (
-          <div className="p-4 text-center text-[#71717a] text-xs border-b border-[#252b3d]">
-            Click a bone to select
+          <div className="p-4 text-center text-[#a1a1aa] text-xs border-b border-[#252b3d] leading-relaxed">
+            Select a bone in the viewport or from the skeleton list.
           </div>
         )}
 
@@ -4695,7 +4827,7 @@ export default function ThreeEditor({
                     : 'hover:bg-[#1c2130]'
                 }`}
               >
-                <div className="flex items-center justify-between">
+                <div className="flex items-center justify-between gap-2 min-w-0">
                   {currentAnimationId === id ? (
                     <input
                       type="text"
@@ -4714,7 +4846,7 @@ export default function ThreeEditor({
                       className="text-xs font-medium text-[#f4f4f5] bg-transparent border-b border-[#22c55e] outline-none w-24"
                     />
                   ) : (
-                  <span className="text-xs font-medium text-[#f4f4f5]">{anim.name}</span>
+                  <span className="text-xs font-medium text-[#f4f4f5] truncate">{anim.name}</span>
                   )}
                   <div className="flex gap-1">
                     <button
@@ -4745,31 +4877,39 @@ export default function ThreeEditor({
       {/* Bottom Panel - Timeline */}
       <div className="absolute bottom-0 left-0 right-0 h-[160px] bg-[#151821] border-t border-[#252b3d] z-10">
         {/* Controls bar */}
-        <div className="flex items-center justify-between px-4 py-2 bg-[#0f1117] border-b border-[#252b3d]">
-          <div className="flex items-center gap-2">
+        <div className="flex items-center justify-between gap-4 px-3 py-2 bg-[#0c0e14] border-b border-[#252b3d] overflow-x-auto">
+          <div className="flex items-center gap-1.5 shrink-0">
             <button
               onClick={() => goToFrame(currentFrame - 1)}
               className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] flex items-center justify-center"
+              aria-label="Previous frame"
+              title="Previous frame"
             >
               <SkipBack className="w-4 h-4" />
             </button>
             <button
               onClick={() => setIsPlaying(p => !p)}
-              className={`w-8 h-8 border border-[#252b3d] rounded-md flex items-center justify-center ${
+              className={`w-9 h-8 border border-[#252b3d] rounded-md flex items-center justify-center ${
                 isPlaying ? 'bg-[#22c55e] text-[#09090b]' : 'bg-[#151821] text-[#a1a1aa] hover:bg-[#1c2130]'
               }`}
+              aria-label={isPlaying ? 'Pause' : 'Play'}
+              title={isPlaying ? 'Pause (Space)' : 'Play (Space)'}
             >
               {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
             </button>
             <button
               onClick={() => { setIsPlaying(false); goToFrame(0) }}
               className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] flex items-center justify-center"
+              aria-label="Stop and return to the first frame"
+              title="Stop"
             >
               <Square className="w-4 h-4" />
             </button>
             <button
               onClick={() => goToFrame(currentFrame + 1)}
               className="w-8 h-8 bg-[#151821] border border-[#252b3d] rounded-md text-[#a1a1aa] hover:bg-[#1c2130] flex items-center justify-center"
+              aria-label="Next frame"
+              title="Next frame"
             >
               <SkipForward className="w-4 h-4" />
             </button>
@@ -4800,7 +4940,7 @@ export default function ThreeEditor({
               />
             </div>
           </div>
-          <div className="flex items-center gap-4 text-xs text-[#a1a1aa]">
+          <div className="flex items-center gap-4 text-xs text-[#a1a1aa] shrink-0">
             <div className="flex items-center gap-2">
               <span>FPS:</span>
               <select
