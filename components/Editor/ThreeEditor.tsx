@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -47,7 +47,9 @@ import {
   Info,
   Video,
   Loader2,
-  Sparkles
+  Sparkles,
+  Wand2,
+  Crosshair,
 } from 'lucide-react'
 import {
   accumulateSims,
@@ -59,6 +61,20 @@ import {
   type Sim2D,
 } from '@/lib/capture-stabilize'
 import { repairAiTimeline } from '@/lib/mocap-robust'
+import {
+  PLACE_STEPS,
+  MIXAMO_BONES,
+  applyAutoRig,
+  applySymmetry,
+  arrayBufferToBase64,
+  estimateHumanoidJoints,
+  expandJoints,
+  interiorizeHit,
+  type AutoRigEstimate,
+  type JointMap,
+  type MixamoBoneName,
+  type PlaceJointId,
+} from '@/lib/autorig'
 
 interface EditorProps {
   projectName: string
@@ -324,6 +340,12 @@ export default function ThreeEditor({
   const [sceneReady, setSceneReady] = useState(false)
   const [showGrid, setShowGrid] = useState(true)
   const [showBoneView, setShowBoneView] = useState(true)
+  const showBoneViewRef = useRef(true)
+  const bonesRef = useRef<Map<string, THREE.Bone>>(new Map())
+  const updateBoneLinesRef = useRef<() => void>(() => {})
+  const updateBoneHelperPositionsRef = useRef<() => void>(() => {})
+  showBoneViewRef.current = showBoneView
+  bonesRef.current = bones
   const [loadedFilename, setLoadedFilename] = useState('')
 
   // Animation state
@@ -374,6 +396,21 @@ export default function ThreeEditor({
   const [draggingKeyframe, setDraggingKeyframe] = useState<{boneName: string, fromFrame: number} | null>(null)
   const [exportIncludeModel, setExportIncludeModel] = useState(true)
   const [exportingGLB, setExportingGLB] = useState(false)
+
+  // AutoRig (free): automatic Mixamo skeleton or symmetric joint placement
+  const [showAutoRigModal, setShowAutoRigModal] = useState(false)
+  const [autoRigPlacing, setAutoRigPlacing] = useState(false)
+  const [autoRigApplying, setAutoRigApplying] = useState(false)
+  const [autoRigStep, setAutoRigStep] = useState(0)
+  const [autoRigSymmetry, setAutoRigSymmetry] = useState(true)
+  const [autoRigJoints, setAutoRigJoints] = useState<JointMap>({})
+  const [autoRigEstimate, setAutoRigEstimate] = useState<AutoRigEstimate | null>(null)
+  const autoRigPlacingRef = useRef(false)
+  const autoRigStepRef = useRef(0)
+  const autoRigSymmetryRef = useRef(true)
+  const autoRigJointsRef = useRef<JointMap>({})
+  const autoRigEstimateRef = useRef<AutoRigEstimate | null>(null)
+  const autoRigPreviewRef = useRef<THREE.Group | null>(null)
   
   // Keyframe selection state
   const [selectedKeyframes, setSelectedKeyframes] = useState<Set<string>>(new Set()) // Set of "frame:boneName" strings
@@ -617,16 +654,23 @@ export default function ThreeEditor({
     const axesHelper = new THREE.AxesHelper(2)
     scene.add(axesHelper)
 
-    // Bone lines group
+    // Bone lines group — visibility matches the toolbar toggle from the first frame
     const boneLinesGroup = new THREE.Group()
+    boneLinesGroup.visible = showBoneViewRef.current
     scene.add(boneLinesGroup)
     boneLinesGroupRef.current = boneLinesGroup
 
     // Bone visualizer group (for octahedron helpers)
     const boneVisualizerGroup = new THREE.Group()
+    boneVisualizerGroup.visible = showBoneViewRef.current
     boneVisualizerGroup.renderOrder = 1000
     scene.add(boneVisualizerGroup)
     boneVisualizerGroupRef.current = boneVisualizerGroup
+
+    const autoRigPreview = new THREE.Group()
+    autoRigPreview.name = 'AutoRigPreview'
+    scene.add(autoRigPreview)
+    autoRigPreviewRef.current = autoRigPreview
 
     // Handle resize
     const handleResize = () => {
@@ -820,14 +864,11 @@ export default function ThreeEditor({
         }
       }
 
-      // Update bone lines and helpers
-      if (showBoneView) {
-        if (boneLinesGroupRef.current) {
-        updateBoneLines()
-        }
-        if (boneVisualizerGroupRef.current) {
-          updateBoneHelperPositions()
-        }
+      // Refs, not the render that started the loop: the skeleton is built later,
+      // and the toggle has to move markers that did not exist on the first frame.
+      if (showBoneViewRef.current) {
+        updateBoneLinesRef.current()
+        updateBoneHelperPositionsRef.current()
       }
 
       // Keep the model selection outline glued to the model as it moves/scales/rotates
@@ -841,7 +882,7 @@ export default function ThreeEditor({
     animate()
 
     return () => cancelAnimationFrame(animationIdRef.current)
-  }, [showBoneView, sceneReady])
+  }, [sceneReady])
 
   // Update transform controls mode
   useEffect(() => {
@@ -893,15 +934,20 @@ export default function ThreeEditor({
     }
   }, [showGrid])
 
-  // Bone view visibility
-  useEffect(() => {
-    if (boneLinesGroupRef.current) {
-      boneLinesGroupRef.current.visible = showBoneView
-    }
+  // Place the skeleton before paint whenever the toggle or the bone set changes.
+  // Markers are created after the first frame, so a toggle-only effect never sees them.
+  useLayoutEffect(() => {
+    const visible = showBoneView
+    if (boneLinesGroupRef.current) boneLinesGroupRef.current.visible = visible
+    if (boneVisualizerGroupRef.current) boneVisualizerGroupRef.current.visible = visible
     boneHelpersRef.current.forEach(helper => {
-      helper.visible = showBoneView
+      helper.visible = visible
     })
-  }, [showBoneView])
+    if (!visible) return
+    modelRef.current?.updateMatrixWorld(true)
+    updateBoneLinesRef.current()
+    updateBoneHelperPositionsRef.current()
+  }, [showBoneView, bones, modelLoaded])
 
   // Load sample model from assets
   const loadSampleModel = useCallback(async () => {
@@ -999,21 +1045,7 @@ export default function ThreeEditor({
           }
         })
 
-        // Create bone helpers in visualizer group
-    const helpers: THREE.Group[] = []
-    boneMap.forEach((bone, name) => {
-      const helper = createBoneHelper(name)
-          helper.userData.boneName = name
-          helper.userData.bone = bone
-          if (boneVisualizerGroupRef.current) {
-            boneVisualizerGroupRef.current.add(helper)
-          }
-      helpers.push(helper)
-    })
-    boneHelpersRef.current = helpers
-
-    // Create bone lines
-    createBoneLines(boneMap)
+        mountBoneVisuals(boneMap)
 
     setBones(boneMap)
     originalTransformsRef.current = originalTransforms
@@ -1149,13 +1181,18 @@ export default function ThreeEditor({
     core.renderOrder = 102
     group.add(core)
 
+    group.frustumCulled = false
+    group.traverse(obj => { obj.frustumCulled = false })
     return group
   }
 
   const createBoneLines = (boneMap: Map<string, THREE.Bone>) => {
     if (!boneLinesGroupRef.current) return
 
+    modelRef.current?.updateMatrixWorld(true)
     boneLinesGroupRef.current.clear()
+    const parentPos = new THREE.Vector3()
+    const childPos = new THREE.Vector3()
 
     boneMap.forEach((bone) => {
       if (bone.parent && (bone.parent as THREE.Bone).isBone) {
@@ -1166,15 +1203,27 @@ export default function ThreeEditor({
         })
         const geometry = new THREE.BufferGeometry()
         const positions = new Float32Array(6)
+        const parentBone = bone.parent as THREE.Bone
+        parentBone.getWorldPosition(parentPos)
+        bone.getWorldPosition(childPos)
+        positions[0] = parentPos.x
+        positions[1] = parentPos.y
+        positions[2] = parentPos.z
+        positions[3] = childPos.x
+        positions[4] = childPos.y
+        positions[5] = childPos.z
         geometry.setAttribute('position', new THREE.BufferAttribute(positions, 3))
+        geometry.computeBoundingSphere()
 
         const line = new THREE.Line(geometry, material)
+        line.frustumCulled = false
         line.renderOrder = 1001
-        line.userData.parentBone = bone.parent
+        line.userData.parentBone = parentBone
         line.userData.childBone = bone
         boneLinesGroupRef.current!.add(line)
       }
     })
+    boneLinesGroupRef.current.visible = showBoneViewRef.current
   }
 
   const updateBoneLines = () => {
@@ -1199,26 +1248,52 @@ export default function ThreeEditor({
         positions[4] = childPos.y
         positions[5] = childPos.z
         line.geometry.attributes.position.needsUpdate = true
+        line.geometry.computeBoundingSphere()
+        line.frustumCulled = false
       }
     })
   }
 
-  // Update bone helper positions to match bone world positions
+  // Update bone helper positions to match bone world positions.
+  // Read the live bone map: this runs from a loop started before any model exists.
   const updateBoneHelperPositions = () => {
+    modelRef.current?.updateMatrixWorld(true)
     boneHelpersRef.current.forEach(helper => {
-      const boneName = helper.userData.boneName
-      const bone = bones.get(boneName)
+      const boneName = helper.userData.boneName as string
+      const bone = (helper.userData.bone as THREE.Bone | undefined) || bonesRef.current.get(boneName)
       if (bone) {
         const worldPos = new THREE.Vector3()
         bone.getWorldPosition(worldPos)
         helper.position.copy(worldPos)
-        
-        // Optional: match bone rotation
+
         const worldQuat = new THREE.Quaternion()
         bone.getWorldQuaternion(worldQuat)
         helper.quaternion.copy(worldQuat)
       }
     })
+  }
+  updateBoneLinesRef.current = updateBoneLines
+  updateBoneHelperPositionsRef.current = updateBoneHelperPositions
+
+  const mountBoneVisuals = (boneMap: Map<string, THREE.Bone>) => {
+    if (boneVisualizerGroupRef.current) boneVisualizerGroupRef.current.clear()
+    const helpers: THREE.Group[] = []
+    const visible = showBoneViewRef.current
+    boneMap.forEach((bone, name) => {
+      const helper = createBoneHelper(name)
+      helper.userData.boneName = name
+      helper.userData.bone = bone
+      helper.visible = visible
+      boneVisualizerGroupRef.current?.add(helper)
+      helpers.push(helper)
+    })
+    boneHelpersRef.current = helpers
+    createBoneLines(boneMap)
+    if (boneVisualizerGroupRef.current) boneVisualizerGroupRef.current.visible = visible
+    if (visible) {
+      updateBoneLines()
+      updateBoneHelperPositions()
+    }
   }
 
   const handleBoneSelect = useCallback((boneName: string) => {
@@ -1290,6 +1365,190 @@ export default function ThreeEditor({
     setIsModelSelected(false)
     resetBoneHelperVisuals()
   }, [resetBoneHelperVisuals])
+
+  const paintAutoRigPreview = useCallback((joints: JointMap, active?: string) => {
+    const group = autoRigPreviewRef.current
+    if (!group) return
+    while (group.children.length) {
+      const child = group.children[0]
+      group.remove(child)
+      child.traverse((obj) => {
+        const mesh = obj as THREE.Mesh
+        if (mesh.isMesh) {
+          mesh.geometry.dispose()
+          const mat = mesh.material
+          if (Array.isArray(mat)) mat.forEach((m) => m.dispose())
+          else (mat as THREE.Material | undefined)?.dispose()
+        }
+      })
+    }
+
+    const height = autoRigEstimateRef.current?.height || 1.8
+    const radius = Math.max(0.02, height * 0.016)
+    const placed = Object.entries(joints) as [MixamoBoneName, THREE.Vector3][]
+
+    for (const [name, pos] of placed) {
+      if (!pos) continue
+      const isActive = name === active
+      const isLeft = name.startsWith('Left')
+      const geo = new THREE.SphereGeometry(isActive ? radius * 1.35 : radius, 16, 16)
+      const mat = new THREE.MeshBasicMaterial({
+        color: isActive ? 0xfacc15 : isLeft ? 0x38bdf8 : name.startsWith('Right') ? 0xf472b6 : 0x22c55e,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.95,
+      })
+      const sphere = new THREE.Mesh(geo, mat)
+      sphere.position.copy(pos)
+      sphere.renderOrder = 2000
+      sphere.userData.jointName = name
+      sphere.userData.isAutoRigMarker = true
+      group.add(sphere)
+    }
+
+    const links: [MixamoBoneName, MixamoBoneName][] = [
+      ['Hips', 'Spine'], ['Spine', 'Spine1'], ['Spine1', 'Spine2'], ['Spine2', 'Neck'], ['Neck', 'Head'],
+      ['Spine2', 'LeftShoulder'], ['LeftShoulder', 'LeftArm'], ['LeftArm', 'LeftForeArm'], ['LeftForeArm', 'LeftHand'],
+      ['Spine2', 'RightShoulder'], ['RightShoulder', 'RightArm'], ['RightArm', 'RightForeArm'], ['RightForeArm', 'RightHand'],
+      ['Hips', 'LeftUpLeg'], ['LeftUpLeg', 'LeftLeg'], ['LeftLeg', 'LeftFoot'], ['LeftFoot', 'LeftToeBase'],
+      ['Hips', 'RightUpLeg'], ['RightUpLeg', 'RightLeg'], ['RightLeg', 'RightFoot'], ['RightFoot', 'RightToeBase'],
+    ]
+    for (const [a, b] of links) {
+      const pa = joints[a]
+      const pb = joints[b]
+      if (!pa || !pb) continue
+      const geo = new THREE.BufferGeometry().setFromPoints([pa, pb])
+      const line = new THREE.Line(geo, new THREE.LineBasicMaterial({
+        color: 0x4ade80,
+        depthTest: false,
+        transparent: true,
+        opacity: 0.7,
+      }))
+      line.renderOrder = 1999
+      group.add(line)
+    }
+  }, [])
+
+  const refreshBoneEditorState = useCallback((boneMap: Map<string, THREE.Bone>) => {
+    const originalTransforms = new Map<string, { position: THREE.Vector3; rotation: THREE.Euler; scale: THREE.Vector3 }>()
+    boneMap.forEach((bone, name) => {
+      originalTransforms.set(name, {
+        position: bone.position.clone(),
+        rotation: bone.rotation.clone(),
+        scale: bone.scale.clone(),
+      })
+    })
+    mountBoneVisuals(boneMap)
+    setBones(boneMap)
+    originalTransformsRef.current = originalTransforms
+    setSelectedBone(null)
+    setIsModelSelected(false)
+    setHistory([])
+    setHistoryIndex(-1)
+  }, [])
+
+  const cancelAutoRigPlacement = useCallback(() => {
+    autoRigPlacingRef.current = false
+    setAutoRigPlacing(false)
+    autoRigPreviewRef.current?.clear()
+    setShowAutoRigModal(false)
+  }, [])
+
+  const commitAutoRig = useCallback(async (joints: Record<MixamoBoneName, THREE.Vector3>) => {
+    if (!modelRef.current) return
+    setAutoRigApplying(true)
+    try {
+      const { boneMap } = applyAutoRig(modelRef.current, joints)
+      modelRef.current.updateMatrixWorld(true)
+      refreshBoneEditorState(boneMap)
+      setModelLoaded(true)
+      setShowWelcome(false)
+      setShowBoneView(true)
+      autoRigPlacingRef.current = false
+      setAutoRigPlacing(false)
+      setShowAutoRigModal(false)
+      autoRigPreviewRef.current?.clear()
+
+      await new Promise<void>((resolve, reject) => {
+        const exporter = new GLTFExporter()
+        exporter.parse(
+          modelRef.current!,
+          (result) => {
+            modelDataRef.current = arrayBufferToBase64(result as ArrayBuffer)
+            notifyChangeRef.current?.()
+            resolve()
+          },
+          (err) => reject(err),
+          { binary: true },
+        )
+      })
+      showToast(`AutoRig complete — ${boneMap.size} joints mapped to the mesh.`, 'success')
+    } catch (err) {
+      console.error(err)
+      showToast('AutoRig failed. Try placing joints manually.', 'error')
+    } finally {
+      setAutoRigApplying(false)
+    }
+  }, [refreshBoneEditorState, showToast])
+
+  const openAutoRig = useCallback(() => {
+    if (!modelRef.current) {
+      showToast('Load a mesh first', 'warning')
+      return
+    }
+    const estimate = estimateHumanoidJoints(modelRef.current)
+    setAutoRigEstimate(estimate)
+    autoRigEstimateRef.current = estimate
+    setShowAutoRigModal(true)
+  }, [showToast])
+
+  const beginPlaceJoints = useCallback(() => {
+    if (!modelRef.current) return
+    const estimate = autoRigEstimateRef.current || estimateHumanoidJoints(modelRef.current)
+    if (!estimate) {
+      showToast('Could not read this mesh', 'error')
+      return
+    }
+    autoRigEstimateRef.current = estimate
+    setAutoRigEstimate(estimate)
+    const seeded = { ...estimate.joints } as JointMap
+    autoRigJointsRef.current = seeded
+    setAutoRigJoints(seeded)
+    autoRigPlacingRef.current = true
+    setAutoRigPlacing(true)
+    autoRigStepRef.current = 0
+    setAutoRigStep(0)
+    autoRigSymmetryRef.current = true
+    setAutoRigSymmetry(true)
+    setShowAutoRigModal(false)
+    setShowWelcome(false)
+    handleDeselect()
+    paintAutoRigPreview(seeded, PLACE_STEPS[0].id)
+    showToast('Click the mesh to place each joint. Left side mirrors to the right.', 'info')
+  }, [handleDeselect, paintAutoRigPreview, showToast])
+
+  const runAutomaticRig = useCallback(async () => {
+    if (!modelRef.current) return
+    const estimate = estimateHumanoidJoints(modelRef.current)
+    if (!estimate) {
+      showToast('Could not analyse this mesh. Place joints instead.', 'warning')
+      beginPlaceJoints()
+      return
+    }
+    autoRigEstimateRef.current = estimate
+    setAutoRigEstimate(estimate)
+    await commitAutoRig(estimate.joints)
+  }, [beginPlaceJoints, commitAutoRig, showToast])
+
+  const applyPlacedRig = useCallback(async () => {
+    const estimate = autoRigEstimateRef.current
+    if (!estimate) {
+      showToast('No mesh estimate available', 'error')
+      return
+    }
+    const full = expandJoints(autoRigJointsRef.current, estimate)
+    await commitAutoRig(full)
+  }, [commitAutoRig, showToast])
 
   const addKeyframe = useCallback(() => {
     if (!selectedBone || !currentAnimationId) {
@@ -1959,26 +2218,7 @@ export default function ThreeEditor({
             }
           })
 
-          // Create bone helpers (octahedron/diamond shapes) - add to visualizer group for visibility
-          // Clear existing helpers
-          if (boneVisualizerGroupRef.current) {
-            boneVisualizerGroupRef.current.clear()
-          }
-          const helpers: THREE.Group[] = []
-          boneMap.forEach((bone, name) => {
-            const helper = createBoneHelper(name)
-            helper.userData.boneName = name
-            helper.userData.bone = bone
-            // Add to visualizer group instead of bone (better visibility)
-            if (boneVisualizerGroupRef.current) {
-              boneVisualizerGroupRef.current.add(helper)
-            }
-            helpers.push(helper)
-          })
-          boneHelpersRef.current = helpers
-
-          // Create bone lines
-          createBoneLines(boneMap)
+          mountBoneVisuals(boneMap)
 
           setBones(boneMap)
           originalTransformsRef.current = originalTransforms
@@ -2041,7 +2281,10 @@ export default function ThreeEditor({
             }]]))
             setCurrentAnimationId(defaultAnimId)
 
-          showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
+            showToast(`Model loaded! Found ${boneMap.size} bones.`, 'success')
+          }
+          if (boneMap.size === 0) {
+            setShowAutoRigModal(true)
           }
         }, (error) => {
           console.error('GLB load error:', error)
@@ -2138,21 +2381,7 @@ export default function ThreeEditor({
           }
         })
 
-        // Create bone helpers
-        if (boneVisualizerGroupRef.current) {
-          boneVisualizerGroupRef.current.clear()
-        }
-        const helpers: THREE.Group[] = []
-        boneMap.forEach((bone, name) => {
-          const helper = createBoneHelper(name)
-          helper.userData.boneName = name
-          helper.userData.bone = bone
-          if (boneVisualizerGroupRef.current) {
-            boneVisualizerGroupRef.current.add(helper)
-          }
-          helpers.push(helper)
-        })
-        boneHelpersRef.current = helpers
+        mountBoneVisuals(boneMap)
 
         setBones(boneMap)
         originalTransformsRef.current = originalTransforms
@@ -2729,6 +2958,51 @@ export default function ThreeEditor({
       const raycaster = new THREE.Raycaster()
       raycaster.setFromCamera(mouse, cameraRef.current)
 
+      if (autoRigPlacingRef.current && modelRef.current) {
+        const step = PLACE_STEPS[autoRigStepRef.current]
+        if (!step) return
+
+        if (autoRigPreviewRef.current) {
+          const markerHits = raycaster.intersectObject(autoRigPreviewRef.current, true)
+          if (markerHits.length > 0) {
+            let obj: THREE.Object3D | null = markerHits[0].object
+            while (obj && !obj.userData.jointName) obj = obj.parent
+            const name = obj?.userData.jointName as PlaceJointId | undefined
+            const idx = PLACE_STEPS.findIndex((s) => s.id === name)
+            if (idx >= 0) {
+              autoRigStepRef.current = idx
+              setAutoRigStep(idx)
+              paintAutoRigPreview(autoRigJointsRef.current, PLACE_STEPS[idx].id)
+            }
+            return
+          }
+        }
+
+        const hits = raycaster.intersectObject(modelRef.current, true)
+        if (hits.length === 0) return
+        const hit = hits[0]
+        const estimate = autoRigEstimateRef.current
+        const centerX = estimate?.box.center.x ?? 0
+        const height = estimate?.height ?? 1.8
+        const normal = new THREE.Vector3()
+        if (hit.face) {
+          const nm = new THREE.Matrix3().getNormalMatrix(hit.object.matrixWorld)
+          normal.copy(hit.face.normal).applyMatrix3(nm).normalize()
+        } else {
+          normal.set(0, 0, 1)
+        }
+        const placed = interiorizeHit(hit.point.clone(), normal, step.id, height, centerX)
+        let joints: JointMap = { ...autoRigJointsRef.current, [step.id]: placed }
+        if (autoRigSymmetryRef.current) joints = applySymmetry(joints, centerX)
+        autoRigJointsRef.current = joints
+        setAutoRigJoints(joints)
+        const next = Math.min(PLACE_STEPS.length - 1, autoRigStepRef.current + 1)
+        autoRigStepRef.current = next
+        setAutoRigStep(next)
+        paintAutoRigPreview(joints, PLACE_STEPS[next].id)
+        return
+      }
+
       const meshesToTest: THREE.Mesh[] = []
       boneHelpersRef.current.forEach(helper => {
         helper.traverse(child => {
@@ -2771,7 +3045,7 @@ export default function ThreeEditor({
       canvas.removeEventListener('pointerdown', handlePointerDown)
       canvas.removeEventListener('click', handleClick)
     }
-  }, [handleBoneSelect, handleModelSelect, handleDeselect])
+  }, [handleBoneSelect, handleModelSelect, handleDeselect, paintAutoRigPreview])
 
   // Drag and drop
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -3599,10 +3873,7 @@ export default function ThreeEditor({
             )
           : new THREE.Vector3(deltaX, 1 + deltaY, deltaZ)
 
-        // Hybrid: 2D silhouette xy + scaled world z (torso-damped). Used for spine,
-        // shoulders, and IK end-effector xy so the model still matches the video.
-        const msI = mid(img[11], img[12]), mhI = mid(img[23], img[24])
-        const imgTorso = Math.hypot((msI.x - mhI.x) * aspect, msI.y - mhI.y) || 1e-6
+        // World torso scales hip depth. The silhouette itself comes from hybridOf.
         const msW = mid(wld[11], wld[12]), mhW = mid(wld[23], wld[24])
         const worldTorso = Math.hypot(msW.x - mhW.x, msW.y - mhW.y, msW.z - mhW.z) || 1e-6
         const w3d: Pt[] = wld.map((l: any) => ({ x: l.x, y: l.y, z: l.z || 0 }))
@@ -4319,7 +4590,7 @@ export default function ThreeEditor({
             
             <div className="mt-8 pt-6 border-t border-[#252b3d]">
               <p className="text-xs text-[#71717a]">
-                Drop a .glb or .gltf file anywhere to import
+                Drop a .glb or .gltf file anywhere. Unrigged meshes can be AutoRigged for free.
               </p>
             </div>
           </div>
@@ -4465,6 +4736,17 @@ export default function ThreeEditor({
         >
           <Bone className="w-5 h-5" />
         </button>
+        <button
+          onClick={openAutoRig}
+          disabled={!modelLoaded || autoRigApplying}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
+            autoRigPlacing ? 'bg-[#22c55e] text-[#09090b]' : 'text-[#a1a1aa] hover:bg-[#1c2130]'
+          } disabled:opacity-30`}
+          title="AutoRig — map a Mixamo skeleton to this mesh (Free)"
+        >
+          <Wand2 className="w-5 h-5" />
+          <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">FREE</span>
+        </button>
         <div className="w-px h-8 my-1 bg-[#252b3d]" />
         
         {/* AI Video Motion Capture (Pro) */}
@@ -4476,7 +4758,8 @@ export default function ThreeEditor({
               return
             }
             if (bones.size === 0) {
-              showToast('Load a model with a skeleton first', 'warning')
+              showToast('AutoRig this mesh first so capture has joints to map', 'warning')
+              setShowAutoRigModal(true)
               return
             }
             setShowVideoModal(true)
@@ -4598,6 +4881,16 @@ export default function ThreeEditor({
                 {name}
               </div>
             ))}
+            {modelLoaded && bones.size === 0 && (
+              <button
+                onClick={openAutoRig}
+                className="mt-2 w-full px-2 py-3 rounded-lg bg-[#22c55e]/10 border border-[#22c55e]/30 text-[#22c55e] text-xs font-medium hover:bg-[#22c55e]/20 transition-colors flex flex-col items-center gap-1"
+              >
+                <Wand2 className="w-4 h-4" />
+                AutoRig this mesh
+                <span className="text-[10px] text-[#71717a] font-normal">Free · Mixamo joints</span>
+              </button>
+            )}
           </div>
         </div>
         <div className="p-3 border-t border-[#252b3d]">
