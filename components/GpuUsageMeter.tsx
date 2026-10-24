@@ -20,16 +20,16 @@ export default function GpuUsageMeter({
   const exhausted = remaining <= 0
 
   return (
-    <div className={compact ? '' : 'space-y-2'}>
+    <div className={compact ? 'min-w-[220px]' : 'space-y-2'}>
       <div className="flex items-center justify-between gap-3">
-        <p className={compact ? 'text-[11px] text-[#71717a]' : 'text-xs text-dark-500'}>
+        <p className={`whitespace-nowrap shrink-0 ${compact ? 'text-[11px] leading-none text-[#71717a]' : 'text-xs text-dark-500'}`}>
           Studio 3D captures
         </p>
-        <p className={`font-mono ${compact ? 'text-xs' : 'text-sm'} ${exhausted ? 'text-amber-400' : 'text-frim-400'}`}>
+        <p className={`font-mono tabular-nums whitespace-nowrap shrink-0 ${compact ? 'text-xs leading-none' : 'text-sm'} ${exhausted ? 'text-amber-400' : 'text-frim-400'}`}>
           {used} / {limit}
         </p>
       </div>
-      <div className={`bg-dark-800 rounded-full overflow-hidden ${compact ? 'h-1.5' : 'h-2'}`}>
+      <div className={`bg-dark-800 rounded-full overflow-hidden ${compact ? 'h-1.5 mt-1.5' : 'h-2'}`}>
         <div
           className={`h-full rounded-full transition-all ${exhausted ? 'bg-amber-400' : 'bg-gradient-to-r from-frim-500 to-frim-400'}`}
           style={{ width: `${pct}%` }}

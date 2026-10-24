@@ -103,9 +103,9 @@ export function SiteFooter() {
 }
 
 const AUTH_POINTS = [
-  'Import GLB files and pose the skeleton',
+  'Free plan, no credit card',
+  'Import a GLB and pose the skeleton',
   'Keyframe, play back, and export',
-  'Cloud projects on every plan',
 ]
 
 export function AuthShell({
@@ -130,10 +130,10 @@ export function AuthShell({
         </Link>
         <div className="relative max-w-md">
           <p className="font-display text-4xl font-semibold leading-tight text-balance">
-            Animate in the browser.
+            Your first animation is free.
           </p>
           <p className="mt-4 text-dark-300 leading-relaxed">
-            Pose a rig, set keyframes, and export a GLB. No install, and your projects stay in the cloud.
+            Open a project, pose a character, and export a GLB. Three projects are included. Paid plans cancel anytime.
           </p>
         </div>
         <ul className="relative space-y-3">

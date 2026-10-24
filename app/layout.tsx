@@ -23,8 +23,8 @@ const jetbrains = JetBrains_Mono({
 })
 
 export const metadata: Metadata = {
-  title: 'Frim - GLB Animation Editor',
-  description: 'Create skeletal animations for your 3D models. Import GLB files, pose bones, add keyframes, and export production-ready animations.',
+  title: 'Frim — Animate 3D characters in the browser',
+  description: 'Import a GLB, pose the skeleton, and export a clip. Frim is a browser animation editor with a free plan. No install and no credit card.',
 }
 
 export const viewport = {

@@ -474,10 +474,10 @@ function DashboardContent() {
           {/* Usage indicator */}
           {subscription && (
             <div className="bg-dark-900 border border-dark-800 rounded-xl px-4 py-3">
-              <div className="flex items-center gap-4">
-                <div>
+              <div className="flex flex-wrap items-center gap-x-5 gap-y-3">
+                <div className="shrink-0">
                   <p className="text-xs text-dark-500 mb-1">Projects</p>
-                  <p className="font-mono text-sm">
+                  <p className="font-mono text-sm whitespace-nowrap">
                     <span className="text-frim-400">{subscription.usage.projects}</span>
                     <span className="text-dark-600"> / </span>
                     <span className="text-dark-400">
@@ -486,7 +486,7 @@ function DashboardContent() {
                   </p>
                 </div>
                 {isStudio && (
-                  <div className="min-w-[160px]">
+                  <div className="w-[240px] max-w-full shrink-0">
                     <GpuUsageMeter
                       used={subscription.usage.gpuCapturesUsed ?? 0}
                       included={subscription.usage.gpuCapturesIncluded ?? 40}
@@ -546,7 +546,7 @@ function DashboardContent() {
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11H5m14 0a2 2 0 012 2v6a2 2 0 01-2 2H5a2 2 0 01-2-2v-6a2 2 0 012-2m14 0V9a2 2 0 00-2-2M5 11V9a2 2 0 012-2m0 0V5a2 2 0 012-2h6a2 2 0 012 2v2M7 7h10" />
               </svg>
             </div>
-            <h2 className="text-xl font-semibold mb-2">No projects yet</h2>
+            <h2 className="font-display text-2xl font-semibold mb-2">Make the first pose</h2>
             <p className="text-dark-300 mb-6 max-w-sm">Create a project, load a GLB, and the editor opens with a timeline ready for the first keyframe.</p>
             <button
               onClick={handleNewProjectClick}

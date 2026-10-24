@@ -348,7 +348,7 @@ export default function EditorPage() {
             <span className="text-[11px] text-amber-300 bg-amber-400/10 border border-amber-400/20 px-2 py-0.5 rounded-full shrink-0">Unsaved</span>
           )}
           {isStudio && (
-            <div className="hidden md:block w-40">
+            <div className="hidden lg:block shrink-0">
               <GpuUsageMeter
                 used={subscription?.usage?.gpuCapturesUsed ?? 0}
                 included={subscription?.usage?.gpuCapturesIncluded ?? 40}

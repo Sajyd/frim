@@ -58,7 +58,7 @@ export default function Register() {
       : `${6 - password.length} more character${6 - password.length === 1 ? '' : 's'}`
 
   return (
-    <AuthShell title="Create your account" subtitle="Start a project in under a minute">
+    <AuthShell title="Create your account" subtitle="Free plan. No credit card.">
       <OAuthButtons onSelect={(provider) => signIn(provider, { callbackUrl: '/dashboard' })} />
 
       <div className="relative my-6">

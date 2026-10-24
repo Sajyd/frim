@@ -13,7 +13,7 @@ const plans = [
   {
     id: 'free',
     name: 'Free',
-    description: 'Perfect for getting started',
+    description: 'Learn the editor on a real model',
     price: 0,
     period: '',
     features: [
@@ -36,7 +36,7 @@ const plans = [
   {
     id: 'pro',
     name: 'Pro',
-    description: 'For professional animators',
+    description: 'Capture a performance from video',
     price: 12,
     period: '/month',
     features: [
@@ -58,7 +58,7 @@ const plans = [
   {
     id: 'studio',
     name: 'Studio',
-    description: 'GPU 3D capture for production',
+    description: 'Retarget 3D motion onto your GLB',
     price: 39,
     period: '/month',
     features: [
@@ -216,7 +216,7 @@ function PricingContent() {
       <div className="fixed inset-0 pointer-events-none overflow-hidden">
         <div className="absolute inset-0 bg-gradient-to-b from-frim-500/5 via-transparent to-transparent" />
         <div className="glow-effect w-[600px] h-[600px] bg-frim-500 -top-48 left-1/4 opacity-30" />
-        <div className="glow-effect w-[400px] h-[400px] bg-purple-500 bottom-1/4 right-1/4 opacity-20" style={{ animationDelay: '-7s' }} />
+        <div className="glow-effect w-[400px] h-[400px] bg-emerald-500 bottom-1/4 right-1/4 opacity-20" style={{ animationDelay: '-7s' }} />
       </div>
 
       <MarketingNav>
@@ -230,7 +230,7 @@ function PricingContent() {
               Sign in
             </Link>
             <Link href="/auth/register" className="btn-primary text-sm py-2 px-4">
-              Get started
+              Start free
             </Link>
           </>
         )}
@@ -269,11 +269,11 @@ function PricingContent() {
             <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
             Simple, transparent pricing
           </div>
-          <h1 className="font-display text-4xl md:text-5xl font-bold mb-6">
-            Choose your <span className="gradient-text">plan</span>
+          <h1 className="font-display text-4xl md:text-6xl font-bold mb-6 text-balance">
+            Start free. Upgrade when the clip needs <span className="gradient-text">capture.</span>
           </h1>
-          <p className="text-lg text-dark-300 max-w-2xl mx-auto">
-            Start free, upgrade to Pro for Fast capture, or Studio for GPU 3D. Extra Studio captures are $1 each.
+          <p className="text-lg text-dark-200 max-w-2xl mx-auto">
+            The editor is included on every plan. Pro adds video capture. Studio adds GPU 3D, with 40 captures a month and $1 after that.
           </p>
         </div>
       </section>
@@ -389,6 +389,9 @@ function PricingContent() {
               </div>
             ))}
           </div>
+          <p className="text-center text-sm text-dark-400 mt-8">
+            Stripe handles payment. Cancel whenever you like and keep paid features through the end of the period.
+          </p>
         </div>
       </section>
 

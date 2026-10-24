@@ -88,6 +88,11 @@ a:focus-visible {
 /* Button styles */
 .btn-primary {
   @apply inline-flex items-center justify-center gap-2 bg-frim-500 text-dark-950 px-5 py-2.5 rounded-xl font-semibold transition-all hover:bg-frim-400 hover:-translate-y-0.5 active:translate-y-0 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-frim-300 focus-visible:ring-offset-2 focus-visible:ring-offset-dark-950 disabled:opacity-50 disabled:pointer-events-none disabled:transform-none;
+  box-shadow: 0 0 0 1px rgba(34, 197, 94, 0.45), 0 10px 28px rgba(34, 197, 94, 0.22);
+}
+
+.btn-primary:hover {
+  box-shadow: 0 0 0 1px rgba(134, 239, 172, 0.7), 0 14px 36px rgba(34, 197, 94, 0.34);
 }
 
 .btn-secondary {

@@ -56,60 +56,77 @@ export default function Home() {
           Sign in
         </Link>
         <Link href="/auth/register" className="btn-primary text-sm py-2 px-4">
-          Get started
+          Start free
         </Link>
       </MarketingNav>
 
-      {/* Hero Section */}
-      <section id="main" className="relative min-h-screen flex items-center pt-16">
-        <div className="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-16 items-center">
+      <section id="main" className="relative pt-28 pb-16 sm:pt-32 sm:pb-20">
+        <div className="max-w-7xl mx-auto px-6 grid lg:grid-cols-2 gap-12 lg:gap-16 items-center">
           <div className="max-w-xl">
-            <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/20 px-4 py-2 rounded-full text-sm text-frim-400 mb-6">
+            <div className="inline-flex items-center gap-2 bg-frim-500/10 border border-frim-500/20 px-4 py-2 rounded-full text-sm text-frim-300 mb-6">
               <span className="w-2 h-2 bg-frim-400 rounded-full animate-pulse" />
-              Web-Based Animation Tool
+              Free plan · No credit card
             </div>
-            
-            <h1 className="font-display text-5xl lg:text-6xl font-bold leading-[1.05] mb-6 text-balance">
-              Animate your<br />
-              <span className="gradient-text">3D models</span>
+
+            <h1 className="font-display text-5xl sm:text-6xl lg:text-7xl font-bold leading-[0.98] mb-6 text-balance">
+              Make the character <span className="gradient-text">move.</span>
             </h1>
-            
-            <p className="text-lg text-dark-300 mb-8 leading-relaxed">
-              Import a GLB, pose the skeleton, set keyframes, and export
-              a production animation. It all happens in the browser.
+
+            <p className="text-lg text-dark-200 mb-8 leading-relaxed">
+              Frim is a skeletal animation editor that opens in a tab.
+              Drop in a GLB, pose the bones, and export a clip you can use.
             </p>
 
-            <div className="flex flex-wrap gap-4 mb-10">
-              <Link href="/auth/register" className="btn-primary">
-                Start animating
+            <div className="flex flex-wrap gap-3 mb-6">
+              <Link href="/auth/register" className="btn-primary text-base px-6 py-3">
+                Start free
                 <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                 </svg>
               </Link>
-              <a href="#how-it-works" className="btn-secondary">
-                See how it works
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-                </svg>
-              </a>
+              <Link href="/pricing" className="btn-secondary text-base px-6 py-3">
+                Compare plans
+              </Link>
             </div>
 
-            <div className="flex flex-wrap gap-3">
-              {['No installation', 'GLB import & export', 'Cloud saves'].map((feature) => (
-                <div key={feature} className="flex items-center gap-2 bg-dark-900 px-3 py-2 rounded-full text-sm text-dark-400">
-                  <svg className="w-4 h-4 text-frim-500" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" />
-                  </svg>
-                  {feature}
-                </div>
-              ))}
-            </div>
+            <p className="text-sm text-dark-400">
+              3 projects on the free plan. Paid plans cancel anytime.
+            </p>
           </div>
 
-          {/* Visual Preview */}
-          <div className="hidden lg:flex justify-center">
+          <div className="flex justify-center">
             <HeroEditorPreview />
           </div>
+        </div>
+      </section>
+
+      <section className="relative px-6 pb-8">
+        <div className="max-w-6xl mx-auto grid md:grid-cols-3 gap-3">
+          {[
+            { name: 'Free', price: '$0', detail: 'Pose, keyframe, and export', href: '/auth/register', cta: 'Start free' },
+            { name: 'Pro', price: '$12', detail: 'Capture motion from a video', href: '/pricing', cta: 'See Pro' },
+            { name: 'Studio', price: '$39', detail: 'GPU 3D capture on your GLB', href: '/pricing', cta: 'See Studio' },
+          ].map((plan) => (
+            <Link
+              key={plan.name}
+              href={plan.href}
+              className={`rounded-2xl border p-5 transition-colors ${
+                plan.name === 'Pro'
+                  ? 'bg-frim-500/10 border-frim-500/40 hover:border-frim-400'
+                  : 'bg-dark-900/80 border-white/[0.06] hover:border-white/20'
+              }`}
+            >
+              <div className="flex items-baseline justify-between gap-3">
+                <p className="font-display text-lg font-semibold">{plan.name}</p>
+                <p className="font-display text-2xl font-bold">
+                  {plan.price}
+                  {plan.price !== '$0' && <span className="text-sm font-medium text-dark-400">/mo</span>}
+                </p>
+              </div>
+              <p className="mt-2 text-sm text-dark-300">{plan.detail}</p>
+              <p className="mt-4 text-sm font-semibold text-frim-400">{plan.cta} →</p>
+            </Link>
+          ))}
         </div>
       </section>
 
@@ -159,11 +176,11 @@ export default function Home() {
                   ))}
                 </ul>
                 
-                <Link href="/pricing" className="inline-flex items-center gap-2 bg-gradient-to-r from-frim-500 to-frim-400 text-dark-950 px-6 py-3 rounded-xl font-semibold hover:shadow-lg hover:shadow-frim-500/25 transition-all">
+                <Link href="/pricing" className="btn-primary">
+                  Unlock capture on Pro
                   <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 8l4 4m0 0l-4 4m4-4H3" />
                   </svg>
-                  See Pro and Studio
                 </Link>
               </div>
               
@@ -185,7 +202,7 @@ export default function Home() {
           <ol className="grid md:grid-cols-3 gap-4">
             {steps.map((step) => (
               <li key={step.title} className="bg-dark-900/80 border border-white/[0.06] rounded-2xl p-6">
-                <p className="font-mono text-xs text-frim-400 mb-3">{step.index}</p>
+                <p className="font-display text-3xl font-bold text-frim-400 mb-3">{step.index}</p>
                 <h3 className="font-display text-xl font-semibold mb-2">{step.title}</h3>
                 <p className="text-sm text-dark-300 leading-relaxed">{step.body}</p>
               </li>
@@ -198,8 +215,8 @@ export default function Home() {
       <section className="relative py-24 px-6" id="everything-you-need">
         <div className="max-w-6xl mx-auto">
           <div className="text-center mb-16">
-            <h2 className="font-display text-4xl font-bold mb-4">Everything you need</h2>
-            <p className="text-lg text-dark-400">Professional animation tools, right in your browser</p>
+            <h2 className="font-display text-4xl font-bold mb-4">Built for a finished clip</h2>
+            <p className="text-lg text-dark-300">The editor is free to try. Capture is what Pro and Studio add.</p>
           </div>
           
           <div className="grid md:grid-cols-2 lg:grid-cols-3 gap-6">
@@ -222,12 +239,18 @@ export default function Home() {
       </section>
 
       <section className="relative px-6 pb-24">
-        <div className="max-w-4xl mx-auto text-center bg-dark-900 border border-white/[0.06] rounded-3xl px-6 py-14">
-          <h2 className="font-display text-3xl md:text-4xl font-bold mb-3">Open the editor and try a pose</h2>
-          <p className="text-dark-300 mb-8 max-w-xl mx-auto">The sample model is one click away. Your first project is free.</p>
-          <Link href="/auth/register" className="btn-primary">
-            Create a free account
-          </Link>
+        <div className="max-w-4xl mx-auto text-center rounded-3xl border border-frim-500/30 bg-gradient-to-b from-frim-500/15 to-dark-900 px-6 py-16">
+          <p className="text-sm font-semibold text-frim-300 mb-3">No install. No card.</p>
+          <h2 className="font-display text-4xl md:text-5xl font-bold mb-4 text-balance">Open the editor and pose something.</h2>
+          <p className="text-dark-200 mb-8 max-w-xl mx-auto">The sample model is one click away. Your first project stays free.</p>
+          <div className="flex flex-wrap items-center justify-center gap-3">
+            <Link href="/auth/register" className="btn-primary text-base px-6 py-3">
+              Start free
+            </Link>
+            <Link href="/pricing" className="btn-secondary text-base px-6 py-3">
+              See pricing
+            </Link>
+          </div>
         </div>
       </section>
 
