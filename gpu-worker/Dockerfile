@@ -18,7 +18,7 @@ RUN mkdir -p /models && \
 ENV RTMW3D_ONNX=/models/rtmw3d-x.onnx
 ENV MOTIONBERT_ONNX=/models/motionbert_3d_81.onnx
 
-COPY infer.py worker.py ./
+COPY infer.py worker.py robust.py ./
 
 ENV PYTHONUNBUFFERED=1
 CMD ["python3", "worker.py"]

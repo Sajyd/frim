@@ -45,11 +45,13 @@ export async function POST(
         },
       })
       await refundGpuQuota(job.id)
-      await putGpuMetric('JobsFailed', 1)
-      await sendGpuAlert(
-        'Frim GPU capture failed',
-        `Job ${job.id} failed.\n${String(body.error || 'Worker failed').slice(0, 1000)}\nInstance: ${instanceId || 'unknown'}`,
-      )
+      if (body.notify !== false) {
+        await putGpuMetric('JobsFailed', 1)
+        await sendGpuAlert(
+          'Frim GPU capture failed',
+          `Job ${job.id} failed.\n${String(body.error || 'Worker failed').slice(0, 1000)}\nInstance: ${instanceId || 'unknown'}`,
+        )
+      }
       return NextResponse.json({ ok: true })
     }
 

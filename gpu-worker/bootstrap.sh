@@ -48,7 +48,7 @@ aws s3 sync "s3://${BUCKET}/worker/" /opt/frim-gpu-worker/ --region "$REGION"
 MOUNT=""
 PIP_CMD=""
 if [ -f /opt/frim-gpu-worker/infer.py ]; then
-  MOUNT="-v /opt/frim-gpu-worker/infer.py:/app/infer.py:ro -v /opt/frim-gpu-worker/worker.py:/app/worker.py:ro -v /opt/frim-gpu-worker/requirements.txt:/opt/frim-gpu-worker/requirements.txt:ro"
+  MOUNT="-v /opt/frim-gpu-worker/infer.py:/app/infer.py:ro -v /opt/frim-gpu-worker/worker.py:/app/worker.py:ro -v /opt/frim-gpu-worker/robust.py:/app/robust.py:ro -v /opt/frim-gpu-worker/requirements.txt:/opt/frim-gpu-worker/requirements.txt:ro"
   PIP_CMD="pip3 install --no-cache-dir -r /opt/frim-gpu-worker/requirements.txt && "
 fi
 

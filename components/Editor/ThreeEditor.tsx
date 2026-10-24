@@ -3584,7 +3584,7 @@ export default function ThreeEditor({
 
       const lmVis = (arr: any[], i: number) => arr[i]?.visibility ?? 0
 
-      frameEntries.forEach(({ frameIdx, data: frame }) => {
+      frameEntries.forEach(({ frameIdx, data: frame }, entryIndex) => {
         const img = frame!.image
         const wld = frame!.world
 
@@ -3693,7 +3693,11 @@ export default function ThreeEditor({
             let qTorso = torsoQuatFromWorld(hyb)
             if (qTorso) {
               if (prevTorsoQuat && quatAngle(qTorso, prevTorsoQuat) > 2.05) {
-                qTorso = prevTorsoQuat.clone()
+                const next = frameEntries[entryIndex + 1]
+                const nextQ = next ? torsoQuatFromWorld(hybridOf(next.data!.image, next.data!.world)) : null
+                // Hold only a one-frame flip. A real turn continues on the next frame.
+                const spike = !nextQ || quatAngle(prevTorsoQuat, nextQ) + 0.35 < quatAngle(qTorso, nextQ)
+                if (spike) qTorso = prevTorsoQuat.clone()
               } else if (!prevTorsoQuat && dominantTorso && quatAngle(qTorso, dominantTorso) > 2.05) {
                 qTorso = dominantTorso.clone()
               }

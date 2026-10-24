@@ -3,13 +3,15 @@
 Pipeline:
   1. RTMW3D-x (3D, CUDA) — 133 keypoints with real depth for body, feet, hands
   2. Fallback: RTMW 2D + MotionBERT if RTMW3D cannot load
-  3. Hip-centred metric skeleton so the editor rotates the user's mesh
+  3. Track one person, undo left/right flips, fill short dropouts, drop spikes
+  4. Hip-centred metric skeleton so the editor rotates the user's mesh
      without stretching it to the person in the video
-  4. Light median + Gaussian denoise (1-frame jitter only) so robotic snaps
+  5. Light median + Gaussian denoise (1-frame jitter only) so robotic snaps
      stay distinct from organic glides
 """
 from __future__ import annotations
 
+import json
 import math
 import os
 import subprocess
@@ -19,6 +21,23 @@ from typing import Any
 
 import cv2
 import numpy as np
+
+from robust import (
+    NO_PERSON_MESSAGE,
+    TOO_SHORT_MESSAGE,
+    UNREADABLE_MESSAGE,
+    CaptureRejected,
+    advance_sample,
+    body_valid,
+    clamp_limb_lengths,
+    enough_person,
+    gaussian_smooth_weighted,
+    normalize_rtmw3d,
+    repair_depth_spikes,
+    repair_sequence,
+    rotation_from_probe,
+    select_person,
+)
 
 
 class CaptureCancelled(Exception):
@@ -165,33 +184,53 @@ def get_motionbert():
 def extract_frames(video_path: str, max_fps: float = 30.0, max_side: int = 960) -> tuple[list[np.ndarray], float, int, int]:
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
-        raise RuntimeError('Could not open video')
+        raise CaptureRejected(UNREADABLE_MESSAGE)
     src_fps = cap.get(cv2.CAP_PROP_FPS) or 30.0
-    width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 1)
-    height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 1)
-    fps = min(max_fps, src_fps if src_fps > 1 else 30.0)
-    step = max(src_fps / fps, 1.0)
+    if not math.isfinite(src_fps) or src_fps < 1:
+        src_fps = 30.0
+    fps = min(max_fps, src_fps)
+    max_frames = int(90 * fps) + 2
 
     frames: list[np.ndarray] = []
-    idx = 0.0
     frame_i = 0
+    next_t = 0.0
+    next_index = 0.0
+    index_step = max(src_fps / fps, 1.0)
+    index_mode = False
+    t0 = 0.0
     while True:
         ok, frame = cap.read()
-        if not ok:
+        if not ok or frame is None or getattr(frame, 'size', 0) == 0:
             break
-        if frame_i >= idx:
+        t = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+        if frame_i == 0:
+            t0 = t
+            next_t = t
+        # Some decoders report 0 ms for every frame. Fall back to frame counting
+        # before that drops the start of the clip.
+        if not index_mode and frame_i >= 1 and (t - t0) < 0.5:
+            index_mode = True
+            next_index = index_step
+        if index_mode:
+            take = frame_i + 1e-3 >= next_index
+            if take:
+                next_index += index_step
+        else:
+            take, next_t = advance_sample(t, next_t, fps)
+        if take:
             h, w = frame.shape[:2]
-            scale = min(1.0, max_side / max(h, w))
+            scale = min(1.0, max_side / max(h, w, 1))
             if scale < 0.999:
-                frame = cv2.resize(frame, (int(w * scale), int(h * scale)), interpolation=cv2.INTER_AREA)
+                frame = cv2.resize(frame, (max(1, int(w * scale)), max(1, int(h * scale))), interpolation=cv2.INTER_AREA)
             frames.append(frame)
-            idx += step
+            if len(frames) >= max_frames:
+                break
         frame_i += 1
-        if len(frames) >= int(90 * fps) + 2:
+        if frame_i > 20000:
             break
     cap.release()
     if not frames:
-        raise RuntimeError('No frames decoded')
+        raise CaptureRejected(UNREADABLE_MESSAGE)
     fh, fw = frames[0].shape[:2]
     return frames, fps, fw, fh
 
@@ -215,53 +254,60 @@ def coco_xy_from_rtm(output) -> tuple[np.ndarray, np.ndarray]:
     return xy, sc
 
 
-def _person(arr: np.ndarray) -> np.ndarray:
-    a = np.asarray(arr)
-    if a.ndim == 3:
-        a = a[0]
-    return a.astype(np.float32)
+def _people_from_arrays(kpts, scores, xyz) -> list[tuple[np.ndarray, np.ndarray, np.ndarray | None]]:
+    """Normalize RTMPose output to a list of (xy, score, xyz-or-none) people."""
+    kpts = np.asarray(kpts, dtype=np.float32)
+    scores = np.asarray(scores, dtype=np.float32)
+    if kpts.size == 0:
+        return []
+    if kpts.ndim == 2:
+        kpts = kpts[None]
+    if kpts.ndim != 3:
+        return []
+    if scores.ndim == 3 and scores.shape[-1] == 1:
+        scores = scores[..., 0]
+    if scores.ndim == 1:
+        scores = np.broadcast_to(scores, (1, scores.shape[0])).copy()
+    if scores.ndim != 2 or scores.shape[0] != kpts.shape[0]:
+        scores = np.ones((kpts.shape[0], kpts.shape[1]), dtype=np.float32)
+    xyz_n = None
+    if xyz is not None:
+        xyz = np.asarray(xyz, dtype=np.float32)
+        if xyz.ndim == 2:
+            xyz = xyz[None]
+        if xyz.ndim == 3 and xyz.shape[0] == kpts.shape[0]:
+            xyz_n = xyz
+    people = []
+    for i in range(kpts.shape[0]):
+        xy = kpts[i, :, :2]
+        sc = np.nan_to_num(scores[i].reshape(-1)[: xy.shape[0]], nan=0.0, posinf=0.0, neginf=0.0)
+        if sc.shape[0] < xy.shape[0]:
+            pad = np.zeros(xy.shape[0], dtype=np.float32)
+            pad[: sc.shape[0]] = sc
+            sc = pad
+        z = None
+        if xyz_n is not None:
+            z = xyz_n[i, :, :3]
+            if not np.isfinite(z).any():
+                z = None
+        people.append((xy, np.clip(sc, 0, 1).astype(np.float32), z))
+    return people
 
 
-def decode_pose(model, frame) -> tuple[np.ndarray, np.ndarray, np.ndarray | None]:
-    """Returns (xy133_or_17, scores, xyz133_or_none)."""
+def decode_people(model, frame) -> list[tuple[np.ndarray, np.ndarray, np.ndarray | None]]:
+    """Every detected person as (xy, scores, xyz or None)."""
     out = model(frame)
     if isinstance(out, (tuple, list)) and len(out) >= 4:
-        k3d, scores, _, k2d = out[0], out[1], out[2], out[3]
-        xy = _person(k2d)[:, :2]
-        sc = _person(scores).reshape(-1)
-        xyz = _person(k3d)
-        if xyz.ndim == 2 and xyz.shape[1] >= 3:
-            return xy, sc[: xy.shape[0]], xyz[:, :3]
-        return xy, sc[: xy.shape[0]], None
+        return _people_from_arrays(out[3], out[1], out[0])
     if isinstance(out, (tuple, list)) and len(out) >= 2:
-        xy, sc = coco_xy_from_rtm((out[0], out[1]))
-        return xy, sc, None
+        return _people_from_arrays(out[0], out[1], None)
     xy, sc = coco_xy_from_rtm(out)
-    return xy, sc, None
+    return [(xy, sc, None)]
 
 
-def rtmw3d_to_world(xyz: np.ndarray) -> np.ndarray:
-    """RTMW3D crop-space xy + root-relative z → hip-centred y-down meters."""
-    out = xyz.astype(np.float32).copy()
-    mid_hip = 0.5 * (out[:, L_HIP] + out[:, R_HIP])
-    out -= mid_hip[:, None, :]
-    xy_span = np.linalg.norm(out[:, :, :2], axis=-1)
-    p95 = float(np.percentile(xy_span, 95)) if xy_span.size else 0.0
-    if p95 > 5:
-        out[:, :, :2] *= 0.85 / max(p95, 1e-3)
-    if float(np.mean(out[:, NOSE, 1])) > 0:
-        out[:, :, 1] *= -1
-    if float(np.mean(out[:, NOSE, 2])) > 0:
-        out[:, :, 2] *= -1
-    torso = np.linalg.norm(
-        0.5 * (out[:, L_SHO] + out[:, R_SHO]) - 0.5 * (out[:, L_HIP] + out[:, R_HIP]),
-        axis=-1,
-    )
-    valid = torso > 1e-4
-    med = float(np.median(torso[valid])) if np.any(valid) else 0.55
-    out *= 0.55 / max(med, 1e-3)
-    out -= (0.5 * (out[:, L_HIP] + out[:, R_HIP]))[:, None, :]
-    return out
+def rtmw3d_to_world(xyz: np.ndarray, valid: np.ndarray | None = None) -> np.ndarray:
+    """RTMW3D crop-space → hip-centred y-down meters. Scale ignores outlier frames."""
+    return normalize_rtmw3d(xyz, valid)
 
 
 def median_filter(xyz: np.ndarray, k: int = 3) -> np.ndarray:
@@ -407,20 +453,9 @@ def to_mp_world(h36m: np.ndarray) -> np.ndarray:
     return coco
 
 
-def gaussian_smooth(xyz: np.ndarray, sigma: float = 1.15) -> np.ndarray:
-    t = xyz.shape[0]
-    if t < 5:
-        return xyz
-    radius = max(1, int(math.ceil(3 * sigma)))
-    x = np.arange(-radius, radius + 1, dtype=np.float32)
-    k = np.exp(-0.5 * (x / sigma) ** 2)
-    k /= k.sum()
-    pad = np.pad(xyz, ((radius, radius), (0, 0), (0, 0)), mode='edge')
-    out = np.empty_like(xyz)
-    for j in range(xyz.shape[1]):
-        for c in range(3):
-            out[:, j, c] = np.convolve(pad[:, j, c], k, mode='valid')
-    return out
+def gaussian_smooth(xyz: np.ndarray, sigma: float = 1.15, weights: np.ndarray | None = None) -> np.ndarray:
+    """Light blur. Pass per-joint confidence so a missed frame does not drag its neighbours."""
+    return gaussian_smooth_weighted(xyz, sigma, weights)
 
 
 def pack_lm(x: float, y: float, z: float, v: float) -> dict:
@@ -612,43 +647,64 @@ def infer_video(video_path: str, progress_cb=None, cancel_cb=None) -> dict[str, 
     full_xy = np.zeros((n, 133, 2), dtype=np.float32)
     full_sc = np.zeros((n, 133), dtype=np.float32)
     full_xyz = np.zeros((n, 133, 3), dtype=np.float32)
-    has_3d = False
-    last_xy = None
-    last_sc = np.ones(17, dtype=np.float32) * 0.01
-    last_xyz = None
+    valid = np.zeros(n, dtype=bool)
+    has_xyz = np.zeros(n, dtype=bool)
+    prev_xy = None
 
     for i, frame in enumerate(frames):
         if cancel_cb and cancel_cb():
             raise CaptureCancelled()
         try:
-            xy, scores, xyz = decode_pose(body, frame)
-            take = min(xy.shape[0], 133)
-            full_xy[i, :take] = xy[:take, :2]
-            full_sc[i, :take] = scores[:take]
-            last_xy, last_sc = xy[:17], scores[:17]
-            if xyz is not None and xyz.shape[0] >= 17:
-                t3 = min(xyz.shape[0], 133)
-                full_xyz[i, :t3] = xyz[:t3]
-                last_xyz = xyz
-                has_3d = True
+            people = decode_people(body, frame)
         except CaptureCancelled:
             raise
         except Exception:
-            if last_xy is not None:
-                full_xy[i, :17] = last_xy[:17]
-                full_sc[i, :17] = last_sc[:17] * 0.3
-            if last_xyz is not None:
-                t3 = min(last_xyz.shape[0], 133)
-                full_xyz[i, :t3] = last_xyz[:t3]
+            people = []
+        chosen = select_person([(p[0], p[1]) for p in people], prev_xy)
+        if chosen is not None:
+            xy, scores, xyz = people[chosen]
+            if body_valid(xy, scores):
+                take = min(int(xy.shape[0]), 133)
+                full_xy[i, :take] = xy[:take, :2]
+                full_sc[i, :take] = scores[:take]
+                valid[i] = True
+                prev_xy = full_xy[i].copy()
+                if (
+                    xyz is not None
+                    and xyz.shape[0] >= 17
+                    and np.isfinite(xyz[:17]).all()
+                    and float(np.linalg.norm(xyz[:17])) > 1e-3
+                ):
+                    t3 = min(int(xyz.shape[0]), 133)
+                    full_xyz[i, :t3] = xyz[:t3, :3]
+                    has_xyz[i] = True
         if progress_cb and (i % 5 == 0 or i == n - 1):
             progress_cb(i + 1, n * 2)
 
+    full_xy, full_sc, full_xyz, observed, info = repair_sequence(
+        full_xy, full_sc, full_xyz, valid, fps,
+    )
+    if not enough_person(observed):
+        raise CaptureRejected(TOO_SHORT_MESSAGE if n < 8 else NO_PERSON_MESSAGE)
+    print(
+        f'track valid={int(np.count_nonzero(observed))}/{n} swaps={info["swaps"]} '
+        f'spikes={info["spikes"]} gaps={info["gaps"]}',
+        flush=True,
+    )
+
     xy = full_xy[:, :17]
     conf = full_sc[:, :17]
-    if has_3d and kind == 'rtmw3d':
-        world133 = rtmw3d_to_world(full_xyz)
+    observed_n = max(int(np.count_nonzero(observed)), 1)
+    use_3d = kind == 'rtmw3d' and int(np.count_nonzero(has_xyz)) >= max(6, int(0.6 * observed_n))
+    if use_3d:
+        world133 = rtmw3d_to_world(full_xyz, observed)
+        world133, depth_spikes = repair_depth_spikes(world133)
+        world133 = clamp_limb_lengths(world133)
+        _drop_weak_hands(world133, full_sc)
         world133 = median_filter(world133, 3)
-        world133 = gaussian_smooth(world133, sigma=0.5)
+        world133 = gaussian_smooth(world133, sigma=0.5, weights=full_sc)
+        if depth_spikes:
+            print(f'depth spikes repaired: {depth_spikes}', flush=True)
         coco_xyz = world133[:, :17]
         left_xyz = world133[:, L_HAND0:L_HAND0 + 21]
         right_xyz = world133[:, R_HAND0:R_HAND0 + 21]
@@ -670,8 +726,10 @@ def infer_video(video_path: str, progress_cb=None, cancel_cb=None) -> dict[str, 
                 full_xy[i, R_HAND0:R_HAND0 + 21], full_sc[i, R_HAND0:R_HAND0 + 21],
                 coco_xyz[i, R_WRI], coco_xyz[i, R_ELB], xy[i, R_WRI], xy[i, R_ELB],
             )
-        left_xyz = gaussian_smooth(left_xyz, sigma=0.45)
-        right_xyz = gaussian_smooth(right_xyz, sigma=0.45)
+        left_sc = full_sc[:, L_HAND0:L_HAND0 + 21]
+        right_sc = full_sc[:, R_HAND0:R_HAND0 + 21]
+        left_xyz = gaussian_smooth(left_xyz, sigma=0.45, weights=left_sc)
+        right_xyz = gaussian_smooth(right_xyz, sigma=0.45, weights=right_sc)
         world133 = None
         lift = 'motionbert'
 
@@ -712,17 +770,72 @@ def infer_video(video_path: str, progress_cb=None, cancel_cb=None) -> dict[str, 
     }
 
 
+def probe_rotation(path: str) -> int:
+    """Phone videos often store a 90° display matrix that OpenCV ignores."""
+    try:
+        raw = subprocess.check_output(
+            [
+                'ffprobe', '-v', 'error', '-select_streams', 'v:0',
+                '-show_entries', 'stream_tags=rotate:stream_side_data=rotation',
+                '-of', 'json', path,
+            ],
+            stderr=subprocess.DEVNULL,
+            timeout=20,
+        )
+    except Exception:
+        return 0
+    try:
+        return rotation_from_probe(json.loads(raw.decode() or '{}'))
+    except Exception:
+        return 0
+
+
+def _transcode(src: str) -> str:
+    dest = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
+    try:
+        subprocess.check_call(
+            [
+                'ffmpeg', '-y', '-i', src, '-an',
+                '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+                '-r', '30', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
+                '-movflags', '+faststart', dest,
+            ],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            timeout=180,
+        )
+    except Exception as exc:
+        try:
+            os.unlink(dest)
+        except OSError:
+            pass
+        raise CaptureRejected(UNREADABLE_MESSAGE) from exc
+    return dest
+
+
 def maybe_transcode(src: str) -> str:
     lower = src.lower()
-    if lower.endswith(('.mp4', '.mov', '.webm', '.avi', '.mkv')):
-        cap = cv2.VideoCapture(src)
-        ok = cap.isOpened()
-        cap.release()
-        if ok:
-            return src
-    dest = tempfile.NamedTemporaryFile(suffix='.mp4', delete=False).name
-    subprocess.check_call([
-        'ffmpeg', '-y', '-i', src, '-an', '-c:v', 'libx264', '-pix_fmt', 'yuv420p',
-        '-movflags', '+faststart', dest,
-    ], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-    return dest
+    rot = probe_rotation(src)
+    cap = cv2.VideoCapture(src)
+    opened = cap.isOpened()
+    count = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
+    cap.release()
+    readable = opened and count > 0 and lower.endswith(('.mp4', '.mov', '.webm', '.avi', '.mkv'))
+    if readable and rot == 0:
+        return src
+    return _transcode(src)
+
+
+def _drop_weak_hands(world: np.ndarray, sc: np.ndarray, thr: float = 0.12) -> None:
+    """Park an undetected hand on the wrist so it cannot drag a real gesture."""
+    if world.shape[1] < 133:
+        return
+    for base, wrist in ((L_HAND0, L_WRI), (R_HAND0, R_WRI)):
+        block = sc[:, base:base + 21]
+        if block.shape[1] < 21:
+            continue
+        weak = block.mean(axis=1) < thr
+        if not np.any(weak):
+            continue
+        world[weak, base:base + 21] = world[weak, wrist][:, None, :]
+        sc[weak, base:base + 21] = 0

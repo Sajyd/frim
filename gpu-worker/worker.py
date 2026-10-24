@@ -19,7 +19,7 @@ from urllib.request import Request, urlopen
 
 import boto3
 
-from infer import CaptureCancelled, infer_video, maybe_transcode
+from infer import CaptureCancelled, CaptureRejected, infer_video, maybe_transcode
 
 REGION = os.environ.get('AWS_REGION') or os.environ.get('AWS_DEFAULT_REGION') or 'us-east-1'
 BUCKET = os.environ['GPU_S3_BUCKET']
@@ -92,11 +92,17 @@ def callback(job_id: str, payload: dict) -> None:
         headers={'Content-Type': 'application/json', 'x-gpu-worker-secret': SECRET},
         method='POST',
     )
-    try:
-        with urlopen(req, timeout=20) as resp:
-            log(f'callback {job_id}: {resp.status}')
-    except Exception as exc:
-        log(f'callback failed: {exc}')
+    last_exc: Exception | None = None
+    for attempt in range(3):
+        try:
+            with urlopen(req, timeout=20) as resp:
+                log(f'callback {job_id}: {resp.status}')
+                return
+        except Exception as exc:
+            last_exc = exc
+            log(f'callback failed ({attempt + 1}/3): {exc}')
+            time.sleep(1.2 * (attempt + 1))
+    log(f'callback gave up: {last_exc}')
 
 
 def job_cancelled(job_id: str) -> bool:
@@ -107,108 +113,124 @@ def job_cancelled(job_id: str) -> bool:
         return False
 
 
-def process_message(body: dict) -> None:
+def process_message(body: dict, receipt: str | None = None) -> None:
     job_id = body['jobId']
     input_key = body['inputKey']
     result_key = body.get('resultKey') or f'results/{job_id}.json'
     log(f'job {job_id} ← s3://{BUCKET}/{input_key}')
-    if job_cancelled(job_id):
-        log(f'job {job_id} cancelled before start')
-        return
-    callback(job_id, {'status': 'running', 'progress': 5, 'instanceId': instance_id()})
+    paths: list[str] = []
+    last_touch = time.time()
 
-    tmp_in = tempfile.NamedTemporaryFile(suffix=os.path.splitext(input_key)[1] or '.mp4', delete=False)
-    tmp_in.close()
-    s3.download_file(BUCKET, input_key, tmp_in.name)
-    if job_cancelled(job_id):
-        log(f'job {job_id} cancelled during download')
-        try:
-            os.unlink(tmp_in.name)
-        except OSError:
-            pass
-        return
-    video_path = maybe_transcode(tmp_in.name)
-    if job_cancelled(job_id):
-        log(f'job {job_id} cancelled during transcode')
-        for path in {tmp_in.name, video_path}:
+    def cleanup() -> None:
+        for path in paths:
             try:
                 os.unlink(path)
             except OSError:
                 pass
-        return
 
-    last_pct = [-1]
+    def touch() -> None:
+        nonlocal last_touch
+        if not receipt or time.time() - last_touch < 25:
+            return
+        last_touch = time.time()
+        try:
+            sqs.change_message_visibility(
+                QueueUrl=QUEUE_URL,
+                ReceiptHandle=receipt,
+                VisibilityTimeout=900,
+            )
+        except Exception as exc:
+            log(f'visibility extend failed: {exc}')
 
-    def on_progress(done: int, total: int) -> None:
-        if job_cancelled(job_id):
-            raise CaptureCancelled()
-        pct = 10 + int(80 * done / max(total, 1))
-        if pct >= last_pct[0] + 10 or done >= total:
-            last_pct[0] = pct
-            callback(job_id, {'status': 'running', 'progress': pct, 'instanceId': instance_id()})
-
-    t0 = time.time()
     try:
-        result = infer_video(
-            video_path,
-            progress_cb=on_progress,
-            cancel_cb=lambda: job_cancelled(job_id),
-        )
-    except CaptureCancelled:
-        log(f'job {job_id} cancelled during infer')
-        for path in {tmp_in.name, video_path}:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-        return
-    duration_ms = int((time.time() - t0) * 1000)
-    billed = (time.time() - t0) / 3600.0 * SPOT_HOUR_USD
-    result['jobId'] = job_id
-    result['durationMs'] = duration_ms
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled before start')
+            return
+        callback(job_id, {'status': 'running', 'progress': 5, 'instanceId': instance_id()})
 
-    if job_cancelled(job_id):
-        log(f'job {job_id} cancelled before upload')
-        for path in {tmp_in.name, video_path}:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-        return
-
-    out = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
-    out.write(json.dumps(result).encode())
-    out.close()
-    s3.upload_file(out.name, BUCKET, result_key, ExtraArgs={'ContentType': 'application/json'})
-
-    if job_cancelled(job_id):
-        log(f'job {job_id} cancelled after upload')
-        for path in {tmp_in.name, video_path, out.name}:
-            try:
-                os.unlink(path)
-            except OSError:
-                pass
-        return
-
-    put_metric('JobsCompleted', 1)
-    put_metric('JobDurationSeconds', duration_ms / 1000.0, 'Seconds')
-    put_metric('EstimatedJobUsd', billed, 'None')
-
-    callback(job_id, {
-        'status': 'complete',
-        'progress': 100,
-        'resultKey': result_key,
-        'durationMs': duration_ms,
-        'instanceId': instance_id(),
-        'billedUsd': round(billed, 5),
-    })
-    log(f'job {job_id} done in {duration_ms}ms')
-
-    for path in {tmp_in.name, video_path, out.name}:
+        suffix = os.path.splitext(input_key)[1] or '.mp4'
+        tmp_in = tempfile.NamedTemporaryFile(suffix=suffix, delete=False)
+        tmp_in.close()
+        paths.append(tmp_in.name)
         try:
-            os.unlink(path)
-        except OSError:
-            pass
+            s3.download_file(BUCKET, input_key, tmp_in.name)
+        except Exception as exc:
+            log(f'download failed: {exc}')
+            raise RuntimeError('Could not download this video. Try the upload again.') from exc
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled during download')
+            return
+        video_path = maybe_transcode(tmp_in.name)
+        if video_path not in paths:
+            paths.append(video_path)
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled during transcode')
+            return
+
+        last_pct = [-1]
+
+        def on_progress(done: int, total: int) -> None:
+            if job_cancelled(job_id):
+                raise CaptureCancelled()
+            touch()
+            pct = 10 + int(80 * done / max(total, 1))
+            if pct >= last_pct[0] + 10 or done >= total:
+                last_pct[0] = pct
+                callback(job_id, {'status': 'running', 'progress': pct, 'instanceId': instance_id()})
+
+        t0 = time.time()
+        try:
+            result = infer_video(
+                video_path,
+                progress_cb=on_progress,
+                cancel_cb=lambda: job_cancelled(job_id),
+            )
+        except CaptureCancelled:
+            log(f'job {job_id} cancelled during infer')
+            return
+        duration_ms = int((time.time() - t0) * 1000)
+        billed = (time.time() - t0) / 3600.0 * SPOT_HOUR_USD
+        result['jobId'] = job_id
+        result['durationMs'] = duration_ms
+
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled before upload')
+            return
+
+        out = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
+        out.write(json.dumps(result).encode())
+        out.close()
+        paths.append(out.name)
+        s3.upload_file(out.name, BUCKET, result_key, ExtraArgs={'ContentType': 'application/json'})
+
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled after upload')
+            return
+
+        put_metric('JobsCompleted', 1)
+        put_metric('JobDurationSeconds', duration_ms / 1000.0, 'Seconds')
+        put_metric('EstimatedJobUsd', billed, 'None')
+
+        callback(job_id, {
+            'status': 'complete',
+            'progress': 100,
+            'resultKey': result_key,
+            'durationMs': duration_ms,
+            'instanceId': instance_id(),
+            'billedUsd': round(billed, 5),
+        })
+        log(f'job {job_id} done in {duration_ms}ms')
+    except CaptureRejected as exc:
+        log(f'job {job_id} rejected: {exc}')
+        put_metric('JobsRejected', 1)
+        callback(job_id, {
+            'status': 'failed',
+            'error': str(exc)[:500],
+            'notify': False,
+            'instanceId': instance_id(),
+        })
+    finally:
+        cleanup()
 
 
 def terminate_instance() -> None:
@@ -259,7 +281,7 @@ def main() -> None:
             msg = messages[0]
             try:
                 body = json.loads(msg['Body'])
-                process_message(body)
+                process_message(body, msg.get('ReceiptHandle'))
             except Exception as exc:
                 log(f'job failed: {exc}\n{traceback.format_exc()}')
                 put_metric('JobsFailed', 1)
