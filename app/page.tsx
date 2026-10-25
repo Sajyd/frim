@@ -104,7 +104,7 @@ export default function Home() {
         <div className="max-w-6xl mx-auto grid md:grid-cols-3 gap-3">
           {[
             { name: 'Free', price: '$0', detail: 'Pose, keyframe, and export', href: '/auth/register', cta: 'Start free' },
-            { name: 'Pro', price: '$12', detail: 'Capture motion from a video', href: '/pricing', cta: 'See Pro' },
+            { name: 'Pro', price: '$12', detail: 'Video capture and text to motion', href: '/pricing', cta: 'See Pro' },
             { name: 'Studio', price: '$39', detail: 'GPU 3D capture on your GLB', href: '/pricing', cta: 'See Studio' },
           ].map((plan) => (
             <Link
@@ -162,6 +162,7 @@ export default function Home() {
                     'Upload MP4, MOV, or WebM videos',
                     'AI detects body pose frame by frame',
                     'Auto-generates keyframes for bones',
+                    'Describe a move and generate the clip',
                     'Studio 3D GPU capture on your GLB',
                     'Works with any rigged humanoid model'
                   ].map((item, i) => (
@@ -274,7 +275,7 @@ const steps = [
   {
     index: '03',
     title: 'Export or capture',
-    body: 'Download a GLB with your clips. On Pro, pull a performance from video. Studio retargets it in 3D.',
+    body: 'Download a GLB with your clips. On Pro, capture a video or describe a move in text. Studio retargets video in 3D.',
   },
 ]
 
@@ -289,6 +290,12 @@ const features = [
     title: 'AI Video Motion Capture',
     description: 'Upload a video and let Frim AI extract body movements automatically. Runs entirely in your browser.',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><polygon points="23 7 16 12 23 17 23 7"/><rect x="1" y="5" width="15" height="14" rx="2" ry="2" strokeWidth={2}/></svg>,
+    highlight: true,
+  },
+  {
+    title: 'Text to motion',
+    description: 'Describe a walk, wave, jump, or dance. Frim builds the clip and retargets it onto the model you loaded.',
+    icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M4 12h10M4 17h7" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l3 3-3 3" /></svg>,
     highlight: true,
   },
   {

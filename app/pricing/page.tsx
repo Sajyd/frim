@@ -26,6 +26,7 @@ const plans = [
     ],
     notIncluded: [
       'AI Video Motion Capture',
+      'Text to motion',
       'Studio 3D GPU Capture',
       'Priority support',
     ],
@@ -36,7 +37,7 @@ const plans = [
   {
     id: 'pro',
     name: 'Pro',
-    description: 'Capture a performance from video',
+    description: 'Video capture and text to motion',
     price: 12,
     period: '/month',
     features: [
@@ -45,6 +46,7 @@ const plans = [
       'GLB/GLTF import & export',
       'Advanced animation tools',
       'AI Video Motion Capture (Fast)',
+      'Text to motion',
       'Priority cloud saves',
       'Priority support',
     ],
@@ -273,7 +275,7 @@ function PricingContent() {
             Start free. Upgrade when the clip needs <span className="gradient-text">capture.</span>
           </h1>
           <p className="text-lg text-dark-200 max-w-2xl mx-auto">
-            The editor is included on every plan. Pro adds video capture. Studio adds GPU 3D, with 40 captures a month and $1 after that.
+            The editor is included on every plan. Pro adds video capture and text to motion. Studio adds GPU 3D, with 40 captures a month and $1 after that.
           </p>
         </div>
       </section>
@@ -403,6 +405,10 @@ function PricingContent() {
           </h2>
           <div className="space-y-3">
             {[
+              {
+                q: 'What is text to motion?',
+                a: 'On Pro, describe a move such as “walk, then wave” and Frim builds a skeletal clip on the model in the editor. It runs in the browser and retargets onto the rig you loaded. Studio still adds GPU video capture on top.',
+              },
               {
                 q: 'What is Studio 3D capture?',
                 a: 'Studio adds GPU motion capture: a 3D body solver that retargets onto the GLB you load in the editor. Pro includes unlimited Fast (in-browser) capture. Studio includes 40 GPU jobs per month, then $1 per extra capture.',

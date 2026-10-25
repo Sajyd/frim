@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -75,6 +75,7 @@ import {
   type MixamoBoneName,
   type PlaceJointId,
 } from '@/lib/autorig'
+import { describeTextMotion, textToMotion, TEXT_MOTION_EXAMPLES } from '@/lib/text-to-motion'
 
 interface EditorProps {
   projectName: string
@@ -365,7 +366,7 @@ export default function ThreeEditor({
 
   // Upgrade modal
   const [showUpgradeModal, setShowUpgradeModal] = useState(false)
-  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis' | 'gpu_capture'>('animation_limit')
+  const [upgradeModalReason, setUpgradeModalReason] = useState<'animation_limit' | 'video_analysis' | 'gpu_capture' | 'text_to_motion'>('animation_limit')
 
   // Video analysis modal
   const [showVideoModal, setShowVideoModal] = useState(false)
@@ -381,6 +382,10 @@ export default function ThreeEditor({
   const captureAbortRef = useRef(false)
   const gpuJobIdRef = useRef<string | null>(null)
   const captureUploadAbortRef = useRef<AbortController | null>(null)
+  const [showTextModal, setShowTextModal] = useState(false)
+  const [motionPrompt, setMotionPrompt] = useState('walk, then wave')
+  const [textBusy, setTextBusy] = useState(false)
+  const textMotionPreview = useMemo(() => describeTextMotion(motionPrompt), [motionPrompt])
 
   // GLB export modal
   const [showExportModal, setShowExportModal] = useState(false)
@@ -3218,6 +3223,8 @@ export default function ThreeEditor({
     fps: number
     aspect: number
     frames: { image: any[]; world: any[]; leftHand?: any[]; rightHand?: any[] }[]
+    name?: string
+    loop?: boolean
   }, sourceFile?: File | null) => {
     const captureFile = sourceFile ?? videoFile
     if (bones.size === 0) return
@@ -3617,11 +3624,13 @@ export default function ThreeEditor({
       const id = `anim_${animationCounterRef.current++}`
       const exampleClip = captureFile?.name === 'sample-capture.mp4'
       const newAnim: Animation = {
-        name: gpuTimeline?.frames?.length
-          ? (exampleClip ? 'Studio 3D example' : 'Studio 3D Capture')
-          : (exampleClip ? 'Fast example' : 'Video Capture'),
+        name: gpuTimeline?.name
+          ? gpuTimeline.name
+          : gpuTimeline?.frames?.length
+            ? (exampleClip ? 'Studio 3D example' : 'Studio 3D Capture')
+            : (exampleClip ? 'Fast example' : 'Video Capture'),
         // Match video timeline: frame N at t = N/captureFps seconds.
-        fps: captureFps, totalFrames: totalAnimFrames, speed: 1, loop: true,
+        fps: captureFps, totalFrames: totalAnimFrames, speed: 1, loop: gpuTimeline?.loop !== false,
         keyframes: new Map()
       }
       const rotationOnly = Boolean(gpuTimeline?.frames?.length)
@@ -4249,6 +4258,57 @@ export default function ThreeEditor({
     setShowUpgradeModal(true)
   }, [onUpgradeToStudio])
 
+  const generateTextMotion = useCallback(async () => {
+    if (!canUseVideoAnalysis) {
+      setUpgradeModalReason('text_to_motion')
+      setShowUpgradeModal(true)
+      return
+    }
+    if (bones.size === 0) {
+      showToast('AutoRig this mesh first so the motion has joints to map', 'warning')
+      setShowAutoRigModal(true)
+      return
+    }
+    if (!isPro && animations.size >= animationLimit) {
+      setUpgradeModalReason('animation_limit')
+      setShowUpgradeModal(true)
+      return
+    }
+    const prompt = motionPrompt.trim()
+    if (!prompt) {
+      showToast('Describe a motion first', 'warning')
+      return
+    }
+    if (videoAnalyzing || textBusy) return
+    const described = describeTextMotion(prompt)
+    if (!described.recognized) showToast(described.summary, 'warning')
+    setTextBusy(true)
+    try {
+      const clip = textToMotion(prompt)
+      setShowTextModal(false)
+      await processVideoCapture({
+        fps: clip.fps,
+        aspect: clip.aspect,
+        frames: clip.frames,
+        name: clip.name,
+        loop: clip.loop,
+      })
+    } finally {
+      setTextBusy(false)
+    }
+  }, [
+    animationLimit,
+    animations.size,
+    bones.size,
+    canUseVideoAnalysis,
+    isPro,
+    motionPrompt,
+    processVideoCapture,
+    showToast,
+    textBusy,
+    videoAnalyzing,
+  ])
+
   const handleProcessCapture = useCallback(async (opts?: { file?: File; engine?: 'fast' | 'studio' }) => {
     const file = opts?.file ?? videoFile
     const engine = opts?.engine ?? captureEngine
@@ -4775,6 +4835,30 @@ export default function ThreeEditor({
           )}
           {canUseGpuCapture && (
             <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">3D</span>
+          )}
+        </button>
+        <button
+          onClick={() => {
+            if (!canUseVideoAnalysis) {
+              setUpgradeModalReason('text_to_motion')
+              setShowUpgradeModal(true)
+              return
+            }
+            if (bones.size === 0) {
+              showToast('AutoRig this mesh first so the motion has joints to map', 'warning')
+              setShowAutoRigModal(true)
+              return
+            }
+            setShowTextModal(true)
+          }}
+          className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
+            canUseVideoAnalysis ? 'text-[#a1a1aa] hover:bg-[#1c2130]' : 'text-[#71717a] hover:bg-[#1c2130]'
+          }`}
+          title={canUseVideoAnalysis ? 'Text to motion' : 'Text to motion (Pro)'}
+        >
+          <Sparkles className="w-5 h-5" />
+          {!canUseVideoAnalysis && (
+            <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">PRO</span>
           )}
         </button>
       </div>
@@ -5522,21 +5606,27 @@ export default function ThreeEditor({
         <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2100] p-4">
           <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-md p-6 text-center">
             <div className="w-16 h-16 bg-[#22c55e]/10 rounded-2xl flex items-center justify-center mx-auto mb-6">
-              {upgradeModalReason === 'video_analysis' || upgradeModalReason === 'gpu_capture' ? (
+              {upgradeModalReason === 'text_to_motion' ? (
+                <Sparkles className="w-8 h-8 text-[#22c55e]" />
+              ) : upgradeModalReason === 'video_analysis' || upgradeModalReason === 'gpu_capture' ? (
                 <Video className="w-8 h-8 text-[#22c55e]" />
               ) : (
                 <Zap className="w-8 h-8 text-[#22c55e]" />
               )}
             </div>
             <h2 className="text-xl font-semibold mb-2">
-              {upgradeModalReason === 'gpu_capture'
+              {upgradeModalReason === 'text_to_motion'
+                ? 'Text to motion'
+                : upgradeModalReason === 'gpu_capture'
                 ? 'Studio 3D GPU Capture'
                 : upgradeModalReason === 'video_analysis'
                 ? 'AI Video Motion Capture'
                 : 'Animation Limit Reached'}
             </h2>
             <p className="text-[#a1a1aa] mb-6">
-              {upgradeModalReason === 'gpu_capture'
+              {upgradeModalReason === 'text_to_motion'
+                ? 'Describe a move and Frim builds the clip on the model you loaded. Upgrade to Pro for text to motion, or Studio to add GPU 3D capture.'
+                : upgradeModalReason === 'gpu_capture'
                 ? 'Studio 3D uses a GPU body solver and applies the animation onto the GLB you loaded. Upgrade to Studio for 40 GPU captures per month.'
                 : upgradeModalReason === 'video_analysis'
                 ? 'Extract animations from videos with AI pose detection. Upgrade to Pro to unlock Fast capture, or Studio for GPU 3D.'
@@ -5562,6 +5652,7 @@ export default function ThreeEditor({
                     ]
                   : [
                       'Unlimited animations per project',
+                      'Text to motion',
                       'AI Video Motion Capture (Fast)',
                       'Unlimited projects',
                       'Priority support',
@@ -5597,6 +5688,83 @@ export default function ThreeEditor({
                 className="w-full py-2 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
               >
                 Maybe Later
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showTextModal && (
+        <div className="fixed inset-0 bg-black/70 backdrop-blur-sm flex items-center justify-center z-[2000] p-4">
+          <div className="bg-[#151821] border border-[#252b3d] rounded-2xl w-full max-w-lg max-h-[90vh] flex flex-col overflow-hidden">
+            <div className="flex items-center justify-between px-6 pt-6 pb-4 shrink-0">
+              <div className="flex items-center gap-3">
+                <div className="w-10 h-10 bg-[#22c55e]/10 rounded-xl flex items-center justify-center">
+                  <Sparkles className="w-5 h-5 text-[#22c55e]" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-semibold">Text to motion</h2>
+                  <p className="text-xs text-[#71717a]">Describe a move. Frim retargets it onto this model.</p>
+                </div>
+              </div>
+              <button
+                onClick={() => { if (!textBusy) setShowTextModal(false) }}
+                className="text-[#71717a] hover:text-[#a1a1aa] p-2"
+              >
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+            <div className="px-6 overflow-y-auto min-h-0 flex-1">
+              <label className="block text-xs text-[#71717a] mb-2" htmlFor="text-to-motion-prompt">Prompt</label>
+              <textarea
+                id="text-to-motion-prompt"
+                value={motionPrompt}
+                onChange={(event) => setMotionPrompt(event.target.value)}
+                rows={3}
+                maxLength={180}
+                placeholder="walk, then wave"
+                className="w-full bg-[#0f1117] border border-[#252b3d] rounded-xl px-3 py-2.5 text-sm text-[#f4f4f5] focus:outline-none focus:border-[#22c55e] resize-none"
+              />
+              <div className="flex flex-wrap gap-1.5 mt-3 mb-3">
+                {TEXT_MOTION_EXAMPLES.map((example) => (
+                  <button
+                    key={example}
+                    type="button"
+                    onClick={() => setMotionPrompt(example)}
+                    className={`text-[11px] px-2 py-1 rounded-lg border transition-colors ${
+                      motionPrompt.trim() === example
+                        ? 'border-[#22c55e] bg-[#22c55e]/10 text-[#4ade80]'
+                        : 'border-[#252b3d] text-[#a1a1aa] hover:border-[#3f3f46]'
+                    }`}
+                  >
+                    {example}
+                  </button>
+                ))}
+              </div>
+              <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-2">
+                <p className={`text-sm ${textMotionPreview.recognized ? 'text-[#f4f4f5]' : 'text-[#fbbf24]'}`}>
+                  {textMotionPreview.summary}
+                </p>
+                <p className="text-xs text-[#71717a]">
+                  Runs in the browser and applies the clip to the skeleton you loaded. Try walk, run, jump, wave, dance, sit, punch, or chain them with “then”.
+                </p>
+              </div>
+            </div>
+            <div className="flex gap-3 px-6 pt-3 pb-6 shrink-0">
+              <button
+                onClick={() => setShowTextModal(false)}
+                disabled={textBusy}
+                className="flex-1 py-2.5 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors disabled:opacity-50"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => { void generateTextMotion() }}
+                disabled={textBusy || !motionPrompt.trim()}
+                className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
+              >
+                <Sparkles className="w-4 h-4" />
+                {textBusy ? 'Generating…' : 'Generate'}
               </button>
             </div>
           </div>

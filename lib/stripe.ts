@@ -44,6 +44,7 @@ export const PLANS = {
       'GLB/GLTF import & export',
       'Advanced animation tools',
       'AI Video Motion Capture (Fast)',
+      'Text to motion',
       'Extract animations from videos',
       'Priority cloud saves',
       'Priority support',
