@@ -629,13 +629,13 @@ export function applyAutoRig(model: THREE.Object3D, joints: Record<MixamoBoneNam
   const meshes: THREE.Mesh[] = []
   model.traverse((obj) => {
     const mesh = obj as THREE.Mesh
-    if (mesh.isMesh && mesh.geometry?.attributes?.position && !(mesh as THREE.Bone).isBone) {
+    if (mesh.isMesh && mesh.geometry?.attributes?.position && !(mesh as { isBone?: boolean }).isBone) {
       meshes.push(mesh)
     }
   })
 
   for (const mesh of meshes) {
-    if ((mesh as THREE.Bone).isBone) continue
+    if ((mesh as { isBone?: boolean }).isBone) continue
     const geo = mesh.geometry.clone()
     const { skinIndex, skinWeight } = computeSkinWeights(geo, mesh.matrixWorld, joints, height, centerX)
     geo.setAttribute('skinIndex', new THREE.BufferAttribute(skinIndex, 4))
