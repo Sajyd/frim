@@ -70,6 +70,12 @@ model GpuJob {
   durationMs    Int?
   instanceId    String?
   billedUsd     Float?
+  // video | t2m. Older rows stay null; prompts/ keys are text-to-motion.
+  kind          String?
+  // RTMW3D-x, RTMW + MotionBERT, RTMPose + MotionBERT, or MotionGPT.
+  model         String?
+  device        String?
+  prompt        String?   @db.Text
   quotaCharged  Boolean   @default(false)
   createdAt     DateTime  @default(now())
   updatedAt     DateTime  @updatedAt

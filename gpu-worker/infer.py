@@ -765,6 +765,7 @@ def infer_video(video_path: str, progress_cb=None, cancel_cb=None) -> dict[str, 
         'height': height,
         'device': device,
         'lift': lift,
+        'model': 'RTMW3D-x' if lift == 'rtmw3d' else ('RTMW + MotionBERT' if kind == 'wholebody' else 'RTMPose + MotionBERT'),
         'hands': True,
         'frames': out_frames,
     }

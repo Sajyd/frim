@@ -65,6 +65,8 @@ export async function POST(
           s3ResultKey: body.resultKey ? String(body.resultKey) : job.s3ResultKey,
           durationMs: body.durationMs != null ? Math.round(Number(body.durationMs)) : job.durationMs,
           billedUsd: body.billedUsd != null ? Number(body.billedUsd) : job.billedUsd,
+          model: body.model ? String(body.model).slice(0, 80) : job.model,
+          device: body.device ? String(body.device).slice(0, 40) : job.device,
           completedAt: new Date(),
           error: null,
         },

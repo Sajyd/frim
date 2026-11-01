@@ -34,6 +34,7 @@ function timeAgo(iso: string) {
 }
 
 interface Subscription {
+  admin?: boolean
   plan: string
   planDetails: {
     name: string
@@ -443,6 +444,11 @@ function DashboardContent() {
                   <Link href="/pricing" role="menuitem" className="block px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5" onClick={() => setMenuOpen(false)}>
                     {isPaid ? 'Plans' : 'Upgrade'}
                   </Link>
+                  {subscription?.admin && (
+                    <Link href="/admin" role="menuitem" className="block px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5" onClick={() => setMenuOpen(false)}>
+                      Admin
+                    </Link>
+                  )}
                   {subscription?.plan === 'pro' && (
                     <button type="button" role="menuitem" onClick={() => { setMenuOpen(false); requestStudioUpgrade() }} className="w-full text-left px-3 py-2 text-sm rounded-lg text-dark-200 hover:bg-white/5">
                       Upgrade to Studio

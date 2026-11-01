@@ -218,6 +218,8 @@ def process_message(body: dict, receipt: str | None = None) -> None:
             'durationMs': duration_ms,
             'instanceId': instance_id(),
             'billedUsd': round(billed, 5),
+            'model': str(result.get('model') or result.get('lift') or '')[:80],
+            'device': str(result.get('device') or '')[:40],
         })
         log(f'job {job_id} done in {duration_ms}ms')
     except CaptureRejected as exc:

@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { PLANS, studioGpuQuota } from '@/lib/stripe'
+import { isAdminEmail } from '@/lib/admin'
 
 export async function GET() {
   try {
@@ -15,6 +16,7 @@ export async function GET() {
     const user = await prisma.user.findUnique({
       where: { id: session.user.id },
       select: {
+        email: true,
         plan: true,
         stripeCurrentPeriodEnd: true,
         gpuCapturesUsed: true,
@@ -41,6 +43,7 @@ export async function GET() {
     )
 
     return NextResponse.json({
+      admin: isAdminEmail(user.email),
       plan: user.plan,
       planDetails: plan,
       currentPeriodEnd: user.stripeCurrentPeriodEnd,

@@ -82,7 +82,7 @@ export async function POST(request: NextRequest) {
     const inputKey = `uploads/${session.user.id}/${job.id}.${safeExt}`
     await prisma.gpuJob.update({
       where: { id: job.id },
-      data: { s3InputKey: inputKey, s3ResultKey: `results/${job.id}.json` },
+      data: { s3InputKey: inputKey, s3ResultKey: `results/${job.id}.json`, kind: 'video' },
     })
 
     const uploadUrl = await presignGpuUpload(inputKey, contentType || 'video/mp4')
