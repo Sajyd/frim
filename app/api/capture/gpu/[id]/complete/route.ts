@@ -1,7 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server'
 import prisma from '@/lib/prisma'
 import { refundGpuQuota } from '@/lib/gpu-jobs'
-import { putGpuMetric } from '@/lib/aws-gpu'
+import { getGpuResultMeta, isGpuAwsConfigured, putGpuMetric } from '@/lib/aws-gpu'
+import { gpuModelName } from '@/lib/gpu-model'
 import { sendGpuAlert } from '@/lib/email'
 import { getGpuWorkerSecret } from '@/lib/gpu-secret'
 
@@ -56,17 +57,33 @@ export async function POST(
     }
 
     if (status === 'complete') {
+      const resultKey = body.resultKey ? String(body.resultKey) : job.s3ResultKey
+      let meta: { model?: string; lift?: string; device?: string } | null = null
+      if (!body.model && resultKey && isGpuAwsConfigured()) {
+        try {
+          meta = await getGpuResultMeta(resultKey)
+        } catch (err) {
+          console.error('GPU result meta failed:', err)
+        }
+      }
+      const model = gpuModelName({
+        model: body.model || meta?.model,
+        lift: body.lift || meta?.lift,
+        kind: job.kind,
+        s3InputKey: job.s3InputKey,
+      })
+      const device = body.device || meta?.device
       await prisma.gpuJob.update({
         where: { id: job.id },
         data: {
           status: 'complete',
           progress: 100,
           instanceId,
-          s3ResultKey: body.resultKey ? String(body.resultKey) : job.s3ResultKey,
+          s3ResultKey: resultKey,
           durationMs: body.durationMs != null ? Math.round(Number(body.durationMs)) : job.durationMs,
           billedUsd: body.billedUsd != null ? Number(body.billedUsd) : job.billedUsd,
-          model: body.model ? String(body.model).slice(0, 80) : job.model,
-          device: body.device ? String(body.device).slice(0, 40) : job.device,
+          model: model || job.model,
+          device: device ? String(device).slice(0, 40) : job.device,
           completedAt: new Date(),
           error: null,
         },

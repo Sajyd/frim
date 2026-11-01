@@ -118,6 +118,18 @@ export async function getGpuResultJson(key: string) {
   return JSON.parse(text)
 }
 
+/** Model, lift, and device sit ahead of the landmark frames, so a short read is enough. */
+export async function getGpuResultMeta(key: string) {
+  const res = await s3().send(new GetObjectCommand({
+    Bucket: process.env.GPU_S3_BUCKET!,
+    Key: key,
+    Range: 'bytes=0-4095',
+  }))
+  const text = await res.Body!.transformToString()
+  const pick = (field: string) => text.match(new RegExp(`"${field}"\\s*:\\s*"([^"\\\\]{1,80})"`))?.[1]
+  return { model: pick('model'), lift: pick('lift'), device: pick('device') }
+}
+
 export async function gpuResultExists(key: string) {
   try {
     await s3().send(new HeadObjectCommand({
@@ -128,6 +140,15 @@ export async function gpuResultExists(key: string) {
   } catch {
     return false
   }
+}
+
+export async function putGpuJson(key: string, body: unknown) {
+  await s3().send(new PutObjectCommand({
+    Bucket: process.env.GPU_S3_BUCKET!,
+    Key: key,
+    Body: JSON.stringify(body),
+    ContentType: 'application/json',
+  }))
 }
 
 export async function putGpuCancelFlag(jobId: string) {

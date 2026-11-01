@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { failTimedOutJobs, refundGpuQuota } from '@/lib/gpu-jobs'
+import { rememberGpuModel } from '@/lib/gpu-model'
 import {
   getGpuResultJson,
   gpuResultExists,
@@ -15,7 +16,7 @@ import {
   GPU_POOL_FULL_MESSAGE,
 } from '@/lib/aws-gpu'
 
-const LABELS: Record<string, string> = {
+const VIDEO_LABELS: Record<string, string> = {
   uploading: 'Waiting for upload…',
   queued: 'Queued — waiting for a free GPU…',
   waking: 'Starting a Spot GPU for this capture…',
@@ -23,6 +24,16 @@ const LABELS: Record<string, string> = {
   complete: 'Building animation on your model…',
   failed: 'GPU capture failed',
   cancelled: 'Capture cancelled',
+}
+
+const TEXT_LABELS: Record<string, string> = {
+  uploading: 'Sending your prompt…',
+  queued: 'Queued — waiting for a free GPU…',
+  waking: 'Starting a Spot GPU for MotionGPT…',
+  running: 'Generating motion with MotionGPT…',
+  complete: 'Applying the clip to your model…',
+  failed: 'Text to motion failed',
+  cancelled: 'Generation cancelled',
 }
 
 export async function GET(
@@ -72,10 +83,11 @@ export async function GET(
       }
     }
 
-    let result = null
+    let result: { model?: unknown; lift?: unknown; device?: unknown } | null = null
     if (job.status === 'complete' && job.s3ResultKey) {
       try {
         result = await getGpuResultJson(job.s3ResultKey)
+        if (result) job = await rememberGpuModel(job, result)
       } catch (err) {
         console.error('read GPU result failed:', err)
       }
@@ -83,9 +95,10 @@ export async function GET(
 
     const waking = job.status === 'waking' || (job.status === 'queued' && Boolean(job.instanceId))
     const progress = waking ? Math.max(job.progress, wakingProgress(job.updatedAt)) : job.progress
+    const labels = job.s3InputKey.startsWith('prompts/') ? TEXT_LABELS : VIDEO_LABELS
     const label = waking
-      ? wakingLabel(instanceState)
-      : (LABELS[job.status] || job.status)
+      ? (job.s3InputKey.startsWith('prompts/') ? 'Starting a Spot GPU for MotionGPT…' : wakingLabel(instanceState))
+      : (labels[job.status] || job.status)
 
     return NextResponse.json({
       jobId: job.id,

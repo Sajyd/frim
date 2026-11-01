@@ -3,6 +3,7 @@ import { getServerSession } from 'next-auth'
 import { authOptions } from '@/lib/auth'
 import prisma from '@/lib/prisma'
 import { isAdminEmail, jobKind, jobModelLabel } from '@/lib/admin'
+import { backfillGpuModels } from '@/lib/gpu-model'
 
 const PLAN_PRICE: Record<string, number> = {
   free: 0,
@@ -53,6 +54,8 @@ export async function GET() {
     if (!isAdminEmail(admin?.email)) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
+
+    await backfillGpuModels()
 
     const now = Date.now()
     const since7 = new Date(now - 7 * DAY_MS)
