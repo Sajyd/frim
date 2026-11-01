@@ -1,8 +1,13 @@
-const DEFAULT_ADMINS = ['sajydmounib@gmail.com', 'sajyd.mounib@epitech.eu']
+const DEFAULT_ADMINS = [
+  'sajydmounib@gmail.com',
+  'sajyd.mounib@epitech.eu',
+  'mounib_s@epitech.eu',
+]
 
 export function adminEmails(): string[] {
-  const configured = process.env.ADMIN_EMAILS?.trim()
-  const raw = configured || [process.env.GPU_ALERT_EMAIL, ...DEFAULT_ADMINS].filter(Boolean).join(',')
+  const raw = [process.env.ADMIN_EMAILS, process.env.GPU_ALERT_EMAIL, ...DEFAULT_ADMINS]
+    .filter(Boolean)
+    .join(',')
   const emails = raw
     .split(/[,;\s]+/)
     .map((email) => email.trim().toLowerCase())
