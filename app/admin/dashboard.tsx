@@ -123,6 +123,24 @@ function statusClass(status: string) {
   return 'text-amber-200 bg-amber-400/10'
 }
 
+type UserProject = {
+  id: string
+  name: string
+  description: string | null
+  modelName: string | null
+  updatedAt: string
+  createdAt: string
+}
+
+type UserProjectsPanel = {
+  userId: string
+  name: string | null
+  email: string | null
+  loading: boolean
+  error: string
+  projects: UserProject[]
+}
+
 export default function AdminDashboard() {
   const [data, setData] = useState<Overview | null>(null)
   const [error, setError] = useState('')
@@ -130,6 +148,7 @@ export default function AdminDashboard() {
   const [query, setQuery] = useState('')
   const [kind, setKind] = useState<'all' | 'video' | 't2m'>('all')
   const [status, setStatus] = useState('all')
+  const [projectsPanel, setProjectsPanel] = useState<UserProjectsPanel | null>(null)
 
   async function load() {
     setLoading(true)
@@ -152,6 +171,44 @@ export default function AdminDashboard() {
   useEffect(() => {
     load()
   }, [])
+
+  async function openUserProjects(user: Overview['users'][number]) {
+    setProjectsPanel({
+      userId: user.id,
+      name: user.name,
+      email: user.email,
+      loading: true,
+      error: '',
+      projects: [],
+    })
+    try {
+      const response = await fetch(`/api/admin/users/${user.id}/projects`, { cache: 'no-store' })
+      if (response.status === 401) {
+        window.location.href = '/auth/signin?callbackUrl=/admin'
+        return
+      }
+      if (!response.ok) throw new Error('Could not load projects')
+      const payload = await response.json()
+      setProjectsPanel({
+        userId: payload.id,
+        name: payload.name,
+        email: payload.email,
+        loading: false,
+        error: '',
+        projects: payload.projects || [],
+      })
+    } catch (err) {
+      setProjectsPanel((current) =>
+        current
+          ? {
+              ...current,
+              loading: false,
+              error: err instanceof Error ? err.message : 'Could not load projects',
+            }
+          : null,
+      )
+    }
+  }
 
   const needle = query.trim().toLowerCase()
   const users = useMemo(() => {
@@ -400,12 +457,13 @@ export default function AdminDashboard() {
                       <th className="px-4 py-2 font-medium text-right">Jobs</th>
                       <th className="px-4 py-2 font-medium text-right">AWS</th>
                       <th className="px-4 py-2 font-medium">Last active</th>
+                      <th className="px-4 py-2 font-medium text-right">Open</th>
                     </tr>
                   </thead>
                   <tbody>
                     {users.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="px-4 py-8 text-dark-400">No matching accounts.</td>
+                        <td colSpan={8} className="px-4 py-8 text-dark-400">No matching accounts.</td>
                       </tr>
                     )}
                     {users.map((user) => (
@@ -423,12 +481,83 @@ export default function AdminDashboard() {
                         <td className="px-4 py-3 text-right font-mono">{user.jobs}</td>
                         <td className="px-4 py-3 text-right font-mono">{usd(user.awsUsd)}</td>
                         <td className="px-4 py-3 whitespace-nowrap text-dark-300">{when(user.lastActive)}</td>
+                        <td className="px-4 py-3 text-right">
+                          <button
+                            type="button"
+                            onClick={() => openUserProjects(user)}
+                            disabled={user.projects === 0}
+                            className="text-xs rounded-lg border border-white/10 px-2.5 py-1 text-dark-200 hover:bg-white/5 disabled:opacity-40 disabled:cursor-not-allowed"
+                          >
+                            Projects
+                          </button>
+                        </td>
                       </tr>
                     ))}
                   </tbody>
                 </table>
               </div>
             </section>
+
+            {projectsPanel && (
+              <div
+                className="fixed inset-0 z-50 flex items-end sm:items-center justify-center bg-black/60 p-4"
+                onClick={() => setProjectsPanel(null)}
+              >
+                <div
+                  className="w-full max-w-lg rounded-xl border border-dark-800 bg-dark-900 shadow-xl"
+                  onClick={(event) => event.stopPropagation()}
+                >
+                  <div className="px-4 py-3 border-b border-white/5 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <h2 className="font-medium truncate">{projectsPanel.name || 'Account'} projects</h2>
+                      <p className="text-xs text-dark-400 truncate mt-0.5">{projectsPanel.email}</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setProjectsPanel(null)}
+                      className="text-sm text-dark-400 hover:text-white shrink-0"
+                    >
+                      Close
+                    </button>
+                  </div>
+                  <div className="max-h-[60vh] overflow-y-auto">
+                    {projectsPanel.loading && (
+                      <div className="py-12 flex justify-center">
+                        <div className="spinner w-6 h-6" />
+                      </div>
+                    )}
+                    {projectsPanel.error && (
+                      <p className="px-4 py-6 text-sm text-red-200">{projectsPanel.error}</p>
+                    )}
+                    {!projectsPanel.loading && !projectsPanel.error && projectsPanel.projects.length === 0 && (
+                      <p className="px-4 py-8 text-sm text-dark-400">No projects for this account.</p>
+                    )}
+                    {!projectsPanel.loading &&
+                      projectsPanel.projects.map((project) => (
+                        <div
+                          key={project.id}
+                          className="px-4 py-3 border-t border-white/5 flex items-center justify-between gap-3"
+                        >
+                          <div className="min-w-0">
+                            <div className="truncate">{project.name}</div>
+                            <div className="text-xs text-dark-400 mt-0.5 truncate">
+                              {project.modelName || 'No model'} · updated {when(project.updatedAt)}
+                            </div>
+                          </div>
+                          <a
+                            href={`/editor/${project.id}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="shrink-0 text-xs rounded-lg border border-frim-500/40 bg-frim-500/10 px-2.5 py-1 text-frim-200 hover:bg-frim-500/20"
+                          >
+                            Open
+                          </a>
+                        </div>
+                      ))}
+                  </div>
+                </div>
+              </div>
+            )}
 
             <p className="text-xs text-dark-500 max-w-3xl leading-relaxed">
               AWS cost is Spot runtime times the hourly rate stored when the job finished (default $0.13).

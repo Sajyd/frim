@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server"
 import { getServerSession } from "next-auth"
 import { authOptions } from "@/lib/auth"
 import prisma from "@/lib/prisma"
+import { canAccessProject } from "@/lib/admin"
 
 // GET a single project
 export async function GET(
@@ -23,7 +24,7 @@ export async function GET(
       return NextResponse.json({ error: "Project not found" }, { status: 404 })
     }
 
-    if (project.userId !== session.user.id) {
+    if (!(await canAccessProject(session.user.id, project.userId))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
@@ -46,7 +47,6 @@ export async function PUT(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Check ownership
     const existingProject = await prisma.project.findUnique({
       where: { id: params.id }
     })
@@ -55,7 +55,7 @@ export async function PUT(
       return NextResponse.json({ error: "Project not found" }, { status: 404 })
     }
 
-    if (existingProject.userId !== session.user.id) {
+    if (!(await canAccessProject(session.user.id, existingProject.userId))) {
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
@@ -80,7 +80,7 @@ export async function PUT(
   }
 }
 
-// DELETE a project
+// DELETE a project — owner only (admins can open/edit, not delete others' projects)
 export async function DELETE(
   req: NextRequest,
   { params }: { params: { id: string } }
@@ -92,7 +92,6 @@ export async function DELETE(
       return NextResponse.json({ error: "Unauthorized" }, { status: 401 })
     }
 
-    // Check ownership
     const existingProject = await prisma.project.findUnique({
       where: { id: params.id }
     })
@@ -115,4 +114,3 @@ export async function DELETE(
     return NextResponse.json({ error: "Failed to delete project" }, { status: 500 })
   }
 }
-

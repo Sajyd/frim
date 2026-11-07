@@ -1,3 +1,5 @@
+import prisma from '@/lib/prisma'
+
 const DEFAULT_ADMINS = [
   'sajydmounib@gmail.com',
   'sajyd.mounib@epitech.eu',
@@ -18,6 +20,24 @@ export function adminEmails(): string[] {
 export function isAdminEmail(email?: string | null): boolean {
   if (!email) return false
   return adminEmails().includes(email.trim().toLowerCase())
+}
+
+export async function isAdminUserId(userId?: string | null): Promise<boolean> {
+  if (!userId) return false
+  const user = await prisma.user.findUnique({
+    where: { id: userId },
+    select: { email: true },
+  })
+  return isAdminEmail(user?.email)
+}
+
+/** Owner, or an admin opening someone else's project. */
+export async function canAccessProject(
+  sessionUserId: string,
+  projectUserId: string,
+): Promise<boolean> {
+  if (sessionUserId === projectUserId) return true
+  return isAdminUserId(sessionUserId)
 }
 
 const IN_FLIGHT = new Set(['uploading', 'queued', 'waking', 'running'])
