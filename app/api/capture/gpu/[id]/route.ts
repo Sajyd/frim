@@ -29,8 +29,8 @@ const VIDEO_LABELS: Record<string, string> = {
 const TEXT_LABELS: Record<string, string> = {
   uploading: 'Sending your prompt…',
   queued: 'Queued — waiting for a free GPU…',
-  waking: 'Starting a Spot GPU for MotionGPT…',
-  running: 'Generating motion with MotionGPT…',
+  waking: 'Starting a Spot GPU for MotionLCM…',
+  running: 'Generating motion with MotionLCM…',
   complete: 'Applying the clip to your model…',
   failed: 'Text to motion failed',
   cancelled: 'Generation cancelled',
@@ -97,7 +97,7 @@ export async function GET(
     const progress = waking ? Math.max(job.progress, wakingProgress(job.updatedAt)) : job.progress
     const labels = job.s3InputKey.startsWith('prompts/') ? TEXT_LABELS : VIDEO_LABELS
     const label = waking
-      ? (job.s3InputKey.startsWith('prompts/') ? 'Starting a Spot GPU for MotionGPT…' : wakingLabel(instanceState))
+      ? (job.s3InputKey.startsWith('prompts/') ? 'Starting a Spot GPU for MotionLCM…' : wakingLabel(instanceState))
       : (labels[job.status] || job.status)
 
     return NextResponse.json({

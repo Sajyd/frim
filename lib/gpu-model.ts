@@ -6,6 +6,8 @@ const NAMED: Record<string, string> = {
   'rtmw3d-x': 'RTMW3D-x',
   motionbert: 'MotionBERT',
   motiongpt: 'MotionGPT',
+  motionlcm: 'MotionLCM',
+  dart: 'DART',
   'rtmw + motionbert': 'RTMW + MotionBERT',
   'rtmpose + motionbert': 'RTMPose + MotionBERT',
 }
@@ -21,7 +23,7 @@ export function gpuModelName(input: {
   const known = NAMED[rawModel.toLowerCase()] || NAMED[rawLift.toLowerCase()]
   if (known) return known
   if (rawModel) return rawModel.slice(0, 80)
-  if (input.kind === 't2m' || input.s3InputKey?.startsWith('prompts/')) return 'MotionGPT'
+  if (input.kind === 't2m' || input.s3InputKey?.startsWith('prompts/')) return 'MotionLCM'
   return null
 }
 

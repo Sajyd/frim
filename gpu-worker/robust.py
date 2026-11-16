@@ -40,6 +40,7 @@ NO_PERSON_MESSAGE = (
 )
 UNREADABLE_MESSAGE = 'Could not read this video. Export an mp4 and try again.'
 TOO_SHORT_MESSAGE = 'Video is too short to capture.'
+TOO_LONG_MESSAGE = 'Video is longer than 60 seconds. Trim the clip and try again.'
 
 
 def rotation_from_probe(data: dict) -> int:

@@ -113,7 +113,111 @@ def job_cancelled(job_id: str) -> bool:
         return False
 
 
+def process_text_message(body: dict, receipt: str | None = None) -> None:
+    from t2m import infer_text
+
+    job_id = body['jobId']
+    result_key = body.get('resultKey') or f'results/{job_id}.json'
+    prompt = str(body.get('prompt') or '').strip()
+    if not prompt and body.get('inputKey'):
+        try:
+            raw = s3.get_object(Bucket=BUCKET, Key=body['inputKey'])['Body'].read()
+            prompt = str(json.loads(raw).get('prompt') or '').strip()
+        except Exception as exc:
+            log(f'prompt download failed: {exc}')
+    log(f'text job {job_id}: {prompt[:120]}')
+    last_touch = time.time()
+
+    def touch() -> None:
+        nonlocal last_touch
+        if not receipt or time.time() - last_touch < 25:
+            return
+        last_touch = time.time()
+        try:
+            sqs.change_message_visibility(
+                QueueUrl=QUEUE_URL,
+                ReceiptHandle=receipt,
+                VisibilityTimeout=900,
+            )
+        except Exception as exc:
+            log(f'visibility extend failed: {exc}')
+
+    try:
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled before start')
+            return
+        callback(job_id, {'status': 'running', 'progress': 8, 'instanceId': instance_id()})
+        if not prompt:
+            raise CaptureRejected('Describe a motion first.')
+
+        def on_progress(pct: int) -> None:
+            if job_cancelled(job_id):
+                raise CaptureCancelled()
+            touch()
+            callback(job_id, {'status': 'running', 'progress': pct, 'instanceId': instance_id()})
+
+        t0 = time.time()
+        try:
+            result = infer_text(
+                prompt,
+                frames=int(body.get('frames') or 120),
+                seed=None if body.get('seed') is None else int(body['seed']),
+                progress_cb=on_progress,
+                cancel_cb=lambda: job_cancelled(job_id),
+            )
+        except CaptureCancelled:
+            log(f'job {job_id} cancelled during text-to-motion')
+            return
+        duration_ms = int((time.time() - t0) * 1000)
+        billed = (time.time() - t0) / 3600.0 * SPOT_HOUR_USD
+        result['jobId'] = job_id
+        result['durationMs'] = duration_ms
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled before upload')
+            return
+        out = tempfile.NamedTemporaryFile(suffix='.json', delete=False)
+        out.write(json.dumps(result).encode())
+        out.close()
+        try:
+            s3.upload_file(out.name, BUCKET, result_key, ExtraArgs={'ContentType': 'application/json'})
+        finally:
+            try:
+                os.unlink(out.name)
+            except OSError:
+                pass
+        if job_cancelled(job_id):
+            log(f'job {job_id} cancelled after upload')
+            return
+        put_metric('JobsCompleted', 1)
+        put_metric('TextJobsCompleted', 1)
+        put_metric('JobDurationSeconds', duration_ms / 1000.0, 'Seconds')
+        put_metric('EstimatedJobUsd', billed, 'None')
+        callback(job_id, {
+            'status': 'complete',
+            'progress': 100,
+            'resultKey': result_key,
+            'durationMs': duration_ms,
+            'instanceId': instance_id(),
+            'billedUsd': round(billed, 5),
+            'model': str(result.get('model') or 'MotionLCM')[:80],
+            'device': str(result.get('device') or 'cuda')[:40],
+        })
+        log(f'text job {job_id} done in {duration_ms}ms')
+    except CaptureRejected as exc:
+        log(f'text job {job_id} rejected: {exc}')
+        put_metric('JobsRejected', 1)
+        callback(job_id, {
+            'status': 'failed',
+            'error': str(exc)[:500],
+            'notify': False,
+            'instanceId': instance_id(),
+        })
+
+
 def process_message(body: dict, receipt: str | None = None) -> None:
+    if body.get('kind') == 't2m':
+        process_text_message(body, receipt)
+        return
     job_id = body['jobId']
     input_key = body['inputKey']
     result_key = body.get('resultKey') or f'results/{job_id}.json'
@@ -268,6 +372,12 @@ def main() -> None:
         log(f'pose ready ({kind})')
     except Exception as exc:
         log(f'model warmup failed (will retry on job): {exc}')
+    try:
+        from t2m import warmup as warmup_motiongpt
+        warmup_motiongpt()
+        log('motiongpt ready')
+    except Exception as exc:
+        log(f'motiongpt warmup failed (will retry on a text job): {exc}')
 
     while RUNNING:
         resp = sqs.receive_message(

@@ -233,11 +233,11 @@ export async function GET() {
     }
 
     for (const row of labeledRows as ModelRow[]) {
-      const kind = row.model === 'MotionGPT' || row.kind === 't2m' ? 't2m' : 'video'
+      const kind = row.model === 'MotionLCM' || row.model === 'MotionGPT' || row.kind === 't2m' ? 't2m' : 'video'
       const model = jobModelLabel({ model: row.model, kind, status: row.status })
       addModel(model, kind, row)
     }
-    for (const row of unlabeledText as StatusRow[]) addModel('MotionGPT', 't2m', row)
+    for (const row of unlabeledText as StatusRow[]) addModel('MotionLCM', 't2m', row)
     for (const row of unlabeledVideo as StatusRow[]) {
       const model = IN_FLIGHT.has(row.status) ? 'Pending' : 'Not recorded'
       addModel(model, 'video', row)

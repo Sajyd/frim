@@ -55,7 +55,7 @@ export function jobModelLabel(job: {
 }): string {
   const model = job.model?.trim()
   if (model) return model
-  if (jobKind(job) === 't2m') return 'MotionGPT'
+  if (jobKind(job) === 't2m') return 'MotionLCM'
   if (job.status && IN_FLIGHT.has(job.status)) return 'Pending'
   return 'Not recorded'
 }

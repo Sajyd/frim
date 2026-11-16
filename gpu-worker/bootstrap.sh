@@ -45,11 +45,46 @@ fi
 
 # Always refresh Python from S3 so infer.py deploys without a local docker push.
 aws s3 sync "s3://${BUCKET}/worker/" /opt/frim-gpu-worker/ --region "$REGION"
+MOTIONLCM_REV="9a4bc7d0b45c186664422f48868272c56c71554a"
+T2M_PIP=""
+# An existing image (ECR) gets MotionLCM baked once. A missing image is built
+# from the Dockerfile below, which already installs the same checkpoint.
+if [ "$IMAGE" != "frim-gpu-worker" ] && [ -f /opt/frim-gpu-worker/install-t2m.sh ]; then
+  HAVE_REV="$(docker run --rm --entrypoint cat "$IMAGE" /opt/motionlcm-rev 2>/dev/null | tr -d '[:space:]' || true)"
+  if [ -z "$HAVE_REV" ]; then
+    HAVE_REV="$(docker run --rm --entrypoint cat "$IMAGE" /opt/motiongpt-rev 2>/dev/null | tr -d '[:space:]' || true)"
+  fi
+  if [ "$HAVE_REV" != "$MOTIONLCM_REV" ]; then
+    echo "Installing MotionLCM into the GPU image (one-time torch + checkpoint)"
+    cat > /tmp/Dockerfile.motionlcm <<EOF
+FROM ${IMAGE}
+COPY install-t2m.sh /tmp/install-t2m.sh
+RUN bash /tmp/install-t2m.sh \\
+ && python3 -c "from huggingface_hub import snapshot_download; snapshot_download(repo_id='ZeyuLing/Motius-MotionLCM-HumanML3D', local_dir='/models/motionlcm'); snapshot_download(repo_id='sentence-transformers/sentence-t5-large')" \\
+ && printf '${MOTIONLCM_REV}\\n' > /opt/motionlcm-rev
+ENV MOTIONLCM_DIR=/models/motionlcm
+ENV MOTIONLCM_REPO=ZeyuLing/Motius-MotionLCM-HumanML3D
+EOF
+    if docker build -t frim-gpu-worker-motionlcm -f /tmp/Dockerfile.motionlcm /opt/frim-gpu-worker; then
+      IMAGE="frim-gpu-worker-motionlcm"
+      if [ -n "$ECR_IMAGE" ]; then
+        (
+          aws ecr get-login-password --region "$REGION" | docker login --username AWS --password-stdin "${ECR_IMAGE%%/*}"
+          docker tag frim-gpu-worker-motionlcm "$ECR_IMAGE"
+          docker push "$ECR_IMAGE"
+        ) >/var/log/frim-ecr-push.log 2>&1 &
+      fi
+    else
+      echo "MotionLCM image bake failed — installing it inside the container instead"
+      T2M_PIP="bash /opt/frim-gpu-worker/install-t2m.sh && "
+    fi
+  fi
+fi
 MOUNT=""
 PIP_CMD=""
 if [ -f /opt/frim-gpu-worker/infer.py ]; then
-  MOUNT="-v /opt/frim-gpu-worker/infer.py:/app/infer.py:ro -v /opt/frim-gpu-worker/worker.py:/app/worker.py:ro -v /opt/frim-gpu-worker/robust.py:/app/robust.py:ro -v /opt/frim-gpu-worker/requirements.txt:/opt/frim-gpu-worker/requirements.txt:ro"
-  PIP_CMD="pip3 install --no-cache-dir -r /opt/frim-gpu-worker/requirements.txt && "
+  MOUNT="-v /opt/frim-gpu-worker/infer.py:/app/infer.py:ro -v /opt/frim-gpu-worker/worker.py:/app/worker.py:ro -v /opt/frim-gpu-worker/robust.py:/app/robust.py:ro -v /opt/frim-gpu-worker/t2m.py:/app/t2m.py:ro -v /opt/frim-gpu-worker/install-t2m.sh:/opt/frim-gpu-worker/install-t2m.sh:ro -v /opt/frim-gpu-worker/requirements.txt:/opt/frim-gpu-worker/requirements.txt:ro"
+  PIP_CMD="${T2M_PIP}pip3 install --no-cache-dir -r /opt/frim-gpu-worker/requirements.txt && "
 fi
 
 BUILT_LOCAL=0

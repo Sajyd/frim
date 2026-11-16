@@ -303,7 +303,7 @@ export default function AdminDashboard() {
               <div className="lg:col-span-3 bg-dark-900 border border-dark-800 rounded-xl overflow-hidden">
                 <div className="px-4 py-3 border-b border-white/5">
                   <h2 className="font-medium">Models</h2>
-                  <p className="text-xs text-dark-400 mt-1">Video jobs finished before this deploy say “Not recorded”. Text jobs are MotionGPT.</p>
+                  <p className="text-xs text-dark-400 mt-1">Video jobs finished before this deploy say “Not recorded”. Text jobs are MotionLCM.</p>
                 </div>
                 <div className="overflow-x-auto">
                   <table className="w-full text-sm">
@@ -562,7 +562,7 @@ export default function AdminDashboard() {
             <p className="text-xs text-dark-500 max-w-3xl leading-relaxed">
               AWS cost is Spot runtime times the hourly rate stored when the job finished (default $0.13).
               It is not the $1 capture charge. Listed MRR multiplies each account’s current plan price and does not include taxes, coupons, or failed payments.
-              A video model is saved when the worker reports it. Until that worker is on the GPU, finished video jobs stay “Not recorded”; new text jobs are stored as MotionGPT immediately.
+              A video model is saved when the worker reports it. Until that worker is on the GPU, finished video jobs stay “Not recorded”; new text jobs are stored as MotionLCM immediately.
               Updated {when(data.generatedAt)}.
             </p>
           </>

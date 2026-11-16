@@ -44,7 +44,6 @@ export const PLANS = {
       'GLB/GLTF import & export',
       'Advanced animation tools',
       'AI Video Motion Capture (Fast)',
-      'Text to motion',
       'Extract animations from videos',
       'Priority cloud saves',
       'Priority support',
@@ -64,6 +63,7 @@ export const PLANS = {
     priceId: STUDIO_PRICE_ID,
     features: [
       'Everything in Pro',
+      'MotionLCM text to motion',
       'Studio 3D GPU motion capture',
       'True 3D rotations on your GLB',
       '40 GPU captures per month',

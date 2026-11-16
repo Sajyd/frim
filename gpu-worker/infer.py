@@ -24,6 +24,7 @@ import numpy as np
 
 from robust import (
     NO_PERSON_MESSAGE,
+    TOO_LONG_MESSAGE,
     TOO_SHORT_MESSAGE,
     UNREADABLE_MESSAGE,
     CaptureRejected,
@@ -181,7 +182,36 @@ def get_motionbert():
     return _MB_SESS, _MB_INPUT
 
 
+# Spot T4 jobs stay short: reject uploads over 60s (client also enforces this).
+MAX_VIDEO_SECONDS = float(os.environ.get('GPU_MAX_VIDEO_SECONDS', '60'))
+
+
+def probe_duration_seconds(video_path: str) -> float | None:
+    """Best-effort duration in seconds from OpenCV metadata."""
+    cap = cv2.VideoCapture(video_path)
+    if not cap.isOpened():
+        return None
+    try:
+        fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
+        frames = float(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0.0)
+        if fps > 1 and frames > 0 and math.isfinite(fps) and math.isfinite(frames):
+            return frames / fps
+        # Some containers only expose POS_MSEC after a seek to the end.
+        if frames > 0:
+            cap.set(cv2.CAP_PROP_POS_FRAMES, max(0, frames - 1))
+            if cap.read()[0]:
+                ms = float(cap.get(cv2.CAP_PROP_POS_MSEC) or 0.0)
+                if ms > 0 and math.isfinite(ms):
+                    return ms / 1000.0
+    finally:
+        cap.release()
+    return None
+
+
 def extract_frames(video_path: str, max_fps: float = 30.0, max_side: int = 960) -> tuple[list[np.ndarray], float, int, int]:
+    duration = probe_duration_seconds(video_path)
+    if duration is not None and duration > MAX_VIDEO_SECONDS + 0.5:
+        raise CaptureRejected(TOO_LONG_MESSAGE)
     cap = cv2.VideoCapture(video_path)
     if not cap.isOpened():
         raise CaptureRejected(UNREADABLE_MESSAGE)
@@ -189,7 +219,7 @@ def extract_frames(video_path: str, max_fps: float = 30.0, max_side: int = 960) 
     if not math.isfinite(src_fps) or src_fps < 1:
         src_fps = 30.0
     fps = min(max_fps, src_fps)
-    max_frames = int(90 * fps) + 2
+    max_frames = int(MAX_VIDEO_SECONDS * fps) + 2
 
     frames: list[np.ndarray] = []
     frame_i = 0

@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useLayoutEffect, useMemo, useRef, useState, useCallback } from 'react'
+import { useEffect, useLayoutEffect, useRef, useState, useCallback } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls.js'
 import { TransformControls } from 'three/examples/jsm/controls/TransformControls.js'
@@ -75,7 +75,30 @@ import {
   type MixamoBoneName,
   type PlaceJointId,
 } from '@/lib/autorig'
-import { describeTextMotion, textToMotion, TEXT_MOTION_EXAMPLES } from '@/lib/text-to-motion'
+import { motionClipName, TEXT_MOTION_EXAMPLES } from '@/lib/text-to-motion'
+import { GPU_MAX_DURATION_SEC } from '@/lib/gpu-limits'
+
+function readVideoDurationSec(file: File): Promise<number> {
+  return new Promise((resolve, reject) => {
+    const url = URL.createObjectURL(file)
+    const video = document.createElement('video')
+    video.preload = 'metadata'
+    video.onloadedmetadata = () => {
+      const duration = Number(video.duration)
+      URL.revokeObjectURL(url)
+      if (!Number.isFinite(duration) || duration <= 0) {
+        reject(new Error('Could not read video duration'))
+        return
+      }
+      resolve(duration)
+    }
+    video.onerror = () => {
+      URL.revokeObjectURL(url)
+      reject(new Error('Could not read this video'))
+    }
+    video.src = url
+  })
+}
 
 interface EditorProps {
   projectName: string
@@ -383,9 +406,10 @@ export default function ThreeEditor({
   const gpuJobIdRef = useRef<string | null>(null)
   const captureUploadAbortRef = useRef<AbortController | null>(null)
   const [showTextModal, setShowTextModal] = useState(false)
-  const [motionPrompt, setMotionPrompt] = useState('walk, then wave')
+  const [motionPrompt, setMotionPrompt] = useState('a person walks forward')
   const [textBusy, setTextBusy] = useState(false)
-  const textMotionPreview = useMemo(() => describeTextMotion(motionPrompt), [motionPrompt])
+  const [textProgress, setTextProgress] = useState(0)
+  const [textProgressLabel, setTextProgressLabel] = useState('')
 
   // GLB export modal
   const [showExportModal, setShowExportModal] = useState(false)
@@ -4259,7 +4283,7 @@ export default function ThreeEditor({
   }, [onUpgradeToStudio])
 
   const generateTextMotion = useCallback(async () => {
-    if (!canUseVideoAnalysis) {
+    if (!canUseGpuCapture) {
       setUpgradeModalReason('text_to_motion')
       setShowUpgradeModal(true)
       return
@@ -4280,27 +4304,101 @@ export default function ThreeEditor({
       return
     }
     if (videoAnalyzing || textBusy) return
-    const described = describeTextMotion(prompt)
-    if (!described.recognized) showToast(described.summary, 'warning')
+    if (gpuCapturesRemaining <= 0) {
+      setShowBuyCredits(true)
+      showToast('GPU jobs are used up for this period. Extra clips are $1.', 'warning')
+      return
+    }
+
+    captureAbortRef.current = false
+    gpuJobIdRef.current = null
     setTextBusy(true)
+    setTextProgress(4)
+    setTextProgressLabel('Sending your prompt…')
+    const throwIfAborted = () => {
+      if (captureAbortRef.current) {
+        const err = new Error('Generation cancelled')
+        err.name = 'CaptureCancelled'
+        throw err
+      }
+    }
     try {
-      const clip = textToMotion(prompt)
-      setShowTextModal(false)
-      await processVideoCapture({
-        fps: clip.fps,
-        aspect: clip.aspect,
-        frames: clip.frames,
-        name: clip.name,
-        loop: clip.loop,
+      const res = await fetch('/api/capture/gpu/text', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ prompt }),
       })
+      const data = await res.json().catch(() => ({}))
+      if (res.status === 403) {
+        setUpgradeModalReason('text_to_motion')
+        setShowUpgradeModal(true)
+        return
+      }
+      if (res.status === 429) {
+        setShowBuyCredits(true)
+        showToast(data.error || 'GPU jobs are used up for this period', 'warning')
+        return
+      }
+      if (!res.ok) {
+        showToast(data.error || 'Text to motion failed', 'error')
+        return
+      }
+      gpuJobIdRef.current = data.jobId
+      setTextProgress(8)
+      setTextProgressLabel(data.label || 'Starting a Spot GPU for MotionLCM…')
+      throwIfAborted()
+
+      const deadline = Date.now() + 35 * 60 * 1000
+      while (Date.now() < deadline) {
+        throwIfAborted()
+        await new Promise((resolve) => setTimeout(resolve, 1500))
+        throwIfAborted()
+        const poll = await fetch(`/api/capture/gpu/${data.jobId}`)
+        const job = await poll.json().catch(() => ({}))
+        if (!poll.ok) throw new Error(job.error || 'Lost GPU job')
+        const pct = Number(job.progress)
+        setTextProgress(Math.max(8, Math.min(92, Number.isFinite(pct) ? pct : 8)))
+        setTextProgressLabel(job.label || 'Generating motion with MotionLCM…')
+        if (job.status === 'cancelled') {
+          showToast('Generation cancelled', 'info')
+          return
+        }
+        if (job.status === 'failed') {
+          showToast(job.error || 'Text to motion failed', 'error')
+          return
+        }
+        if (job.status === 'complete') {
+          if (!job.result?.frames?.length) throw new Error('MotionLCM returned no pose frames')
+          setShowTextModal(false)
+          await processVideoCapture({
+            fps: job.result.fps,
+            aspect: job.result.aspect,
+            frames: job.result.frames,
+            name: motionClipName(prompt),
+            loop: false,
+          })
+          return
+        }
+      }
+      throw new Error('MotionLCM timed out. Try a shorter prompt.')
+    } catch (err: any) {
+      if (err?.name === 'CaptureCancelled') {
+        showToast('Generation cancelled', 'info')
+        return
+      }
+      showToast(err?.message || 'Text to motion failed', 'error')
     } finally {
       setTextBusy(false)
+      setTextProgress(0)
+      setTextProgressLabel('')
+      gpuJobIdRef.current = null
     }
   }, [
     animationLimit,
     animations.size,
     bones.size,
-    canUseVideoAnalysis,
+    canUseGpuCapture,
+    gpuCapturesRemaining,
     isPro,
     motionPrompt,
     processVideoCapture,
@@ -4329,6 +4427,15 @@ export default function ThreeEditor({
       if (!canUseGpuCapture) {
         requestStudioUpgrade()
         return
+      }
+      try {
+        const duration = await readVideoDurationSec(file)
+        if (duration > GPU_MAX_DURATION_SEC + 0.25) {
+          showToast(`Studio 3D accepts clips up to ${GPU_MAX_DURATION_SEC}s. Trim the video and try again.`, 'warning')
+          return
+        }
+      } catch {
+        /* worker still rejects over-long clips if metadata is missing here */
       }
       setVideoAnalyzing(true)
       setVideoProgress(2)
@@ -4388,7 +4495,7 @@ export default function ThreeEditor({
         throwIfAborted()
 
         setVideoProgress(12)
-        setVideoProgressLabel('Waking GPU (Spot, billed per minute)…')
+        setVideoProgressLabel('Waking GPU…')
         const startRes = await fetch(`/api/capture/gpu/${data.jobId}/start`, { method: 'POST' })
         const startData = await startRes.json().catch(() => ({}))
         if (startRes.status === 409 && startData.code === 'CANCELLED') {
@@ -4678,11 +4785,22 @@ export default function ThreeEditor({
         accept="video/*"
         className="hidden"
         onChange={(e) => {
-          if (e.target.files?.[0]) {
-            setVideoFile(e.target.files[0])
-            setShowVideoModal(true)
-          }
+          const file = e.target.files?.[0]
           e.target.value = ''
+          if (!file) return
+          void (async () => {
+            try {
+              const duration = await readVideoDurationSec(file)
+              if (duration > GPU_MAX_DURATION_SEC + 0.25) {
+                showToast(`Video must be ${GPU_MAX_DURATION_SEC}s or shorter (yours is ${Math.ceil(duration)}s).`, 'warning')
+                return
+              }
+              setVideoFile(file)
+              setShowVideoModal(true)
+            } catch (err: any) {
+              showToast(err?.message || 'Could not read this video', 'error')
+            }
+          })()
         }}
       />
 
@@ -4839,7 +4957,7 @@ export default function ThreeEditor({
         </button>
         <button
           onClick={() => {
-            if (!canUseVideoAnalysis) {
+            if (!canUseGpuCapture) {
               setUpgradeModalReason('text_to_motion')
               setShowUpgradeModal(true)
               return
@@ -4852,13 +4970,13 @@ export default function ThreeEditor({
             setShowTextModal(true)
           }}
           className={`w-10 h-10 rounded-lg flex items-center justify-center transition-colors relative ${
-            canUseVideoAnalysis ? 'text-[#a1a1aa] hover:bg-[#1c2130]' : 'text-[#71717a] hover:bg-[#1c2130]'
+            canUseGpuCapture ? 'text-[#a1a1aa] hover:bg-[#1c2130]' : 'text-[#71717a] hover:bg-[#1c2130]'
           }`}
-          title={canUseVideoAnalysis ? 'Text to motion' : 'Text to motion (Pro)'}
+          title={canUseGpuCapture ? 'Text to motion' : 'Text to motion (Studio)'}
         >
           <Sparkles className="w-5 h-5" />
-          {!canUseVideoAnalysis && (
-            <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">PRO</span>
+          {!canUseGpuCapture && (
+            <span className="absolute -top-1 -right-1 text-[8px] bg-[#22c55e]/20 text-[#22c55e] px-1 rounded font-bold">STUDIO</span>
           )}
         </button>
       </div>
@@ -5625,7 +5743,7 @@ export default function ThreeEditor({
             </h2>
             <p className="text-[#a1a1aa] mb-6">
               {upgradeModalReason === 'text_to_motion'
-                ? 'Describe a move and Frim builds the clip on the model you loaded. Upgrade to Pro for text to motion, or Studio to add GPU 3D capture.'
+                ? 'Describe a move and MotionLCM generates the clip on a Spot T4, then retargets it onto the model you loaded. Studio includes 40 GPU jobs a month.'
                 : upgradeModalReason === 'gpu_capture'
                 ? 'Studio 3D uses a GPU body solver and applies the animation onto the GLB you loaded. Upgrade to Studio for 40 GPU captures per month.'
                 : upgradeModalReason === 'video_analysis'
@@ -5636,23 +5754,23 @@ export default function ThreeEditor({
             {/* Feature highlights */}
             <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-6 text-left">
               <p className="text-xs font-semibold text-[#71717a] mb-3">
-                {upgradeModalReason === 'gpu_capture' ? 'STUDIO INCLUDES:' : 'PRO INCLUDES:'}
+                {upgradeModalReason === 'gpu_capture' || upgradeModalReason === 'text_to_motion' ? 'STUDIO INCLUDES:' : 'PRO INCLUDES:'}
               </p>
               <ul className="space-y-2">
-                {(upgradeModalReason === 'gpu_capture'
+                {(upgradeModalReason === 'gpu_capture' || upgradeModalReason === 'text_to_motion'
                   ? [
                       'Everything in Pro, including Fast in-browser capture',
+                      'MotionLCM text to motion on a Spot T4',
                       'Studio 3D GPU motion capture on your GLB',
                       'True 3D joint rotations, not a 2D overlay',
-                      '40 GPU captures included every month',
-                      '$1 per extra capture after that',
+                      '40 GPU jobs included every month',
+                      '$1 per extra job after that',
                       'Unlimited projects and animations',
                       'Priority cloud saves',
                       'Priority support',
                     ]
                   : [
                       'Unlimited animations per project',
-                      'Text to motion',
                       'AI Video Motion Capture (Fast)',
                       'Unlimited projects',
                       'Priority support',
@@ -5669,7 +5787,7 @@ export default function ThreeEditor({
             <div className="flex flex-col gap-3">
               <button
                 onClick={async () => {
-                  if (upgradeModalReason === 'gpu_capture') {
+                  if (upgradeModalReason === 'gpu_capture' || upgradeModalReason === 'text_to_motion') {
                     requestStudioUpgrade()
                     return
                   }
@@ -5679,7 +5797,7 @@ export default function ThreeEditor({
                 className="w-full py-3 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2 disabled:opacity-50"
               >
                 <Zap className="w-5 h-5" />
-                {upgradeModalReason === 'gpu_capture'
+                {upgradeModalReason === 'gpu_capture' || upgradeModalReason === 'text_to_motion'
                   ? (upgradingStudio ? 'Upgrading…' : 'Upgrade to Studio — $39/mo')
                   : 'Upgrade to Pro - $12/month'}
               </button>
@@ -5704,11 +5822,14 @@ export default function ThreeEditor({
                 </div>
                 <div>
                   <h2 className="text-lg font-semibold">Text to motion</h2>
-                  <p className="text-xs text-[#71717a]">Describe a move. Frim retargets it onto this model.</p>
+                  <p className="text-xs text-[#71717a]">MotionLCM on a Spot T4, retargeted onto this model.</p>
                 </div>
               </div>
               <button
-                onClick={() => { if (!textBusy) setShowTextModal(false) }}
+                onClick={() => {
+                  if (textBusy) void cancelCapture()
+                  else setShowTextModal(false)
+                }}
                 className="text-[#71717a] hover:text-[#a1a1aa] p-2"
               >
                 <X className="w-5 h-5" />
@@ -5721,17 +5842,19 @@ export default function ThreeEditor({
                 value={motionPrompt}
                 onChange={(event) => setMotionPrompt(event.target.value)}
                 rows={3}
-                maxLength={180}
-                placeholder="walk, then wave"
-                className="w-full bg-[#0f1117] border border-[#252b3d] rounded-xl px-3 py-2.5 text-sm text-[#f4f4f5] focus:outline-none focus:border-[#22c55e] resize-none"
+                maxLength={400}
+                disabled={textBusy}
+                placeholder="a person walks forward"
+                className="w-full bg-[#0f1117] border border-[#252b3d] rounded-xl px-3 py-2.5 text-sm text-[#f4f4f5] focus:outline-none focus:border-[#22c55e] resize-none disabled:opacity-60"
               />
               <div className="flex flex-wrap gap-1.5 mt-3 mb-3">
                 {TEXT_MOTION_EXAMPLES.map((example) => (
                   <button
                     key={example}
                     type="button"
+                    disabled={textBusy}
                     onClick={() => setMotionPrompt(example)}
-                    className={`text-[11px] px-2 py-1 rounded-lg border transition-colors ${
+                    className={`text-[11px] px-2 py-1 rounded-lg border transition-colors disabled:opacity-50 ${
                       motionPrompt.trim() === example
                         ? 'border-[#22c55e] bg-[#22c55e]/10 text-[#4ade80]'
                         : 'border-[#252b3d] text-[#a1a1aa] hover:border-[#3f3f46]'
@@ -5741,22 +5864,47 @@ export default function ThreeEditor({
                   </button>
                 ))}
               </div>
-              <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-2">
-                <p className={`text-sm ${textMotionPreview.recognized ? 'text-[#f4f4f5]' : 'text-[#fbbf24]'}`}>
-                  {textMotionPreview.summary}
-                </p>
-                <p className="text-xs text-[#71717a]">
-                  Runs in the browser and applies the clip to the skeleton you loaded. Try walk, run, jump, wave, dance, sit, punch, or chain them with “then”.
-                </p>
-              </div>
+              {textBusy ? (
+                <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm text-[#a1a1aa]">Generating motion…</span>
+                    <span className="text-sm font-mono text-[#22c55e]">{textProgress}%</span>
+                  </div>
+                  <div className="h-2 bg-[#252b3d] rounded-full overflow-hidden">
+                    <div
+                      className="h-full bg-gradient-to-r from-[#22c55e] to-[#4ade80] rounded-full transition-all duration-300"
+                      style={{ width: `${textProgress}%` }}
+                    />
+                  </div>
+                  <p className="text-xs text-[#71717a] mt-2">{textProgressLabel || 'Starting a Spot GPU…'}</p>
+                </div>
+              ) : (
+                <div className="bg-[#0f1117] border border-[#252b3d] rounded-xl p-4 mb-4 space-y-2">
+                  <p className="text-sm text-[#f4f4f5]">MotionLCM writes the clip from this sentence.</p>
+                  <p className="text-xs text-[#71717a]">
+                    About 6 seconds on the same Spot T4 as video capture. Add “for 4 seconds” to change the length. One Studio GPU job.
+                  </p>
+                  {(showBuyCredits || gpuCapturesRemaining <= 0) && (
+                    <button
+                      type="button"
+                      onClick={() => onBuyGpuCredits?.(1)}
+                      className="text-xs font-semibold text-[#22c55e] hover:text-[#4ade80]"
+                    >
+                      Buy a $1 GPU job
+                    </button>
+                  )}
+                </div>
+              )}
             </div>
             <div className="flex gap-3 px-6 pt-3 pb-6 shrink-0">
               <button
-                onClick={() => setShowTextModal(false)}
-                disabled={textBusy}
-                className="flex-1 py-2.5 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors disabled:opacity-50"
+                onClick={() => {
+                  if (textBusy) void cancelCapture()
+                  else setShowTextModal(false)
+                }}
+                className="flex-1 py-2.5 bg-[#252b3d] text-[#a1a1aa] rounded-xl hover:bg-[#2f3649] transition-colors"
               >
-                Cancel
+                {textBusy ? 'Stop' : 'Cancel'}
               </button>
               <button
                 onClick={() => { void generateTextMotion() }}
@@ -5764,7 +5912,7 @@ export default function ThreeEditor({
                 className="flex-1 py-2.5 bg-[#22c55e] text-[#09090b] rounded-xl font-semibold hover:bg-[#4ade80] transition-colors flex items-center justify-center gap-2 disabled:opacity-40"
               >
                 <Sparkles className="w-4 h-4" />
-                {textBusy ? 'Generating…' : 'Generate'}
+                {textBusy ? 'Generating…' : gpuCapturesRemaining <= 0 ? 'Need a GPU job' : 'Generate'}
               </button>
             </div>
           </div>
@@ -5829,7 +5977,7 @@ export default function ThreeEditor({
                     onClick={() => videoInputRef.current?.click()}
                     className="py-2 text-xs font-semibold rounded-lg bg-[#252b3d] text-[#a1a1aa] hover:bg-[#2f3649] transition-colors"
                   >
-                    Choose video
+                    Choose video (max {GPU_MAX_DURATION_SEC}s)
                   </button>
                   <button
                     type="button"
@@ -5876,8 +6024,8 @@ export default function ThreeEditor({
                     <p className="text-sm font-semibold text-[#f4f4f5]">Studio 3D</p>
                     <p className="text-[11px] text-[#71717a] mt-1">
                       {canUseGpuCapture
-                        ? `${gpuCapturesUsed} used · ${gpuCapturesRemaining} left`
-                        : 'GPU 3D on your GLB · $39/mo'}
+                        ? `${gpuCapturesUsed} used · ${gpuCapturesRemaining} left · max ${GPU_MAX_DURATION_SEC}s`
+                        : `GPU 3D · max ${GPU_MAX_DURATION_SEC}s · $39/mo`}
                     </p>
                   </button>
                 </div>

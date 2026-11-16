@@ -104,8 +104,8 @@ export default function Home() {
         <div className="max-w-6xl mx-auto grid md:grid-cols-3 gap-3">
           {[
             { name: 'Free', price: '$0', detail: 'Pose, keyframe, and export', href: '/auth/register', cta: 'Start free' },
-            { name: 'Pro', price: '$12', detail: 'Video capture and text to motion', href: '/pricing', cta: 'See Pro' },
-            { name: 'Studio', price: '$39', detail: 'GPU 3D capture on your GLB', href: '/pricing', cta: 'See Studio' },
+            { name: 'Pro', price: '$12', detail: 'Fast video capture', href: '/pricing', cta: 'See Pro' },
+            { name: 'Studio', price: '$39', detail: 'GPU capture and text to motion', href: '/pricing', cta: 'See Studio' },
           ].map((plan) => (
             <Link
               key={plan.name}
@@ -162,7 +162,7 @@ export default function Home() {
                     'Upload MP4, MOV, or WebM videos',
                     'AI detects body pose frame by frame',
                     'Auto-generates keyframes for bones',
-                    'Describe a move and generate the clip',
+                    'Studio: describe a move and MotionLCM generates the clip',
                     'Studio 3D GPU capture on your GLB',
                     'Works with any rigged humanoid model'
                   ].map((item, i) => (
@@ -229,7 +229,7 @@ export default function Home() {
                 <div className="flex items-center gap-2 mb-3">
                   <h3 className="font-display text-lg font-semibold">{feature.title}</h3>
                   {feature.highlight && (
-                    <span className="text-[10px] font-bold bg-frim-500 text-dark-950 px-1.5 py-0.5 rounded">PRO</span>
+                    <span className="text-[10px] font-bold bg-frim-500 text-dark-950 px-1.5 py-0.5 rounded">{feature.badge || 'PRO'}</span>
                   )}
                 </div>
                 <p className="text-dark-300 text-sm leading-relaxed">{feature.description}</p>
@@ -275,7 +275,7 @@ const steps = [
   {
     index: '03',
     title: 'Export or capture',
-    body: 'Download a GLB with your clips. On Pro, capture a video or describe a move in text. Studio retargets video in 3D.',
+    body: 'Download a GLB with your clips. On Pro, capture a video. Studio retargets video in 3D and generates motion from text.',
   },
 ]
 
@@ -294,7 +294,8 @@ const features = [
   },
   {
     title: 'Text to motion',
-    description: 'Describe a walk, wave, jump, or dance. Frim builds the clip and retargets it onto the model you loaded.',
+    description: 'Describe a walk, wave, jump, or dance. MotionLCM generates the clip on a Spot GPU and retargets it onto the model you loaded.',
+    badge: 'STUDIO',
     icon: <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 7h16M4 12h10M4 17h7" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17 14l3 3-3 3" /></svg>,
     highlight: true,
   },

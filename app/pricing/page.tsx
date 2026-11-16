@@ -37,7 +37,7 @@ const plans = [
   {
     id: 'pro',
     name: 'Pro',
-    description: 'Video capture and text to motion',
+    description: 'Fast video capture in the browser',
     price: 12,
     period: '/month',
     features: [
@@ -46,11 +46,11 @@ const plans = [
       'GLB/GLTF import & export',
       'Advanced animation tools',
       'AI Video Motion Capture (Fast)',
-      'Text to motion',
       'Priority cloud saves',
       'Priority support',
     ],
     notIncluded: [
+      'Text to motion',
       'Studio 3D GPU Capture',
     ],
     cta: 'Upgrade to Pro',
@@ -65,6 +65,7 @@ const plans = [
     period: '/month',
     features: [
       'Everything in Pro',
+      'MotionLCM text to motion',
       'Studio 3D GPU motion capture',
       'True 3D rotations on your GLB',
       '40 GPU captures per month',
@@ -275,7 +276,7 @@ function PricingContent() {
             Start free. Upgrade when the clip needs <span className="gradient-text">capture.</span>
           </h1>
           <p className="text-lg text-dark-200 max-w-2xl mx-auto">
-            The editor is included on every plan. Pro adds video capture and text to motion. Studio adds GPU 3D, with 40 captures a month and $1 after that.
+            The editor is included on every plan. Pro adds fast video capture. Studio adds GPU 3D and MotionLCM text to motion, with 40 GPU jobs a month and $1 after that.
           </p>
         </div>
       </section>
@@ -407,11 +408,11 @@ function PricingContent() {
             {[
               {
                 q: 'What is text to motion?',
-                a: 'On Pro, describe a move such as “walk, then wave” and Frim builds a skeletal clip on the model in the editor. It runs in the browser and retargets onto the rig you loaded. Studio still adds GPU video capture on top.',
+                a: 'On Studio, describe a move such as “a person walks forward” and MotionLCM generates the clip on the same Spot T4 used for video capture. Frim retargets that motion onto the rig you loaded. It uses one GPU job.',
               },
               {
                 q: 'What is Studio 3D capture?',
-                a: 'Studio adds GPU motion capture: a 3D body solver that retargets onto the GLB you load in the editor. Pro includes unlimited Fast (in-browser) capture. Studio includes 40 GPU jobs per month, then $1 per extra capture.',
+                a: 'Studio adds GPU motion capture: a 3D body solver (RTMW3D-x) that retargets onto the GLB you load in the editor. Upload clips up to 60 seconds. Pro includes unlimited Fast (in-browser) capture. Studio includes 40 GPU jobs per month, then $1 per extra capture.',
               },
               {
                 q: 'Can I cancel anytime?',
